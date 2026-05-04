@@ -721,6 +721,26 @@ The `MIGRATE_NOVEL` task (`services/migrate/migrateNovel.ts:51-176`):
 
 ## 5. NewUpdateDialog
 
+> **v0.1 decision (locked)**: replace upstream's hand-rolled
+> `useGithubUpdateChecker` poller + `NewUpdateDialog` presenter on
+> desktop with [`@tauri-apps/plugin-updater`](https://v2.tauri.app/plugin/updater/).
+> The plugin gives us signed update manifests, OS-correct install
+> flow (Windows MSI, macOS DMG, Linux AppImage), and built-in
+> throttling. Mobile platforms keep their store updaters: iOS uses
+> the App Store; Android Play uses the Play Store. **Android sideload
+> users get a "Check for updates" entry in More that opens the
+> latest GitHub Release page via `tauri-plugin-shell`** — that is the
+> only path where this `NewUpdateDialog` behavior is preserved.
+>
+> The legacy MMKV throttle key `LAST_UPDATE_CHECK` is dropped in
+> favor of the plugin's built-in scheduling. See `prd.md §6.1` for
+> the new plugin row and Sprint 6 for the rollout dependency on
+> code-signing certificates ([`docs/release/signing.md`](../release/signing.md)).
+>
+> Documentation below describes the upstream behavior at `639a2538`
+> for reference; the rewrite implements only the Android-sideload
+> "open release page" subset.
+
 ### 5.1 Purpose
 
 Notify the user that a newer GitHub release exists, show its release

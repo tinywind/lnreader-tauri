@@ -160,6 +160,38 @@ Conceptually:
 Settings keys are merged with `lodash.mergeWith` per
 `src/services/backup/utils.ts:58-101`:
 
+### 7.4 Deprecated `AppSettings` fields (`incognitoMode` / `downloadedOnlyMode`)
+
+Upstream stores `incognitoMode` and `downloadedOnlyMode` redundantly
+on both `AppSettings` and `LibrarySettings`. The new app honors only
+`LibrarySettings` for these (see [`docs/settings/catalog.md`](../settings/catalog.md) §11).
+
+**On backup pack** (this rewrite):
+- Write `LibrarySettings.incognitoMode` / `LibrarySettings.downloadedOnlyMode` as usual.
+- Do **not** include `AppSettings.incognitoMode` or `AppSettings.downloadedOnlyMode` in the `Setting.json` payload.
+
+**On backup restore** (this rewrite reading either an upstream backup or one we wrote):
+1. Apply the regular merge from §7.3 to `LIBRARY_SETTINGS` and `APP_SETTINGS`.
+2. After the merge, run a one-shot migration:
+   - If `LibrarySettings.incognitoMode` is unset and `AppSettings.incognitoMode` is set, copy the value to `LibrarySettings`.
+   - Same for `downloadedOnlyMode`.
+   - Then unset `AppSettings.incognitoMode` and `AppSettings.downloadedOnlyMode`.
+3. Persist the cleaned `APP_SETTINGS` and the canonical `LIBRARY_SETTINGS`.
+
+This guarantees:
+- Users coming from upstream lose nothing.
+- Users moving lnreader-tauri → upstream re-introduce the duplicate
+  bug only on the upstream side; nothing in our app's behavior
+  changes.
+- Long-term, both new and migrated installs converge on the
+  canonical single source.
+
+**Implementation reference**: this migration lives in
+`src-tauri/src/backup/merge.rs::migrate_deprecated_app_settings()`
+(planned for Sprint 5).
+
+
+
 - For primitive values: backup wins.
 - For arrays: **backup replaces wholesale**. Element-wise array merging
   surprises users (custom theme list, repository list, etc. should

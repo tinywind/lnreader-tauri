@@ -121,6 +121,12 @@ back will be closed `wontfix`:
 - TTS reading (`expo-speech`) and lockscreen media controls.
 - Volume-button page turn (Android `dispatchKeyEvent`).
 - Google Drive backup (`@react-native-google-signin/google-signin`).
+- Tracker integrations (MAL, AniList, MangaUpdates, Kitsu) — same
+  OAuth-on-mobile reasoning as the Drive cut. Tracker users continue
+  to use upstream lnreader as their tracker companion in v0.1.
+- Default-category settings sub-page — upstream's `LibrarySettings`
+  route is registered but unmounted at `639a2538`. Default category
+  stays hardcoded to id=1; users pick category at add-time.
 
 Backup files round-trip those fields for compatibility (see
 [`docs/settings/catalog.md`](./docs/settings/catalog.md) §5/§6) but
@@ -135,6 +141,8 @@ the runtime never acts on them.
 | The drizzle schema in [`src/database/schema/`](./src/database/schema/) | User databases imported via backup must open without migrations. |
 | The MMKV key set in [`docs/settings/catalog.md`](./docs/settings/catalog.md) | Settings round-trip in backups. |
 | The 9 themes in [`src/theme/md3/`](./src/theme/md3/) (typo `mignightDusk` preserved) | Theme key strings are used in backups; renaming breaks restore. |
+| The MMKV key string `INSTALL_PLUGINS` (literal — note the JS const name is `INSTALLED_PLUGINS` but the persisted string is `INSTALL_PLUGINS`) | Backup round-trip of the installed-plugin list. See [`docs/settings/catalog.md`](./docs/settings/catalog.md) §1. |
+| `LibrarySettings` is the **canonical** source for `incognitoMode` and `downloadedOnlyMode`; the `AppSettings` copies are deprecated leftovers. The new app reads/writes only `LibrarySettings`; backups handle the deprecated fields per [`docs/backup/format.md` §7.4](./docs/backup/format.md). | Single-source state — replicating the upstream duplication would propagate the bug. |
 
 If a rewrite truly requires breaking one of these, propose it in an
 issue first with a migration plan — never silently.

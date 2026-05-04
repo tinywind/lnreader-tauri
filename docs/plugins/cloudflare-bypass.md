@@ -269,18 +269,45 @@ A reference test list:
 5. **Snackbar** — emit `'lnreader-cf-blocked'` programmatically; the
    Snackbar shows for ~8s with the right message.
 
-## 10. Known limits
+## 10. Known limits and Sprint 2 verification gates
 
-- iOS WebKit cookie store is **separate** from the system cookie store
-  available to URLSession / reqwest. Upstream's
-  `react-native-cookie-manager` `useWebKit` flag selects which to
-  read/write. Tauri 2 on iOS uses WKWebView, so the same caveat
-  applies. Verify cookie sync direction in Sprint 2.
-- Some Cloudflare deployments use Turnstile (interactive). The hidden
-  WebView cannot solve those without user interaction. For those
-  sources, surface the visible WebView as a fallback (the upstream
-  WebviewScreen route) — the user manually completes the challenge,
-  cookies persist, then `fetchApi` succeeds on the next call.
+### 10.1 iOS WKWebView ↔ reqwest cookie sync (Sprint 2 acceptance gate)
+
+iOS WebKit cookie store is **separate** from the system cookie store
+available to URLSession / reqwest. Upstream's
+`react-native-cookie-manager` `useWebKit` flag selects which to
+read/write. Tauri 2 on iOS uses WKWebView, so the same caveat
+applies.
+
+**Sprint 2 acceptance (locked, see `prd.md §9`)**: verify on real iOS
+hardware that after `Webview::cookies_for_url(url)` is called against
+a hidden WebView that has cleared a Cloudflare challenge, the
+returned cookies (in particular `cf_clearance`) are pushed into
+`tauri-plugin-http`'s `reqwest_cookie_store` and the next plain-HTTP
+request to the same origin succeeds without spawning a second
+WebView. If this fails on iOS, fall back to the
+[`reqwest-impersonate`](https://crates.io/crates/reqwest-impersonate)
+mitigation (matches a real browser's TLS fingerprint from the Rust
+side, no WebView needed for many CF deployments). Document any
+remaining iOS-only gap as a known limitation matching upstream.
+
+### 10.2 `lnreader://repo/add` deep-link verification (Sprint 2)
+
+Upstream behavior at `639a2538` is documented as `UNKNOWN` whether
+the deep link auto-opens the Add Repository modal or only navigates
+to the screen. **The rewrite locks the contract: the deep link
+prefills the Add Repository modal with the URL parameter and opens
+the modal automatically.** Sprint 2 verifies this end-to-end on real
+Android + iOS hardware by sending an `lnreader://repo/add?url=...`
+intent.
+
+### 10.3 Interactive Cloudflare Turnstile
+
+Some Cloudflare deployments use Turnstile (interactive). The hidden
+WebView cannot solve those without user interaction. For those
+sources, surface the visible WebView as a fallback (the upstream
+WebviewScreen route) — the user manually completes the challenge,
+cookies persist, then `fetchApi` succeeds on the next call.
 
 ## 11. References
 

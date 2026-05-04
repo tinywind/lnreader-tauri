@@ -154,16 +154,26 @@ These primitives recur across most pages:
 
 **Keys touched**: MMKV — `APP_THEME_ID`, `THEME_MODE`, `AMOLED_BLACK`, `CUSTOM_ACCENT_COLOR`, `APP_LOCALE`. `AppSettings` — `hideBackdrop`, `useFabForContinueReading`, `showUpdatesTab`, `showHistoryTab`, `showLabelsInNav`.
 
-### 4.3 Library (`SettingsLibraryScreen`)
+### 4.3 Library (`SettingsLibraryScreen`) — **NOT PORTED in v0.1**
 
-`SettingsLibraryScreen/SettingsLibraryScreen.tsx:23-56`. **Not mounted** in the MoreStack at this commit — see §1 / §2 above. The page renders two rows when reached programmatically:
+**Decision (locked)**: this sub-page is intentionally out of scope
+for v0.1. See `prd.md §3` cuts table. Upstream registers the route
+(`src/navigators/MoreStack.tsx:18`, commented out) but the hub
+(`SettingsScreen.tsx`) does not link to it, and the only setting it
+exposes — `setDefaultCategory` — is a `// TODO: update default category`
+stub at upstream `SettingsLibraryScreen.tsx:17-21`. **No upstream user
+has ever seen this page.**
 
-1. **Categories** (`categories.header`) — description is `${categories.length} categories`. Tap navigates to `MoreStack/Categories` (the dedicated CategoriesScreen).
-2. **Default category** — description is the name of the category whose `sort === 1`. Tap opens `DefaultCategoryDialog` (`DefaultCategoryDialog.tsx:20-62`) — Material `Dialog` with a `FlatList` of `<RadioButton>` per category.
+**v0.1 behavior**: default category for newly-added novels stays
+hardcoded to `id=1` (`Default`). Users with multiple categories pick
+at add-time via `SetCategoriesModal`. The `Categories` row of the
+upstream stub is redundant with the existing top-level Categories
+screen reachable from More tab.
 
-**`setDefaultCategory(categoryId)` is a `// TODO: update default category` stub** (`SettingsLibraryScreen.tsx:17-21`). The dialog renders, but selecting a row does nothing in upstream right now — verify before re-enabling in the rewrite.
-
-**Keys touched**: would need to reach into `Category` rows in SQLite (sort field) — there is no `LibrarySettings.defaultCategory` key. UNKNOWN whether the rewrite should keep this dialog at all given the upstream stub.
+**v0.2 backlog**: revisit if user demand surfaces. Implementation
+cost is low (~30 lines for a single picker dialog plus a new
+`LibrarySettings.defaultCategoryId` key, both already covered by the
+data model).
 
 ### 4.4 Reader (`SettingsReaderScreen`)
 
@@ -256,7 +266,17 @@ See [`backup/format.md`](../backup/format.md) for the wire format these tasks pr
 
 **Keys touched**: `Repository` SQLite table — not part of MMKV `AppSettings`.
 
-### 4.7 Tracker (`SettingsTrackerScreen`)
+### 4.7 Tracker (`SettingsTrackerScreen`) — **NOT PORTED in v0.1**
+
+**Decision (locked)**: tracker integrations (MAL, AniList,
+MangaUpdates, Kitsu) are intentionally out of scope for v0.1. See
+`prd.md §3` cuts table — same reasoning as the Drive cut: four
+vendors × per-novel sync × OAuth-on-mobile callbacks = a large
+surface that benefits a minority. v0.2 backlog item.
+
+The page below is documented for completeness so the v0.2
+re-introduction does not have to re-discover it; the v0.1 build
+removes the menu row entirely from the Settings hub.
 
 `SettingsTrackerScreen.tsx:79-368`. Single Section with 4 tracker rows + an optional revalidation Section. Each tracker row is a `<PaperList.Item>` with a 32×32 logo and a check mark (right-side) when authenticated.
 

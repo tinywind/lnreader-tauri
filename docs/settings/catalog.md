@@ -30,6 +30,8 @@ These map 1:1 to JSON-encoded objects in MMKV.
 | `SELF_HOST_BACKUP` | `{ url, headers }` | `useSelfHost` | Backup → Self-host (excluded from backup zip) |
 | `LAST_UPDATE_TIME` | `string` (ISO) | `useUpdates` | Internal — last time library updates ran |
 | `SHOW_LATEST_NOVELS:<pluginId>` | `boolean` | per-plugin toggle | Browse → source filter sheet |
+| `INSTALL_PLUGINS` | `PluginItem[]` | `usePlugins` | (no UI; persisted by `pluginManager`). **The literal key string is `INSTALL_PLUGINS` even though the JS const name is `INSTALLED_PLUGINS`** — the new app must use the literal `INSTALL_PLUGINS` string for backup round-trip. |
+| `LAST_UPDATE_CHECK` | `string` (ISO) | `useGithubUpdateChecker` | Throttle for the auto-update poller (24 h). Replaced in v0.1 by `tauri-plugin-updater`'s built-in scheduling — see [`docs/screens/onboarding-utility.md` §5](../screens/onboarding-utility.md). |
 | `<plugin.id>:*` | various | `@libs/storage` plugin scoping | per-plugin |
 
 The plugin runtime can write any key prefixed with `<plugin.id>:` via
@@ -41,7 +43,7 @@ preserved in backups.
 ```ts
 interface AppSettings {
   // General
-  incognitoMode: boolean;            // default: false
+  incognitoMode: boolean;            // ⚠ DEPRECATED in this rewrite — see §11. New app reads/writes only LibrarySettings.incognitoMode.
   disableHapticFeedback: boolean;    // default: false
 
   // Appearance
@@ -52,7 +54,7 @@ interface AppSettings {
   disableLoadingAnimations: boolean; // default: false
 
   // Library
-  downloadedOnlyMode: boolean;       // default: false
+  downloadedOnlyMode: boolean;       // ⚠ DEPRECATED in this rewrite — see §11. New app reads/writes only LibrarySettings.downloadedOnlyMode.
   useLibraryFAB: boolean;            // default: false
 
   // Update
@@ -98,8 +100,8 @@ interface LibrarySettings {
   showNumberOfNovels?: boolean;       // default: false
   displayMode?: DisplayModes;         // default: Comfortable
   novelsPerRow?: number;              // default: 3
-  incognitoMode?: boolean;            // default: false
-  downloadedOnlyMode?: boolean;       // default: false
+  incognitoMode?: boolean;            // ✅ CANONICAL — new app reads/writes here only
+  downloadedOnlyMode?: boolean;       // ✅ CANONICAL — new app reads/writes here only
 }
 ```
 
@@ -243,6 +245,29 @@ The persisted shape moves to Zustand stores backed by `tauri-plugin-sql`
 Persistence: a single `kv` table (`key TEXT PRIMARY KEY, value TEXT`).
 Each store reads/writes its slice as JSON. Backup pack/unpack reads
 this table.
+
+## 11. Deprecated `AppSettings` fields (`incognitoMode` / `downloadedOnlyMode`)
+
+Upstream defines `incognitoMode` and `downloadedOnlyMode` on **both**
+`AppSettings` (key `APP_SETTINGS`) and `LibrarySettings` (key
+`LIBRARY_SETTINGS`). The Library screen reads from
+`LibraryContext.settings` (i.e. `LibrarySettings`), and the More tab
+toggles also write to `LibrarySettings`. The `AppSettings` copies are
+left over from an earlier refactor and are effectively dead writes.
+
+This rewrite collapses to a single source:
+
+- **Reads** — only `LibrarySettings.{incognitoMode,downloadedOnlyMode}`.
+- **Writes** — only `LibrarySettings.{incognitoMode,downloadedOnlyMode}`.
+- **Backup pack** — write only `LibrarySettings`. Do **not** include
+  the `AppSettings` copies of these two fields in new backups.
+- **Backup restore migration** — when restoring an upstream backup,
+  if `LibrarySettings.<flag>` is missing/empty and
+  `AppSettings.<flag>` is present, copy the `AppSettings` value into
+  `LibrarySettings`. Then drop the `AppSettings` copy. See
+  [`docs/backup/format.md` §7.4](../backup/format.md#74-deprecated-appsettings-fields-incognitomode--downloadedonlymode).
+
+CLAUDE.md §6 lists this as a load-bearing invariant.
 
 ## 12. References
 

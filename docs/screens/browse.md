@@ -291,8 +291,16 @@ Cheerio / parsing:
 
 Cancellation of long global search:
 
-- `useGlobalSearch` currently has cooperative cancellation (a string compare on each loop tick) but does **not** abort the underlying `fetch`. For Tauri, wire an `AbortController` per plugin search and pass `signal` into the host fetch (the JS fetch shim that the plugin worker calls). When `searchText` changes, abort the previous controller before starting the new one. This will free socket/CPU resources earlier than the current state-discarding approach.
-- Consider replacing the `setTimeout(100)` busy-poll with a proper `Semaphore` (e.g. `p-limit`) — same effect, lower wakeup churn, and integrates with abort signals cleanly.
+- **v0.1 decision (locked, see `prd.md §9` Sprint 2)**: replace upstream's
+  cooperative-only string-compare cancellation and `setTimeout(100)`
+  busy-poll with **`AbortController`-based real cancellation** +
+  **`p-limit` semaphore** (default `BrowseSettings.globalSearchConcurrency = 3`).
+  Plugin worker fetches receive `signal`; when `searchText` changes
+  the previous controller aborts before the new search starts. The
+  semaphore replaces the busy-poll with a proper queue.
+- Sprint 2 acceptance: typing a new query while a global search is in
+  flight cancels every outstanding network request within 100 ms and
+  clears the loading indicator.
 
 Plugin lifecycle:
 

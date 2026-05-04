@@ -46,6 +46,8 @@ These features are **dropped** from the rewrite. Issues opened against them will
 | TTS reading (`expo-speech`) and **TTS lockscreen media controls** (`NativeTTSMediaControl`) | Largest custom-plugin surface; per-platform TTS engine bridges are work-intensive | Listening to a chapter aloud, lockscreen playback notification |
 | **Volume-button page turn** (`NativeVolumeButtonListener`) | Niche; needs Android `dispatchKeyEvent` plugin and an iOS workaround | Hardware volume buttons no longer flip pages |
 | **Google Drive backup** (`@react-native-google-signin/google-signin`) | OAuth + Drive REST plumbing not worth carrying for one cloud target | Backup/restore over Google Drive (self-hosted backup remains) |
+| **Tracker integrations** (MAL, AniList, MangaUpdates, Kitsu) | Same OAuth-heavy multi-vendor surface as Drive — four vendors, per-novel sync, deep-link callback handling. Used by a minority. Tracker users continue to use upstream lnreader as their tracker companion in v0.1. | Per-novel reading-status sync to external trackers |
+| **Default-category settings sub-page** | Upstream's `LibrarySettings` route is registered but unmounted at `639a2538` (only TODO stub for `setDefaultCategory`). Default category remains hardcoded to id=1 (`Default`); users pick category at add-time via `SetCategoriesModal`. | A dedicated UI to change which category new novels land in. |
 
 Everything else from upstream is in scope.
 
@@ -134,6 +136,7 @@ These are dropped in via `cargo add` + `pnpm add` and need only configuration:
 | `expo-web-browser` | [`@tauri-apps/plugin-shell`](https://v2.tauri.app/plugin/shell/) | `open(url)`. |
 | `react-native-background-actions` (HTTP transfer side) | [`@tauri-apps/plugin-upload`](https://v2.tauri.app/plugin/upload/) | Up + download with `(downloaded, total)` progress. |
 | Cookie sync between webview and HTTP | Tauri 2 core: `Webview::cookies()` + `Webview::cookies_for_url()` + `tauri-plugin-http` cookie jar | Two cookie stores exist (webview vs `reqwest`); we sync them in our scraper runtime. See [feat: add Webview::cookies (#12665)](https://github.com/tauri-apps/tauri/commit/cedb24d494b84111daa3206c05196c8b89f1e994) and [Cookie Management — DeepWiki](https://deepwiki.com/tauri-apps/tauri-plugin-http/6.1-cookie-management). |
+| Hand-rolled GitHub Releases poller (`useGithubUpdateChecker.ts`) | [`@tauri-apps/plugin-updater`](https://v2.tauri.app/plugin/updater/) (desktop only) | Replaces the upstream poller on Windows / macOS / Linux with signed update manifests + OS-correct install flow. Mobile: iOS uses App Store, Android uses Play Store; sideload Android keeps a "Check for updates" link in More that opens the latest GitHub Release page via `tauri-plugin-shell`. Code-signing setup tracked in [`docs/release/signing.md`](../docs/release/signing.md) and is a Sprint 6 dependency. |
 
 ### 6.2 Community Tauri plugins we reuse
 
@@ -228,10 +231,14 @@ Each sprint is sized to land in **one focused week of full-time work**; cut/exte
 - HTTP client integrated with `tauri-plugin-http` cookie jar.
 - **Cloudflare hidden-webview controller** in Rust: open invisible `WebviewWindow`, navigate, wait for `cf_clearance` cookie, read cookies, push them into the HTTP cookie jar, close.
 - "Browse" tab can list and search at least one CF-protected source successfully.
+- **Global search redesign**: replace upstream's busy-poll concurrency limiter and cooperative-only cancellation with `AbortController`-based real cancellation + `p-limit` semaphore (default `BrowseSettings.globalSearchConcurrency = 3`). See [`docs/screens/browse.md` §10](../docs/screens/browse.md).
+- **Deep-link verification**: `lnreader://repo/add?url=...` deep link opens the Add Repository modal with the URL prefilled — verified end-to-end on real Android + iOS hardware (upstream behavior at `639a2538` is documented as `UNKNOWN` whether it auto-opens; we lock the contract here).
 
 **Acceptance**
 - Calling a CF-protected scraper from the Browse tab returns parsed novel listings without the user seeing the Turnstile challenge.
 - Cookie jar in `reqwest` contains the cookies set inside the hidden webview after the bypass.
+- **iOS WKWebView ↔ reqwest cookie sync verified on real iOS hardware** — `Webview::cookies_for_url(url)` after a hidden-webview clearance pushes the `cf_clearance` cookie into `tauri-plugin-http`'s `reqwest_cookie_store` and the next plain-HTTP request succeeds without a second WebView spawn. If this fails on iOS, fall back to the `reqwest-impersonate` mitigation noted in §11.
+- Global search abort: typing a new query while a global search is in flight cancels every outstanding network request within 100 ms and clears the loading indicator.
 
 **Gate**: if this sprint cannot complete in one week, escalate before continuing — the cf-bypass is the load-bearing assumption of the whole rewrite.
 
@@ -275,11 +282,15 @@ Each sprint is sized to land in **one focused week of full-time work**; cut/exte
 - Browse tab full source list, plugin update / install / delete.
 - Updates tab, History tab, More/Settings (themes, reader settings, plugins, repositories, advanced).
 - Crash reporting (`sentry-tauri`) opt-in.
-- App icon, splash, deep-link tests, packaging signing for each platform.
+- App icon, splash, deep-link tests, packaging.
+- **Code signing** — Apple Developer ID + Windows code-signing cert + Linux GPG key (or sign-in-CI via Azure Trusted Signing). See [`docs/release/signing.md`](../docs/release/signing.md). Without signing, the desktop updater story below is degraded (SmartScreen / Gatekeeper warnings).
+- **Auto-update flow** — `tauri-plugin-updater` configured against the project's GitHub Releases. Signed manifests resolved per-platform. Mobile (iOS) defers to App Store; Android Play uses store updater; Android sideload gets a "Check for updates" entry in More that opens the latest release page via `tauri-plugin-shell`.
+- **Novel detail backdrop blur** — replace upstream's 70 % alpha overlay with a real `backdrop-filter: blur(20px) brightness(0.55)`. Pure CSS, ~3 lines, see [`docs/screens/novel.md` §10](../docs/screens/novel.md). One-time design upgrade.
 
 **Acceptance**
 - Feature parity audit against upstream's screen list passes (modulo §3 cuts).
-- Public 0.1.0 release artifacts: `.exe`, `.dmg`, `.AppImage`, `.deb`, `.apk`, TestFlight `.ipa`.
+- A staged v0.1.1 release exercises the full updater flow end-to-end on Windows + macOS + Linux: user sees the prompt, accepts, app restarts on the new build with no manual download.
+- Public 0.1.0 release artifacts: `.exe`, `.dmg`, `.AppImage`, `.deb`, `.apk`, TestFlight `.ipa`. All desktop bundles signed.
 
 ## 10. Acceptance criteria (cross-cutting)
 
@@ -302,6 +313,9 @@ Each sprint is sized to land in **one focused week of full-time work**; cut/exte
 | Drizzle proxy adapter is slower than `op-sqlite` for big libraries | Medium | Medium | Benchmark in Sprint 0 with a 1000-novel fixture; if too slow, drop down to `sqlx` queries directly and let drizzle handle types only. |
 | `rbook` lacks a feature `NativeEpub` had (e.g., a specific cover-extraction quirk) | Low | Low | Wrap our usage in a thin module so we can swap to `epub-parser` or hand-roll if needed. |
 | React UI rewrite blows past the time budget | High | Medium | Use Mantine's defaults; do not chase pixel parity with RN Paper in v0.1. |
+| iOS WKWebView cookie store does not authoritatively sync into the `reqwest` cookie jar used by `tauri-plugin-http` | Medium | High | Sprint 2 has an explicit hardware-verified acceptance gate (see §9 Sprint 2). If the sync is lossy on iOS, fall back to `reqwest-impersonate` (Rust crate that mimics browser TLS fingerprints) and skip the WebView path on iOS. Document as a known limitation if neither works. |
+| Code-signing certificates have ongoing cost and admin overhead (Apple Developer Program $99/yr, Windows code-signing or Azure Trusted Signing ~$10–200/yr) | Medium | Medium | Decision documented in [`docs/release/signing.md`](../docs/release/signing.md). If budget is tight, ship v0.1 unsigned with README warnings about SmartScreen / Gatekeeper, defer signed updater to v0.1.1. |
+| Tracker users force a continued upstream-lnreader install for v0.1 (Tracker is in §3 cut) | Low | Low | Document explicitly in README so trackers users self-select. v0.2 reintroduces with `tauri-plugin-deep-link` for OAuth callbacks. |
 
 ## 12. Reference apps & their lessons
 
