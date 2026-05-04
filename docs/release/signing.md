@@ -1,10 +1,19 @@
 # Code Signing & Auto-Update
 
-> Sprint 6 deliverable. The auto-update flow chosen for v0.1
-> (`@tauri-apps/plugin-updater` on desktop) requires signed
-> manifests; this doc collects the certificate, key, and CI plumbing
-> decisions so the actual signing setup is mechanical when Sprint 6
-> arrives.
+> **DEFERRED TO v0.2.** v0.1 ships **unsigned debug builds only** for
+> Windows, Linux, and Android sideload. macOS and iOS are dropped
+> entirely from v0.1 (no Apple hardware available for testing). See
+> [`prd.md §3`](../../prd.md#3-out-of-scope-v01).
+>
+> v0.1 substitutes in-app auto-update with a "Latest release" link in
+> the More tab that opens the GitHub Releases page via
+> `tauri-plugin-shell`.
+>
+> This document is retained as a v0.2 planning artifact. The
+> decisions and matrix below are **not made yet** and should not be
+> acted on during v0.1 sprints.
+
+---
 
 ## 1. Channels in scope
 

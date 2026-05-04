@@ -1,66 +1,42 @@
-# Handoff from upstream lnreader
+# Handoff from upstream lnreader (reference only)
 
-This directory consolidates the product knowledge baked into the upstream
-React-Native LNReader project — extracted at commit `639a2538` of
-`lnreader/lnreader` on 2026-05-05 — so the Tauri rewrite does not lose
-the years of accumulated decisions sitting in code.
+This `docs/` tree captures upstream lnreader's product knowledge at
+commit `639a2538` of `lnreader/lnreader` (HEAD as of 2026-05-04) as
+**reference material** for the new app.
 
-The split between this `docs/` tree and what was copied verbatim into
-`src/`, `strings/`, `drizzle/`, `assets/` is intentional:
+> **LNReaderTauri is a separate, independent project. No invariants
+> from these documents are binding.** The new app's actual specs are
+> authored as code lands in Sprint 0 onward.
 
-- **Code-as-spec** stays as code. Schemas, theme palettes, i18n keys,
-  drizzle migrations, app icons, splash assets — copied bit-for-bit so
-  the new project starts from the same authoritative artifacts.
-- **Decisions and behaviors that are only in code or in maintainers'
-  heads** are written down here as Markdown, so a contributor can read
-  this directory and implement against the spec without spelunking the
-  upstream RN tree.
+## How to use this tree
 
-## Map
-
-| What | Where | Type |
+| Type | Path | Use |
 |---|---|---|
-| Database schema (drizzle definitions, types) | [`src/database/schema/`](../src/database/schema/) | code (verbatim copy) |
-| Drizzle migration history | [`drizzle/`](../drizzle/) | code (verbatim copy) |
-| Theme palettes (9 themes) | [`src/theme/`](../src/theme/) | code (verbatim copy) |
-| Base i18n catalog (English) | [`strings/languages/en/strings.json`](../strings/languages/en/strings.json) | code (verbatim copy) |
-| App icons (Android mipmap set) | [`assets/android-icons/`](../assets/android-icons/) | binary (verbatim copy) |
-| Splash screen (Lottie + drawable) | [`assets/splash/`](../assets/splash/) | binary (verbatim copy) |
-| Reader specification (paged/scroll, gestures, settings) | [`docs/reader/specification.md`](./reader/specification.md) | spec |
-| Plugin scraper contract | [`docs/plugins/contract.md`](./plugins/contract.md) | spec |
-| Cloudflare hidden-WebView pipeline | [`docs/plugins/cloudflare-bypass.md`](./plugins/cloudflare-bypass.md) | spec |
-| Backup zip wire format & restore semantics | [`docs/backup/format.md`](./backup/format.md) | spec |
-| Settings catalog (every persisted key) | [`docs/settings/catalog.md`](./settings/catalog.md) | spec |
-| Domain model overview + ERD | [`docs/domain/`](./domain/) | spec |
-
-## What is NOT in this directory (and why)
-
-- **Per-screen layouts and interaction specs** (Library, Browse, Novel,
-  Reader chrome, Settings sub-pages, etc.) — these need a human's UX
-  judgment, not a code dump. The author of this handoff explicitly
-  agreed (option C in the planning conversation) to defer these so the
-  product owner writes them after evaluating Mantine vs shadcn/ui in
-  Sprint 0. Suggested location once written: `docs/screens/`.
-- **Critical-path acceptance scenarios** — same reason. Suggested
-  location: `docs/acceptance/critical-paths.md`.
-- **Visual regression screenshot gallery** — capture once the new app
-  starts producing screens. Suggested location: `docs/screenshots/`.
-
-## How to use this handoff
-
-When you sit down to implement Sprint N from `prd.md`:
-
-1. Read `prd.md` §9 for the sprint goal.
-2. Open the relevant doc here for the contract you must reproduce.
-3. If a doc references upstream code, that code is at
-   `https://github.com/lnreader/lnreader/blob/639a2538/<path>`.
-4. If something is unclear, **prefer matching upstream behavior** over
-   inventing — the user's existing data and expectations are the
-   ground truth. Open an issue here labelled `behavior-question` if a
-   spec gap blocks you.
+| Reader behaviors worth reproducing | [`reader/specification.md`](./reader/specification.md) | Reading-experience inspiration. |
+| Plugin scraper contract (upstream's) | [`plugins/contract.md`](./plugins/contract.md) | Pattern reference; we may diverge from the literal contract where simpler. |
+| Cloudflare hidden-WebView pipeline | [`plugins/cloudflare-bypass.md`](./plugins/cloudflare-bypass.md) | Technical pattern (load-bearing for Sprint 2). |
+| Per-screen layouts | [`screens/`](./screens/) | UX inspiration only. |
+| Critical user paths | [`acceptance/critical-paths.md`](./acceptance/critical-paths.md) | User-journey inspiration. |
+| Backup wire format (upstream's) | [`backup/format.md`](./backup/format.md) | **Superseded.** We design our own format in Sprint 5. |
+| Settings catalog (upstream's MMKV keys) | [`settings/catalog.md`](./settings/catalog.md) | **Superseded.** We design our own keys in Sprint 0+. |
+| Domain ER model (upstream's) | [`domain/model.md`](./domain/model.md) | **Superseded.** We design fresh schema in Sprint 0. |
+| Code signing / auto-update plan | [`release/signing.md`](./release/signing.md) | **Deferred to v0.2.** v0.1 ships unsigned debug builds. |
 
 ## Pinned upstream version
 
-These docs describe upstream lnreader at commit `639a2538` (HEAD as of
-2026-05-04). Behaviors that change after that commit must be re-checked
-before adopting them in this rewrite.
+`https://github.com/lnreader/lnreader/blob/639a2538/<path>` is the
+URL pattern for any code reference in this tree. That commit is a
+**frozen reference snapshot**, not a contract.
+
+## What is NOT in this tree
+
+- Per-screen layouts and interaction specs are partial — only the
+  most-touched surfaces (Library, Browse, Novel, Reader chrome,
+  Settings, More, History, Updates, Onboarding/utility) have docs.
+- Critical-path acceptance is sketched but not exhaustive — fill in
+  as the new app implements each surface.
+- Visual regression screenshot gallery is empty until the new app
+  starts producing screens.
+
+These gaps are intentional. The new app's authored specs replace
+them as Sprint 0+ deliverables.
