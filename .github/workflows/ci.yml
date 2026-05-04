@@ -1,0 +1,54 @@
+# Frontend-only CI for the Sprint 0 phase.
+#
+# Once `src-tauri/` lands (Sprint 0 part 2), a `desktop-build` matrix
+# job (Ubuntu + Windows runners running `pnpm tauri build --debug`)
+# is appended below. macOS and iOS are intentionally absent — see
+# `prd.md §3` for the v0.1 scope cuts.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (TypeScript check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm tsc
+
+      - name: Generate DB migrations (drift check)
+        run: pnpm db:generate
+      - name: Fail if drizzle migrations drifted
+        run: |
+          if ! git diff --exit-code drizzle/; then
+            echo "::error::drizzle migrations are out of sync with schema.ts."
+            echo "Run 'pnpm db:generate' locally and commit the result."
+            exit 1
+          fi
