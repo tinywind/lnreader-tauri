@@ -9,12 +9,15 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tsc": "tsc --noEmit",
-    "test": "vitest"
+    "test": "vitest",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@mantine/core": "^7.14.3",
     "@mantine/hooks": "^7.14.3",
     "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-sql": "^2.2.0",
+    "drizzle-orm": "^0.36.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -23,6 +26,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "drizzle-kit": "^0.30.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.3",
     "vitest": "^2.1.8"
