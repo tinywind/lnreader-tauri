@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+pnpm-debug.log*
+yarn-error.log*
+npm-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Local Claude
+.claude/
+
+# Temp scratch
+.tmp/
