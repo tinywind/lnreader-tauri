@@ -12,6 +12,7 @@ import {
   getChapterContent,
   insertChapter,
   listChaptersByNovel,
+  listLibraryUpdates,
   listRecentlyRead,
   saveChapterContent,
   setChapterBookmark,
@@ -204,6 +205,45 @@ describe("getAdjacentChapter", () => {
   it("returns null on no adjacent row", async () => {
     mockSelect.mockResolvedValueOnce([]);
     expect(await getAdjacentChapter(1, 5, 1)).toBeNull();
+  });
+});
+
+describe("listLibraryUpdates", () => {
+  it("filters in-library + unread and orders by updated_at DESC", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+
+    await listLibraryUpdates();
+
+    const [sql, params] = mockSelect.mock.calls[0]!;
+    expect(sql).toContain("n.in_library = 1");
+    expect(sql).toContain("c.unread = 1");
+    expect(sql).toContain("ORDER BY c.updated_at DESC");
+    expect(params).toEqual([200]);
+  });
+
+  it("coerces is_downloaded to a strict boolean", async () => {
+    mockSelect.mockResolvedValueOnce([
+      {
+        chapterId: 1,
+        novelId: 1,
+        chapterName: "Ch1",
+        position: 1,
+        updatedAt: 1_700_000_000,
+        isDownloaded: 1,
+        novelName: "Sample",
+        novelCover: null,
+      },
+    ]);
+
+    const rows = await listLibraryUpdates();
+    expect(rows[0]?.isDownloaded).toBe(true);
+  });
+
+  it("clamps limit to a minimum of 1", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+    await listLibraryUpdates(0);
+    const [, params] = mockSelect.mock.calls[0]!;
+    expect(params).toEqual([1]);
   });
 });
 

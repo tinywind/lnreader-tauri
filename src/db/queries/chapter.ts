@@ -165,6 +165,60 @@ export async function clearChapterContent(
   );
 }
 
+/**
+ * One unread chapter for a novel that's currently in the library —
+ * the row shape powering the Updates tab.
+ */
+export interface LibraryUpdateEntry {
+  chapterId: number;
+  novelId: number;
+  chapterName: string;
+  position: number;
+  updatedAt: number;
+  isDownloaded: boolean;
+  novelName: string;
+  novelCover: string | null;
+}
+
+interface RawLibraryUpdate extends Omit<LibraryUpdateEntry, "isDownloaded"> {
+  isDownloaded: number;
+}
+
+const DEFAULT_UPDATES_LIMIT = 200;
+
+/**
+ * Unread chapters of in-library novels, sorted by `updated_at`
+ * descending — i.e. the freshly-indexed chapters since the last
+ * library sync. v0.1 keeps the definition simple; refining "what
+ * counts as new" is a v0.2 concern.
+ */
+export async function listLibraryUpdates(
+  limit: number = DEFAULT_UPDATES_LIMIT,
+): Promise<LibraryUpdateEntry[]> {
+  const db = await getDb();
+  const rows = await db.select<RawLibraryUpdate[]>(
+    `SELECT
+       c.id              AS chapterId,
+       c.novel_id        AS novelId,
+       c.name            AS chapterName,
+       c.position,
+       c.updated_at      AS updatedAt,
+       c.is_downloaded   AS isDownloaded,
+       n.name            AS novelName,
+       n.cover           AS novelCover
+     FROM chapter c
+     JOIN novel n ON n.id = c.novel_id
+     WHERE n.in_library = 1 AND c.unread = 1
+     ORDER BY c.updated_at DESC
+     LIMIT $1`,
+    [Math.max(1, Math.floor(limit))],
+  );
+  return rows.map((row) => ({
+    ...row,
+    isDownloaded: !!row.isDownloaded,
+  }));
+}
+
 /** One chapter recently read, joined with its parent novel for display. */
 export interface RecentlyReadEntry {
   chapterId: number;

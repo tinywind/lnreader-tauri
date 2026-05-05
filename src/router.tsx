@@ -11,6 +11,7 @@ import { LibraryPage } from "./routes/library";
 import { MorePage } from "./routes/more";
 import { NovelDetailPage } from "./routes/novel";
 import { ReaderPage } from "./routes/reader";
+import { UpdatesPage } from "./routes/updates";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -69,6 +70,12 @@ const historyRoute = createRoute({
   component: HistoryPage,
 });
 
+const updatesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/updates",
+  component: UpdatesPage,
+});
+
 const routeTree = rootRoute.addChildren([
   libraryRoute,
   browseRoute,
@@ -77,6 +84,7 @@ const routeTree = rootRoute.addChildren([
   moreRoute,
   novelRoute,
   historyRoute,
+  updatesRoute,
 ]);
 
 export const router = createRouter({ routeTree });
