@@ -68,6 +68,16 @@ export function RootLayout() {
             >
               Browse
             </Anchor>
+            <Anchor
+              component={Link}
+              to="/search"
+              size="sm"
+              underline="hover"
+              fw={500}
+              activeProps={{ style: { textDecoration: "underline" } }}
+            >
+              Search
+            </Anchor>
           </Group>
         </Group>
       </AppShell.Header>
