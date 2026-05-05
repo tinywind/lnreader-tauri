@@ -41,11 +41,13 @@ describe("listLibraryNovels", () => {
         path: "p1",
         name: "Sample A",
         cover: null,
+        author: "Writer A",
         inLibrary: 1,
         isLocal: 0,
         totalChapters: 10,
         chaptersDownloaded: 0,
         chaptersUnread: 5,
+        readingProgress: 55,
         lastReadAt: 1000,
         lastUpdatedAt: 1_700_000_000,
       },
@@ -57,6 +59,7 @@ describe("listLibraryNovels", () => {
     const [sql, params] = db.select.mock.calls[0]!;
     expect(sql).toContain("FROM novel n");
     expect(sql).toContain("n.in_library = 1");
+    expect(sql).toContain("AS readingProgress");
     expect(sql).toContain("ORDER BY");
     expect(sql).toContain("last_read_at");
     expect(params).toEqual([]);
@@ -67,11 +70,13 @@ describe("listLibraryNovels", () => {
         path: "p1",
         name: "Sample A",
         cover: null,
+        author: "Writer A",
         inLibrary: true,
         isLocal: false,
         totalChapters: 10,
         chaptersDownloaded: 0,
         chaptersUnread: 5,
+        readingProgress: 55,
         lastReadAt: 1000,
         lastUpdatedAt: 1_700_000_000,
       },

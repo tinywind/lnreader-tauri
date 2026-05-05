@@ -10,7 +10,7 @@ interface LibrarySelectionToolbarProps {
  *
  * Action buttons are deliberately disabled in v0.1. Sprint 1 only
  * ships the UI shell; real bulk actions land with the remaining
- * Settings/More surface.
+ * Settings surface.
  */
 export function LibrarySelectionToolbar({
   count,

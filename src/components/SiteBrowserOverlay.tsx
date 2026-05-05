@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ActionIcon, Box, Group, Text } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "../lib/tauri-runtime";
 import { useSiteBrowserStore } from "../store/site-browser";
 
 const CHROME_HEIGHT = 40;
@@ -13,6 +14,7 @@ interface Bounds {
 }
 
 async function pushBounds(rect: Bounds): Promise<void> {
+  if (!isTauriRuntime()) return;
   await invoke("scraper_set_bounds", {
     x: rect.x,
     y: rect.y,
@@ -22,24 +24,26 @@ async function pushBounds(rect: Bounds): Promise<void> {
 }
 
 async function navigate(url: string): Promise<void> {
+  if (!isTauriRuntime()) return;
   await invoke("scraper_navigate", { url });
 }
 
 async function hideScraper(): Promise<void> {
+  if (!isTauriRuntime()) return;
   await invoke("scraper_hide");
 }
 
 /**
  * Full-screen layered modal that hosts the persistent scraper
  * Webview as if it were embedded in the main window. The Webview
- * itself is a Tauri child of the main OS window — this component
+ * itself is a Tauri child of the main OS window. This component
  * just (a) reserves the rectangle the Webview should paint inside,
  * (b) tells Rust the rectangle's pixel bounds via
  * `scraper_set_bounds`, (c) renders the close-X chrome on top, and
  * (d) collapses the Webview back to its hidden 1x1 footprint when
  * the user closes the overlay.
  *
- * The Webview is never destroyed — its cookie jar survives every
+ * The Webview is never destroyed; its cookie jar survives every
  * open/close cycle so a manual login or CF clearance carries over
  * to the next plugin scrape.
  */
@@ -118,7 +122,7 @@ export function SiteBrowserOverlay() {
           aria-label="Close site browser"
           onClick={hide}
         >
-          ✕
+          X
         </ActionIcon>
       </Group>
       <div ref={placeholderRef} style={{ flex: 1, minHeight: 0 }} />

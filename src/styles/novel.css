@@ -1,0 +1,218 @@
+.lnr-novel-page {
+  --lnr-page-max-width: 1280px;
+  --lnr-page-block: 14px;
+}
+
+.lnr-novel-workspace {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 168px minmax(0, 1fr) minmax(260px, 0.72fr);
+  align-items: stretch;
+}
+
+.lnr-novel-cover-panel {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: flex-start;
+  padding: 14px;
+}
+
+.lnr-novel-cover-strip {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.lnr-novel-info-panel {
+  padding: 14px 16px;
+}
+
+.lnr-novel-title-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.lnr-novel-title-copy {
+  min-width: 0;
+}
+
+.lnr-novel-title {
+  color: var(--lnr-design-ink);
+  font-family: var(--lnr-font-display);
+  font-size: 1.55rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.12;
+  margin: 0;
+}
+
+.lnr-novel-meta,
+.lnr-novel-chapter-meta {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+
+.lnr-novel-progress-block {
+  background: var(--lnr-design-panel);
+  border: 1px solid var(--lnr-design-rule);
+  border-radius: 5px;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+
+.lnr-novel-progress-line {
+  align-items: center;
+  color: var(--lnr-design-ink-muted);
+  display: grid;
+  font-family: var(--lnr-font-meta);
+  font-size: 0.6875rem;
+  gap: 10px;
+  grid-template-columns: minmax(120px, 1fr) auto;
+}
+
+.lnr-novel-summary-panel {
+  max-height: 252px;
+  overflow: hidden;
+}
+
+.lnr-novel-summary-text,
+.lnr-novel-empty-copy {
+  color: var(--lnr-design-ink-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  margin: 0;
+  padding: 12px 14px 14px;
+  white-space: pre-wrap;
+}
+
+.lnr-novel-empty-copy {
+  color: var(--lnr-design-ink-subtle);
+}
+
+.lnr-novel-chapters-panel {
+  padding: 12px 14px 14px;
+}
+
+.lnr-novel-chapter-row {
+  align-items: center;
+  background: var(--lnr-design-surface);
+  border-top: 1px solid var(--lnr-design-rule);
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 92px minmax(0, 1fr) minmax(120px, 0.22fr) 86px;
+  min-height: 54px;
+  padding: 7px 2px;
+}
+
+.lnr-novel-chapter-row:hover,
+.lnr-novel-chapter-row--current {
+  background: var(--lnr-design-accent-soft);
+}
+
+.lnr-novel-chapter-row:focus-visible {
+  outline: 2px solid var(--lnr-design-accent);
+  outline-offset: 2px;
+}
+
+.lnr-novel-chapter-position {
+  color: var(--lnr-design-ink-subtle);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--lnr-font-meta);
+  font-size: 0.6875rem;
+  gap: 4px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.lnr-novel-chapter-main {
+  min-width: 0;
+}
+
+.lnr-novel-chapter-title {
+  color: var(--lnr-design-ink);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lnr-novel-chapter-title[data-read="true"] {
+  color: var(--lnr-design-ink-muted);
+  font-weight: 500;
+}
+
+.lnr-novel-chapter-progress {
+  align-items: center;
+  color: var(--lnr-design-ink-subtle);
+  display: grid;
+  font-family: var(--lnr-font-meta);
+  font-size: 0.6875rem;
+  gap: 8px;
+  grid-template-columns: minmax(56px, 1fr) 34px;
+}
+
+.lnr-novel-chapter-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 980px) {
+  .lnr-novel-workspace {
+    grid-template-columns: 150px minmax(0, 1fr);
+  }
+
+  .lnr-novel-summary-panel {
+    grid-column: 1 / -1;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .lnr-novel-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .lnr-novel-cover-panel {
+    align-items: flex-start;
+    flex-direction: row;
+  }
+
+  .lnr-novel-cover-panel .lnr-console-cover {
+    height: 150px !important;
+    width: 100px !important;
+  }
+
+  .lnr-novel-title-row {
+    flex-direction: column-reverse;
+  }
+
+  .lnr-novel-title {
+    font-size: 1.35rem;
+  }
+
+  .lnr-novel-chapter-row {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .lnr-novel-chapter-progress,
+  .lnr-novel-chapter-actions {
+    grid-column: 2;
+  }
+
+  .lnr-novel-chapter-actions {
+    justify-content: flex-start;
+  }
+}

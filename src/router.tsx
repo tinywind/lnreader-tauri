@@ -5,12 +5,11 @@ import {
 } from "@tanstack/react-router";
 import { RootLayout } from "./routes/__root";
 import { BrowsePage } from "./routes/browse";
-import { GlobalSearchPage } from "./routes/global-search";
 import { HistoryPage } from "./routes/history";
 import { LibraryPage } from "./routes/library";
-import { MorePage } from "./routes/more";
 import { NovelDetailPage } from "./routes/novel";
 import { ReaderPage } from "./routes/reader";
+import { SettingsPage } from "./routes/settings";
 import { SourcePage } from "./routes/source";
 import { UpdatesPage } from "./routes/updates";
 
@@ -24,19 +23,13 @@ const libraryRoute = createRoute({
   component: LibraryPage,
 });
 
-const browseRoute = createRoute({
+export const browseRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/browse",
-  component: BrowsePage,
-});
-
-export const globalSearchRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/search",
   validateSearch: (search: Record<string, unknown>) => ({
     q: typeof search.q === "string" ? search.q : "",
   }),
-  component: GlobalSearchPage,
+  component: BrowseRoutePage,
 });
 
 function asPositiveId(raw: unknown): number {
@@ -62,10 +55,10 @@ export const novelRoute = createRoute({
   component: NovelDetailPage,
 });
 
-const moreRoute = createRoute({
+export const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/more",
-  component: MorePage,
+  path: "/settings",
+  component: SettingsRoutePage,
 });
 
 const historyRoute = createRoute({
@@ -94,9 +87,8 @@ export const sourceRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   libraryRoute,
   browseRoute,
-  globalSearchRoute,
   readerRoute,
-  moreRoute,
+  settingsRoute,
   novelRoute,
   historyRoute,
   updatesRoute,
@@ -104,6 +96,15 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 export const router = createRouter({ routeTree });
+
+function BrowseRoutePage() {
+  const { q } = browseRoute.useSearch();
+  return <BrowsePage query={q} />;
+}
+
+function SettingsRoutePage() {
+  return <SettingsPage />;
+}
 
 declare module "@tanstack/react-router" {
   interface Register {

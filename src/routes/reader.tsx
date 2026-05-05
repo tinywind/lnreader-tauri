@@ -1,42 +1,28 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import {
-  Alert,
-  Badge,
-  Box,
-  Button,
-  ColorInput,
-  Drawer,
-  Group,
-  NumberInput,
-  SegmentedControl,
-  Select,
-  Slider,
-  Stack,
-  Switch,
-  Tabs,
-  Text,
-  Textarea,
-} from "@mantine/core";
+import { Box } from "@mantine/core";
+import { StateView } from "../components/AppFrame";
 import {
   ReaderContent,
   type ReaderContentHandle,
 } from "../components/ReaderContent";
+import { ReaderQuickMenu } from "../components/ReaderQuickMenu";
 import {
   getAdjacentChapter,
   getChapterById,
+  listChaptersByNovel,
   markChapterOpened,
   setChapterBookmark,
+  type ChapterRow,
   updateChapterProgress,
 } from "../db/queries/chapter";
 import { readerRoute } from "../router";
 import { useLibraryStore } from "../store/library";
-import {
-  READER_FONT_OPTIONS,
-  READER_PRESET_THEMES,
-  useReaderStore,
-} from "../store/reader";
+import { useReaderStore } from "../store/reader";
+import "../styles/reader.css";
+
+const FINISHED_PROGRESS = 100;
 
 const SAMPLE_CHAPTER_HTML = `
 <h1>Chapter 1 - A long road begins</h1>
@@ -76,63 +62,265 @@ function chapterDetailKey(chapterId: number) {
   return ["chapter", "detail", chapterId] as const;
 }
 
+function getChapterLabel(chapter: Pick<ChapterRow, "chapterNumber" | "position">) {
+  return chapter.chapterNumber ? `Ch. ${chapter.chapterNumber}` : `Ch. ${chapter.position}`;
+}
+
+function getReaderTitle(chapter: ChapterRow | null | undefined): string {
+  return chapter?.name ?? "Reader";
+}
+
+function getReaderMeta(
+  chapter: ChapterRow | null | undefined,
+  chapterIndex: number,
+  chapterCount: number,
+): string {
+  if (!chapter) return "Sample content";
+  const indexLabel =
+    chapterIndex >= 0 && chapterCount > 0
+      ? `${chapterIndex + 1} / ${chapterCount}`
+      : getChapterLabel(chapter);
+  const status = chapter.isDownloaded ? "Offline" : "Not downloaded";
+  return [`Novel ${chapter.novelId}`, indexLabel, status].join(" / ");
+}
+
+function ReaderTopChrome({
+  chapter,
+  chapterCount,
+  chapterIndex,
+  incognitoMode,
+  onBack,
+  onToggleMenu,
+  progress,
+}: {
+  chapter: ChapterRow | null | undefined;
+  chapterCount: number;
+  chapterIndex: number;
+  incognitoMode: boolean;
+  onBack: () => void;
+  onToggleMenu: () => void;
+  progress: number;
+}) {
+  return (
+    <header className="lnr-reader-topbar">
+      <button
+        aria-label="Back to novel"
+        className="lnr-reader-icon-button"
+        onClick={onBack}
+        type="button"
+      >
+        Back
+      </button>
+      <div className="lnr-reader-topbar-title">
+        <div className="lnr-reader-title" title={getReaderTitle(chapter)}>
+          {getReaderTitle(chapter)}
+        </div>
+        <div className="lnr-reader-meta">
+          {getReaderMeta(chapter, chapterIndex, chapterCount)}
+        </div>
+      </div>
+      <div className="lnr-reader-topbar-spacer" />
+      {incognitoMode ? (
+        <span className="lnr-reader-status" data-status="muted">
+          Incognito
+        </span>
+      ) : null}
+      <span className="lnr-reader-status">{Math.round(progress)}%</span>
+      <button
+        aria-label="Open reader menu"
+        className="lnr-reader-icon-button"
+        onClick={onToggleMenu}
+        type="button"
+      >
+        Menu
+      </button>
+    </header>
+  );
+}
+
+function ReaderChapterPanel({
+  chapters,
+  currentChapterId,
+  loading,
+  onOpenChapter,
+}: {
+  chapters: ChapterRow[];
+  currentChapterId: number | undefined;
+  loading: boolean;
+  onOpenChapter: (chapterId: number) => void;
+}) {
+  return (
+    <aside className="lnr-reader-chapter-panel" aria-label="Chapters">
+      <div className="lnr-reader-panel-kicker">Chapters</div>
+      {loading ? (
+        <div className="lnr-reader-panel-empty">Loading index...</div>
+      ) : chapters.length === 0 ? (
+        <div className="lnr-reader-panel-empty">No indexed chapters.</div>
+      ) : (
+        <div className="lnr-reader-chapter-list">
+          {chapters.map((item) => {
+            const current = item.id === currentChapterId;
+            const status =
+              item.progress >= FINISHED_PROGRESS
+                ? "done"
+                : item.unread
+                  ? "unread"
+                  : "idle";
+            return (
+              <button
+                aria-current={current ? "true" : undefined}
+                className="lnr-reader-chapter-row"
+                data-current={current}
+                data-status={status}
+                key={item.id}
+                onClick={() => onOpenChapter(item.id)}
+                title={item.name}
+                type="button"
+              >
+                <span className="lnr-reader-chapter-number">
+                  {getChapterLabel(item)}
+                </span>
+                <span className="lnr-reader-chapter-name">{item.name}</span>
+                <span className="lnr-reader-chapter-dot" aria-hidden />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function ReaderBottomStrip({
+  currentLabel,
+  hasNextChapter,
+  hasPreviousChapter,
+  nextLabel,
+  onNextChapter,
+  onPreviousChapter,
+  previousLabel,
+  progress,
+}: {
+  currentLabel: string;
+  hasNextChapter: boolean;
+  hasPreviousChapter: boolean;
+  nextLabel: string;
+  onNextChapter: () => void;
+  onPreviousChapter: () => void;
+  previousLabel: string;
+  progress: number;
+}) {
+  const roundedProgress = Math.round(progress);
+
+  return (
+    <footer className="lnr-reader-bottom-strip">
+      <button
+        className="lnr-reader-strip-link"
+        disabled={!hasPreviousChapter}
+        onClick={onPreviousChapter}
+        type="button"
+      >
+        {previousLabel}
+      </button>
+      <div className="lnr-reader-strip-progress">
+        <div className="lnr-reader-strip-current">{currentLabel}</div>
+        <div
+          aria-label={`${roundedProgress}% progress`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={roundedProgress}
+          className="lnr-reader-progress-track"
+          role="meter"
+        >
+          <span
+            className="lnr-reader-progress-bar"
+            style={{ width: `${roundedProgress}%` }}
+          />
+        </div>
+      </div>
+      <button
+        className="lnr-reader-strip-link"
+        disabled={!hasNextChapter}
+        onClick={onNextChapter}
+        type="button"
+      >
+        {nextLabel}
+      </button>
+    </footer>
+  );
+}
+
 export function ReaderPage() {
   const { chapterId } = readerRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const contentRef = useRef<ReaderContentHandle | null>(null);
   const openedChapterRef = useRef<number | null>(null);
-  const [chromeVisible, setChromeVisible] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
-  const general = useReaderStore((state) => state.general);
-  const appearance = useReaderStore((state) => state.appearance);
-  const setGeneral = useReaderStore((state) => state.setGeneral);
-  const setAppearance = useReaderStore((state) => state.setAppearance);
-  const applyTheme = useReaderStore((state) => state.applyTheme);
-  const saveCustomTheme = useReaderStore((state) => state.saveCustomTheme);
   const setLastReadChapter = useReaderStore(
     (state) => state.setLastReadChapter,
   );
   const setNovelPageIndex = useReaderStore((state) => state.setNovelPageIndex);
-  const resetReaderSettings = useReaderStore(
-    (state) => state.resetReaderSettings,
-  );
 
   const chapterQuery = useQuery({
     queryKey: chapterDetailKey(chapterId),
     queryFn: () => getChapterById(chapterId),
     enabled: chapterId > 0,
   });
+  const currentNovelId = chapterQuery.data?.novelId ?? 0;
+  const chapterListQuery = useQuery({
+    queryKey: ["chapter", "list", currentNovelId],
+    queryFn: () => listChaptersByNovel(currentNovelId),
+    enabled: currentNovelId > 0,
+  });
 
   const progressMutation = useMutation({
     mutationFn: (progress: number) =>
       updateChapterProgress(chapterId, progress, {
         recordHistory: !incognitoMode,
-    }),
+      }),
     onMutate: (progress) => {
+      const applyProgress = (chapter: ChapterRow): ChapterRow => ({
+        ...chapter,
+        progress,
+        unread: progress >= FINISHED_PROGRESS ? false : chapter.unread,
+        readAt:
+          incognitoMode || progress <= 0
+            ? chapter.readAt
+            : Math.floor(Date.now() / 1000),
+      });
       queryClient.setQueryData<Awaited<ReturnType<typeof getChapterById>>>(
         chapterDetailKey(chapterId),
-        (chapter) =>
-          chapter
-            ? {
-                ...chapter,
-                progress,
-                unread: progress >= 97 ? false : chapter.unread,
-                readAt: incognitoMode
-                  ? chapter.readAt
-                  : Math.floor(Date.now() / 1000),
-              }
-            : chapter,
+        (chapter) => (chapter ? applyProgress(chapter) : chapter),
       );
+      if (currentNovelId > 0) {
+        const updateChapterList = (chapters: ChapterRow[] | undefined) =>
+          chapters?.map((chapter) =>
+            chapter.id === chapterId ? applyProgress(chapter) : chapter,
+          );
+        queryClient.setQueryData<ChapterRow[]>(
+          ["chapter", "list", currentNovelId],
+          updateChapterList,
+        );
+        queryClient.setQueryData<ChapterRow[]>(
+          ["novel", "detail", currentNovelId, "chapters"],
+          updateChapterList,
+        );
+      }
     },
     onSuccess: (_result, progress) => {
+      if (currentNovelId > 0) {
+        void queryClient.invalidateQueries({
+          queryKey: ["chapter", "list", currentNovelId],
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["novel"] });
       if (!incognitoMode) {
         void queryClient.invalidateQueries({ queryKey: ["chapter", "history"] });
-        void queryClient.invalidateQueries({ queryKey: ["novel"] });
       }
-      if (progress >= 97) {
+      if (progress >= FINISHED_PROGRESS) {
         void queryClient.invalidateQueries({ queryKey: ["chapter", "updates"] });
       }
     },
@@ -156,11 +344,6 @@ export function ReaderPage() {
     },
   });
 
-  const readerThemes = useMemo(
-    () => [...READER_PRESET_THEMES, ...appearance.customThemes],
-    [appearance.customThemes],
-  );
-
   const openAdjacent = useCallback(
     async (direction: 1 | -1) => {
       const chapter = chapterQuery.data;
@@ -171,12 +354,40 @@ export function ReaderPage() {
         direction,
       );
       if (adjacent) {
+        if (direction === 1) {
+          contentRef.current?.completeIfAtEnd();
+        }
+        setMenuVisible(false);
         openedChapterRef.current = null;
         void navigate({ to: "/reader", search: { chapterId: adjacent.id } });
       }
     },
     [chapterQuery.data, navigate],
   );
+
+  const openChapter = useCallback(
+    (targetChapterId: number) => {
+      if (targetChapterId === chapterId) return;
+      setMenuVisible(false);
+      openedChapterRef.current = null;
+      void navigate({ to: "/reader", search: { chapterId: targetChapterId } });
+    },
+    [chapterId, navigate],
+  );
+
+  const handleReaderBack = useCallback(() => {
+    const novelId = chapterQuery.data?.novelId;
+    setMenuVisible(false);
+    if (novelId) {
+      void navigate({ to: "/novel", search: { id: novelId } });
+      return;
+    }
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    void navigate({ to: "/" });
+  }, [chapterQuery.data?.novelId, navigate]);
 
   useEffect(() => {
     const chapter = chapterQuery.data;
@@ -203,13 +414,26 @@ export function ReaderPage() {
       if (
         target &&
         (target.tagName === "INPUT" ||
+          target.tagName === "BUTTON" ||
+          target.tagName === "A" ||
           target.tagName === "TEXTAREA" ||
           target.tagName === "SELECT" ||
           target.isContentEditable)
       ) {
         return;
       }
+      if (menuVisible && event.key !== "Escape") {
+        return;
+      }
       switch (event.key) {
+        case "Escape":
+          event.preventDefault();
+          if (menuVisible) {
+            setMenuVisible(false);
+          } else {
+            handleReaderBack();
+          }
+          break;
         case "PageDown":
         case "ArrowDown":
         case " ":
@@ -233,20 +457,19 @@ export function ReaderPage() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, []);
-
-  function handleSaveCustomTheme(): void {
-    const id = `custom-${Date.now()}`;
-    saveCustomTheme({
-      id,
-      label: `Custom ${appearance.customThemes.length + 1}`,
-      backgroundColor: appearance.backgroundColor,
-      textColor: appearance.textColor,
-    });
-    setAppearance({ themeId: id });
-  }
+  }, [handleReaderBack, menuVisible]);
 
   const chapter = chapterQuery.data;
+  const chapters = chapterListQuery.data ?? [];
+  const chapterIndex = chapter
+    ? chapters.findIndex((item) => item.id === chapter.id)
+    : -1;
+  const previousChapter =
+    chapterIndex > 0 ? chapters[chapterIndex - 1] : undefined;
+  const nextChapter =
+    chapterIndex >= 0 && chapterIndex < chapters.length - 1
+      ? chapters[chapterIndex + 1]
+      : undefined;
   const html = chapter?.content ?? SAMPLE_CHAPTER_HTML;
   const progress = chapter?.progress ?? 0;
   const chapterNovelId = chapter?.novelId;
@@ -265,362 +488,128 @@ export function ReaderPage() {
     [chapterNovelId, setNovelPageIndex],
   );
 
-  return (
-    <Box style={{ position: "relative" }}>
-      {chromeVisible ? (
-        <Group
-          gap="xs"
-          style={{
-            position: "fixed",
-            zIndex: 10,
-            top: general.fullScreen ? 8 : 64,
-            left: 12,
-            right: 12,
-            justifyContent: "space-between",
-            pointerEvents: "none",
-          }}
-        >
-          <Group gap="xs" style={{ pointerEvents: "auto" }}>
-            <Button size="xs" variant="default" onClick={() => setSettingsOpen(true)}>
-              Settings
-            </Button>
-            {chapter ? (
-              <Button
-                size="xs"
-                variant={chapter.bookmark ? "light" : "default"}
-                loading={bookmarkMutation.isPending}
-                onClick={() => bookmarkMutation.mutate()}
-              >
-                {chapter.bookmark ? "Bookmarked" : "Bookmark"}
-              </Button>
-            ) : null}
-          </Group>
-          <Group gap="xs" style={{ pointerEvents: "auto" }}>
-            {incognitoMode ? (
-              <Badge variant="light" color="gray">
-                Incognito
-              </Badge>
-            ) : null}
-            {chapter ? (
-              <Badge variant="light">
-                {chapter.name} - {Math.round(progress)}%
-              </Badge>
-            ) : null}
-            <Button size="xs" variant="default" onClick={() => setChromeVisible(false)}>
-              Hide
-            </Button>
-          </Group>
-        </Group>
-      ) : null}
-
-      {chapterId > 0 && chapterQuery.isLoading ? (
-        <Box p="lg">
-          <Alert color="blue" title="Loading chapter">
-            Loading reader content...
-          </Alert>
-        </Box>
-      ) : chapterId > 0 && chapterQuery.error ? (
-        <Box p="lg">
-          <Alert color="red" title="Failed to load chapter">
-            {chapterQuery.error instanceof Error
-              ? chapterQuery.error.message
-              : String(chapterQuery.error)}
-          </Alert>
-        </Box>
-      ) : chapterId > 0 && chapterQuery.data === null ? (
-        <Box p="lg">
-          <Alert color="orange" title="Chapter not found">
-            No chapter row with id {chapterId} exists in the local DB.
-          </Alert>
-        </Box>
-      ) : chapterId > 0 && chapter && !chapter.isDownloaded ? (
-        <Box p="lg">
-          <Alert color="blue" title="Not downloaded yet">
-            Open this chapter from the novel detail screen and tap
-            "Download" to fetch its body before reading offline.
-          </Alert>
-        </Box>
-      ) : (
-        <ReaderContent
-          ref={contentRef}
-          html={html}
-          initialProgress={progress}
-          onProgressChange={handleProgressChange}
-          onPageIndexChange={handlePageIndexChange}
-          onToggleChrome={() => setChromeVisible((visible) => !visible)}
-          onBoundaryPage={(direction) => {
-            void openAdjacent(direction);
-          }}
+  const readerContent =
+    chapterId > 0 && chapterQuery.isLoading ? (
+      <Box className="lnr-reader-state-frame">
+        <StateView
+          color="blue"
+          title="Loading chapter"
+          message="Loading reader content..."
         />
-      )}
+      </Box>
+    ) : chapterId > 0 && chapterQuery.error ? (
+      <Box className="lnr-reader-state-frame">
+        <StateView
+          color="red"
+          title="Failed to load chapter"
+          message={
+            chapterQuery.error instanceof Error
+              ? chapterQuery.error.message
+              : String(chapterQuery.error)
+          }
+        />
+      </Box>
+    ) : chapterId > 0 && chapterQuery.data === null ? (
+      <Box className="lnr-reader-state-frame">
+        <StateView
+          color="orange"
+          title="Chapter not found"
+          message={`No chapter row with id ${chapterId} exists in the local DB.`}
+        />
+      </Box>
+    ) : chapterId > 0 && chapter && !chapter.isDownloaded ? (
+      <Box className="lnr-reader-state-frame">
+        <StateView
+          color="blue"
+          title="Not downloaded yet"
+          message={
+            "Open this chapter from the novel detail screen and tap " +
+            "\"Download\" to fetch its body before reading offline."
+          }
+        />
+      </Box>
+    ) : (
+      <ReaderContent
+        key={chapter?.id ?? "sample"}
+        ref={contentRef}
+        bottomOverlayOffset={32}
+        html={html}
+        initialProgress={progress}
+        interactionBlocked={menuVisible}
+        onProgressChange={handleProgressChange}
+        onPageIndexChange={handlePageIndexChange}
+        onToggleChrome={() => setMenuVisible((visible) => !visible)}
+        onBoundaryPage={(direction) => {
+          void openAdjacent(direction);
+        }}
+        viewportHeight="100%"
+      />
+    );
 
-      <Drawer
-        opened={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        title="Reader settings"
-        position="right"
-        size="md"
-      >
-        <Tabs defaultValue="display">
-          <Tabs.List>
-            <Tabs.Tab value="display">Display</Tabs.Tab>
-            <Tabs.Tab value="controls">Controls</Tabs.Tab>
-            <Tabs.Tab value="advanced">Advanced</Tabs.Tab>
-          </Tabs.List>
+  return (
+    <Box className="lnr-reader-shell">
+      <ReaderTopChrome
+        chapter={chapter}
+        chapterCount={chapters.length}
+        chapterIndex={chapterIndex}
+        incognitoMode={incognitoMode}
+        onBack={handleReaderBack}
+        onToggleMenu={() => setMenuVisible((visible) => !visible)}
+        progress={progress}
+      />
+      <Box className="lnr-reader-body">
+        <ReaderChapterPanel
+          chapters={chapters}
+          currentChapterId={chapter?.id}
+          loading={chapterListQuery.isLoading}
+          onOpenChapter={openChapter}
+        />
+        <Box className="lnr-reader-content-frame">{readerContent}</Box>
+      </Box>
+      <ReaderBottomStrip
+        currentLabel={chapter ? getChapterLabel(chapter) : "Sample"}
+        hasNextChapter={!!nextChapter}
+        hasPreviousChapter={!!previousChapter}
+        nextLabel={nextChapter ? getChapterLabel(nextChapter) : "Next"}
+        onNextChapter={() => {
+          void openAdjacent(1);
+        }}
+        onPreviousChapter={() => {
+          void openAdjacent(-1);
+        }}
+        previousLabel={
+          previousChapter ? getChapterLabel(previousChapter) : "Previous"
+        }
+        progress={progress}
+      />
 
-          <Tabs.Panel value="display" pt="md">
-            <Stack gap="md">
-              <Select
-                label="Reader theme"
-                data={readerThemes.map((theme) => ({
-                  value: theme.id,
-                  label: theme.label,
-                }))}
-                value={appearance.themeId}
-                onChange={(themeId) => {
-                  const nextTheme = readerThemes.find(
-                    (theme) => theme.id === themeId,
-                  );
-                  if (nextTheme) applyTheme(nextTheme);
-                }}
-              />
-              <Group grow>
-                <ColorInput
-                  label="Background"
-                  value={appearance.backgroundColor}
-                  onChange={(backgroundColor) =>
-                    setAppearance({ backgroundColor })
-                  }
-                />
-                <ColorInput
-                  label="Text"
-                  value={appearance.textColor}
-                  onChange={(textColor) => setAppearance({ textColor })}
-                />
-              </Group>
-              <Stack gap={4}>
-                <Group justify="space-between">
-                  <Text size="sm">Text size</Text>
-                  <Text size="sm" c="dimmed">
-                    {appearance.textSize}px
-                  </Text>
-                </Group>
-                <Slider
-                  min={12}
-                  max={36}
-                  step={1}
-                  value={appearance.textSize}
-                  onChange={(textSize) => setAppearance({ textSize })}
-                />
-              </Stack>
-              <Stack gap={4}>
-                <Group justify="space-between">
-                  <Text size="sm">Line height</Text>
-                  <Text size="sm" c="dimmed">
-                    {appearance.lineHeight.toFixed(2)}
-                  </Text>
-                </Group>
-                <Slider
-                  min={1}
-                  max={2.6}
-                  step={0.05}
-                  value={appearance.lineHeight}
-                  onChange={(lineHeight) => setAppearance({ lineHeight })}
-                />
-              </Stack>
-              <Stack gap={4}>
-                <Group justify="space-between">
-                  <Text size="sm">Padding</Text>
-                  <Text size="sm" c="dimmed">
-                    {appearance.padding}px
-                  </Text>
-                </Group>
-                <Slider
-                  min={0}
-                  max={64}
-                  step={1}
-                  value={appearance.padding}
-                  onChange={(padding) => setAppearance({ padding })}
-                />
-              </Stack>
-              <Select
-                label="Font"
-                data={READER_FONT_OPTIONS}
-                value={appearance.fontFamily}
-                onChange={(fontFamily) =>
-                  setAppearance({ fontFamily: fontFamily ?? "" })
-                }
-              />
-              <SegmentedControl
-                value={appearance.textAlign}
-                onChange={(textAlign) =>
-                  setAppearance({
-                    textAlign: textAlign as typeof appearance.textAlign,
-                  })
-                }
-                data={[
-                  { value: "left", label: "Left" },
-                  { value: "justify", label: "Justify" },
-                  { value: "center", label: "Center" },
-                  { value: "right", label: "Right" },
-                ]}
-              />
-              <Group>
-                <Button variant="default" onClick={handleSaveCustomTheme}>
-                  Save custom theme
-                </Button>
-                <Button variant="default" onClick={resetReaderSettings}>
-                  Reset
-                </Button>
-              </Group>
-            </Stack>
-          </Tabs.Panel>
-
-          <Tabs.Panel value="controls" pt="md">
-            <Stack gap="sm">
-              <Switch
-                label="Fullscreen reader"
-                checked={general.fullScreen}
-                onChange={(event) =>
-                  setGeneral({ fullScreen: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Keep screen on"
-                checked={general.keepScreenOn}
-                onChange={(event) =>
-                  setGeneral({ keepScreenOn: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Paged reader"
-                checked={general.pageReader}
-                onChange={(event) =>
-                  setGeneral({ pageReader: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Swipe gestures"
-                checked={general.swipeGestures}
-                onChange={(event) =>
-                  setGeneral({ swipeGestures: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Tap to scroll"
-                checked={general.tapToScroll}
-                onChange={(event) =>
-                  setGeneral({ tapToScroll: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Seekbar"
-                checked={general.showSeekbar}
-                onChange={(event) =>
-                  setGeneral({ showSeekbar: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Vertical seekbar"
-                checked={general.verticalSeekbar}
-                onChange={(event) =>
-                  setGeneral({ verticalSeekbar: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Scroll percentage"
-                checked={general.showScrollPercentage}
-                onChange={(event) =>
-                  setGeneral({
-                    showScrollPercentage: event.currentTarget.checked,
-                  })
-                }
-              />
-              <Switch
-                label="Battery and time footer"
-                checked={general.showBatteryAndTime}
-                onChange={(event) =>
-                  setGeneral({
-                    showBatteryAndTime: event.currentTarget.checked,
-                  })
-                }
-              />
-              <Switch
-                label="Auto-scroll"
-                checked={general.autoScroll}
-                onChange={(event) =>
-                  setGeneral({ autoScroll: event.currentTarget.checked })
-                }
-              />
-              <Group grow>
-                <NumberInput
-                  label="Auto-scroll interval"
-                  value={general.autoScrollInterval}
-                  min={16}
-                  max={500}
-                  onChange={(value) => {
-                    if (typeof value === "number") {
-                      setGeneral({ autoScrollInterval: value });
-                    }
-                  }}
-                />
-                <NumberInput
-                  label="Auto-scroll offset"
-                  value={general.autoScrollOffset}
-                  min={0.25}
-                  max={12}
-                  step={0.25}
-                  onChange={(value) => {
-                    if (typeof value === "number") {
-                      setGeneral({ autoScrollOffset: value });
-                    }
-                  }}
-                />
-              </Group>
-            </Stack>
-          </Tabs.Panel>
-
-          <Tabs.Panel value="advanced" pt="md">
-            <Stack gap="md">
-              <Switch
-                label="Bionic reading"
-                checked={general.bionicReading}
-                onChange={(event) =>
-                  setGeneral({ bionicReading: event.currentTarget.checked })
-                }
-              />
-              <Switch
-                label="Remove extra paragraph spacing"
-                checked={general.removeExtraParagraphSpacing}
-                onChange={(event) =>
-                  setGeneral({
-                    removeExtraParagraphSpacing:
-                      event.currentTarget.checked,
-                  })
-                }
-              />
-              <Textarea
-                label="Custom CSS"
-                value={appearance.customCss}
-                autosize
-                minRows={5}
-                onChange={(event) =>
-                  setAppearance({ customCss: event.currentTarget.value })
-                }
-              />
-              <Textarea
-                label="Custom JS"
-                value={appearance.customJs}
-                autosize
-                minRows={5}
-                onChange={(event) =>
-                  setAppearance({ customJs: event.currentTarget.value })
-                }
-              />
-            </Stack>
-          </Tabs.Panel>
-        </Tabs>
-      </Drawer>
+      <ReaderQuickMenu
+        visible={menuVisible}
+        chapterName={chapter?.name}
+        progress={progress}
+        incognitoMode={incognitoMode}
+        bookmarked={chapter?.bookmark ?? false}
+        bookmarkLoading={bookmarkMutation.isPending}
+        bookmarkDisabled={!chapter}
+        hasNextChapter={!!nextChapter}
+        hasPreviousChapter={!!previousChapter}
+        onBookmark={() => bookmarkMutation.mutate()}
+        onBack={handleReaderBack}
+        onClose={() => setMenuVisible(false)}
+        onOpenSettings={() => {
+          setMenuVisible(false);
+          void navigate({ to: "/settings" });
+        }}
+        onPreviousChapter={() => {
+          void openAdjacent(-1);
+        }}
+        onNextChapter={() => {
+          void openAdjacent(1);
+        }}
+        onScrollToStart={() => {
+          contentRef.current?.scrollToStart();
+        }}
+      />
     </Box>
   );
 }

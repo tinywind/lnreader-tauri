@@ -17,6 +17,7 @@ interface LibraryNovelForUpdate {
 export interface UpdateCheckFailure {
   novelId: number;
   novelName: string;
+  pluginId: string;
   reason: string;
 }
 
@@ -70,6 +71,7 @@ export async function checkLibraryUpdates(
       failures.push({
         novelId: novel.id,
         novelName: novel.name,
+        pluginId: novel.pluginId,
         reason: `Plugin "${novel.pluginId}" is not installed.`,
       });
       continue;
@@ -98,6 +100,7 @@ export async function checkLibraryUpdates(
       failures.push({
         novelId: novel.id,
         novelName: novel.name,
+        pluginId: novel.pluginId,
         reason: describeError(error),
       });
     }

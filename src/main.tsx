@@ -4,6 +4,7 @@ import { MantineProvider, createTheme } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
+import "./styles/app.css";
 import { RouterProvider } from "@tanstack/react-router";
 import {
   MutationCache,
@@ -12,6 +13,7 @@ import {
   QueryClientProvider,
 } from "@tanstack/react-query";
 import { pluginManager } from "./lib/plugins/manager";
+import { isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
 import { useAppearanceStore } from "./store/appearance";
 import { makeMantineColorScale, resolveMd3Palette } from "./theme/md3";
@@ -52,10 +54,12 @@ const queryClient = new QueryClient({
  * Rehydrate previously-installed plugins from the DB at app start.
  * Fire-and-forget; failures get logged but don't block boot.
  */
-void pluginManager.loadInstalledFromDb().catch((error: unknown) => {
-  // eslint-disable-next-line no-console
-  console.warn("[bootstrap] failed to rehydrate installed plugins", error);
-});
+if (isTauriRuntime()) {
+  void pluginManager.loadInstalledFromDb().catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.warn("[bootstrap] failed to rehydrate installed plugins", error);
+  });
+}
 
 /**
  * Async errors that escape React Query entirely get logged for
@@ -115,12 +119,35 @@ function AppProviders() {
   const theme = useMemo(
     () =>
       createTheme({
-        fontFamily: "system-ui, -apple-system, sans-serif",
+        fontFamily:
+          "Inter, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
         primaryColor: "lnreader",
         colors: {
           lnreader: makeMantineColorScale(palette),
         },
         defaultRadius: "sm",
+        components: {
+          Alert: {
+            defaultProps: {
+              radius: "sm",
+            },
+          },
+          Button: {
+            defaultProps: {
+              radius: "sm",
+            },
+          },
+          Paper: {
+            defaultProps: {
+              radius: "sm",
+            },
+          },
+          TextInput: {
+            defaultProps: {
+              radius: "sm",
+            },
+          },
+        },
       }),
     [palette],
   );

@@ -40,3 +40,4 @@ Thumbs.db
 
 # Temp scratch
 .tmp/
+.playwright-mcp/

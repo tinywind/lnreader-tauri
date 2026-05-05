@@ -7,6 +7,7 @@ vi.mock("../client", () => ({
 import { getDb } from "../client";
 import {
   clearChapterContent,
+  clearNovelHistory,
   getAdjacentChapter,
   getChapterById,
   getChapterContent,
@@ -156,11 +157,11 @@ describe("updateChapterProgress", () => {
     expect(params).toEqual([5, 34]);
   });
 
-  it("flips unread at 97 and records read_at for history", async () => {
+  it("flips unread at 100 and records read_at for history", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
-    await updateChapterProgress(5, 97);
+    await updateChapterProgress(5, 100);
     const [sql] = mockExecute.mock.calls[0]!;
-    expect(sql).toContain("CASE WHEN $2 >= 97 THEN 0 ELSE unread END");
+    expect(sql).toContain("CASE WHEN $2 >= 100 THEN 0 ELSE unread END");
     expect(sql).toContain(
       "CASE WHEN $2 > 0 THEN unixepoch() ELSE read_at END",
     );
@@ -191,6 +192,25 @@ describe("markChapterOpened", () => {
     expect(novelSql).toContain("UPDATE novel");
     expect(novelSql).toContain("last_read_at = unixepoch()");
     expect(novelParams).toEqual([17]);
+  });
+});
+
+describe("clearNovelHistory", () => {
+  it("removes a novel from history without touching progress", async () => {
+    mockExecute.mockResolvedValue(undefined);
+    await clearNovelHistory(7);
+
+    const [chapterSql, chapterParams] = mockExecute.mock.calls[0]!;
+    expect(chapterSql).toContain("UPDATE chapter");
+    expect(chapterSql).toContain("read_at = NULL");
+    expect(chapterSql).toContain("novel_id = $1");
+    expect(chapterSql).not.toContain("progress");
+    expect(chapterParams).toEqual([7]);
+
+    const [novelSql, novelParams] = mockExecute.mock.calls[1]!;
+    expect(novelSql).toContain("UPDATE novel");
+    expect(novelSql).toContain("last_read_at = NULL");
+    expect(novelParams).toEqual([7]);
   });
 });
 
@@ -290,6 +310,7 @@ describe("listLibraryUpdates", () => {
       {
         chapterId: 1,
         novelId: 1,
+        pluginId: "source-a",
         chapterName: "Ch1",
         position: 1,
         foundAt: 1_700_000_000,
@@ -312,7 +333,7 @@ describe("listLibraryUpdates", () => {
 });
 
 describe("listRecentlyRead", () => {
-  it("joins chapter with novel and orders by read_at DESC", async () => {
+  it("joins chapter with novel and returns the latest chapter per novel", async () => {
     mockSelect.mockResolvedValueOnce([]);
 
     await listRecentlyRead();
@@ -320,7 +341,9 @@ describe("listRecentlyRead", () => {
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("FROM chapter c");
     expect(sql).toContain("JOIN novel n");
-    expect(sql).toContain("c.read_at IS NOT NULL");
+    expect(sql).toContain("WHERE c.id = (");
+    expect(sql).toContain("c2.novel_id = c.novel_id");
+    expect(sql).toContain("c2.read_at IS NOT NULL");
     expect(sql).toContain("ORDER BY c.read_at DESC");
     expect(sql).toContain("LIMIT $1");
     expect(params).toEqual([100]);

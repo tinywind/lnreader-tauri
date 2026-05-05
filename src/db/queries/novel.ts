@@ -14,19 +14,21 @@ export interface LibraryNovel {
   path: string;
   name: string;
   cover: string | null;
+  author: string | null;
   inLibrary: boolean;
   isLocal: boolean;
   totalChapters: number;
   chaptersDownloaded: number;
   chaptersUnread: number;
+  readingProgress: number;
   lastReadAt: number | null;
   lastUpdatedAt: number;
 }
 
 export interface LibraryFilter {
-  /** Case-insensitive substring match against `name`. Empty/blank → ignored. */
+  /** Case-insensitive substring match against `name`. Empty and blank values are ignored. */
   search?: string;
-  /** Restrict to novels assigned to this category. `null`/undefined → all. */
+  /** Restrict to novels assigned to this category. `null` and undefined include all. */
   categoryId?: number | null;
   downloadedOnly?: boolean;
   sortOrder?: LibrarySortOrder;
@@ -90,6 +92,7 @@ export async function listLibraryNovels(
       n.path,
       n.name,
       n.cover,
+      n.author,
       n.in_library   AS inLibrary,
       n.is_local     AS isLocal,
       COUNT(c.id) AS totalChapters,
@@ -97,6 +100,18 @@ export async function listLibraryNovels(
         AS chaptersDownloaded,
       COALESCE(SUM(CASE WHEN c.unread = 1 THEN 1 ELSE 0 END), 0)
         AS chaptersUnread,
+      COALESCE(
+        ROUND(AVG(
+          CASE
+            WHEN c.id IS NULL THEN NULL
+            WHEN c.progress >= 100 THEN 100
+            WHEN c.progress < 0 THEN 0
+            WHEN c.progress > 100 THEN 100
+            ELSE c.progress
+          END
+        )),
+        0
+      ) AS readingProgress,
       n.last_read_at AS lastReadAt,
       MAX(COALESCE(c.updated_at, n.updated_at)) AS lastUpdatedAt
     FROM novel n
@@ -108,6 +123,7 @@ export async function listLibraryNovels(
       n.path,
       n.name,
       n.cover,
+      n.author,
       n.in_library,
       n.is_local,
       n.last_read_at,

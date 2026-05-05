@@ -3,6 +3,7 @@ import {
   READER_APPEARANCE_DEFAULTS,
   READER_GENERAL_DEFAULTS,
   READER_PRESET_THEMES,
+  READER_TAP_PRESETS,
   useReaderStore,
 } from "./reader";
 
@@ -35,6 +36,22 @@ describe("useReaderStore", () => {
     expect(useReaderStore.getState().general.autoScrollInterval).toBe(500);
     useReaderStore.getState().setGeneral({ autoScrollInterval: 80.4 });
     expect(useReaderStore.getState().general.autoScrollInterval).toBe(80);
+  });
+
+  it("applyTapZonePreset writes preset maps and keeps the center action as menu", () => {
+    const preset = READER_TAP_PRESETS.find(
+      (candidate) => candidate.id === "vertical-scroll",
+    )!;
+    useReaderStore.getState().applyTapZonePreset(preset.id);
+    const general = useReaderStore.getState().general;
+
+    expect(general.tapZonePresetId).toBe(preset.id);
+    expect(general.portraitTapZones.topLeft).toBe(preset.portrait.topLeft);
+    expect(general.portraitTapZones.middleCenter).toBe("menu");
+    expect(general.landscapeTapZones.bottomRight).toBe(
+      preset.landscape.bottomRight,
+    );
+    expect(general.landscapeTapZones.middleCenter).toBe("menu");
   });
 
   it("setAppearance clamps textSize to [12, 36] and rounds", () => {

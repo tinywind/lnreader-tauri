@@ -2,23 +2,27 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  Alert,
   Anchor,
   Badge,
+  Box,
   Button,
-  Container,
-  Divider,
   Group,
   Loader,
   Modal,
   MultiSelect,
   NumberInput,
-  Paper,
   Stack,
   Text,
   TextInput,
-  Title,
 } from "@mantine/core";
+import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
+import {
+  ConsoleChip,
+  ConsolePanel,
+  ConsoleSectionHeader,
+  ConsoleStatusDot,
+  ConsoleStatusStrip,
+} from "../components/ConsolePrimitives";
 import { useSiteBrowserStore } from "../store/site-browser";
 import {
   getCachedRepoIndex,
@@ -30,6 +34,7 @@ import {
   removeRepository,
   type PluginRepository,
 } from "../db/queries/repository";
+import { PluginSearchSection } from "./global-search";
 import { isValidPluginItem, pluginManager } from "../lib/plugins/manager";
 import type { Plugin, PluginItem } from "../lib/plugins/types";
 import { useBrowseStore } from "../store/browse";
@@ -51,6 +56,11 @@ interface RepoFetchFailure {
 interface AvailableResult {
   entries: AvailableEntry[];
   failures: RepoFetchFailure[];
+}
+
+interface BrowsePageProps {
+  active?: boolean;
+  query?: string;
 }
 
 interface LanguageOption {
@@ -112,7 +122,7 @@ function sortByName<T extends PluginItem>(plugins: readonly T[]): T[] {
 /**
  * Cache-first index loader.
  *
- * `forceRefresh=false` (default — Browse mount, query refetch):
+ * `forceRefresh=false` (default Browse mount, query refetch):
  *   Per repo, return the cached items if any. If no cache row
  *   exists yet for a repo (first-ever load), do a single network
  *   fetch + write the cache so it's instant from then on. Already-
@@ -151,7 +161,7 @@ async function fetchAllAvailable(
   return { entries, failures };
 }
 
-export function BrowsePage() {
+export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const repos = useQuery({
@@ -199,6 +209,8 @@ export function BrowsePage() {
   const setLastUsedPluginId = useBrowseStore(
     (s) => s.setLastUsedPluginId,
   );
+  const siteBrowserVisible = useSiteBrowserStore((s) => s.visible);
+  const siteBrowserUrl = useSiteBrowserStore((s) => s.currentUrl);
 
   const [addOpen, setAddOpen] = useState(false);
   const [url, setUrl] = useState("");
@@ -235,6 +247,15 @@ export function BrowsePage() {
           ),
     [availableEntries, pluginLanguageFilter],
   );
+  const installedIds = useMemo(
+    () => new Set(installed.data?.map((p) => p.id) ?? []),
+    [installed.data],
+  );
+  const pinnedCount = filteredInstalledPlugins.filter((plugin) =>
+    pinnedPluginIds.includes(plugin.id),
+  ).length;
+  const repositoryCount = repos.data?.length ?? 0;
+  const failureCount = available.data?.failures.length ?? 0;
 
   // Deep-link entry: pre-fill the URL and open the modal.
   useEffect(() => {
@@ -293,14 +314,13 @@ export function BrowsePage() {
   });
 
   return (
-    <Container size="lg" py="xl">
-      <Stack gap="xl">
-        <Group justify="space-between" align="baseline">
-          <Title order={1}>Browse</Title>
-          <Group gap="xs">
-            <Badge variant="light" color="grape">
-              Sprint 2
-            </Badge>
+    <PageFrame size="wide" className="lnr-browse-page">
+      <PageHeader
+        title="Browse"
+        description="Manage source repositories, narrow global search scope, and open source catalogs."
+        actions={
+          <>
+            <Badge variant="light">{filteredInstalledPlugins.length} sources</Badge>
             <Button
               size="xs"
               variant="light"
@@ -322,98 +342,170 @@ export function BrowsePage() {
             >
               Refresh
             </Button>
-          </Group>
-        </Group>
+          </>
+        }
+      />
 
-        <RepositoriesSection
-          query={repos}
-          onRemove={(id) => removeRepoMutation.mutate(id)}
-          removing={removeRepoMutation.isPending}
-        />
+      <div className="lnr-browse-workbench">
+        <aside className="lnr-browse-sidebar">
+          <InstalledSection
+            plugins={filteredInstalledPlugins}
+            onUninstall={(id) => uninstallMutation.mutate(id)}
+            uninstalling={uninstallMutation.isPending}
+            pinnedPluginIds={pinnedPluginIds}
+            lastUsedPluginId={lastUsedPluginId}
+            onTogglePin={togglePinnedPlugin}
+            onOpenSource={(plugin) => {
+              setLastUsedPluginId(plugin.id);
+              void navigateToSource(plugin.id);
+            }}
+          />
 
-        <Divider />
+          <RepositoriesSection
+            query={repos}
+            onRemove={(id) => removeRepoMutation.mutate(id)}
+            removing={removeRepoMutation.isPending}
+          />
 
-        <PluginSettingsSection
-          languageOptions={languageOptions}
-          selectedLanguages={pluginLanguageFilter}
-          onLanguageChange={setPluginLanguageFilter}
-          globalSearchConcurrency={globalSearchConcurrency}
-          onGlobalSearchConcurrencyChange={setGlobalSearchConcurrency}
-        />
+          <FetchContextSection
+            visible={siteBrowserVisible}
+            currentUrl={siteBrowserUrl}
+          />
+        </aside>
 
-        <Divider />
-
-        <InstalledSection
-          plugins={filteredInstalledPlugins}
-          onUninstall={(id) => uninstallMutation.mutate(id)}
-          uninstalling={uninstallMutation.isPending}
-          pinnedPluginIds={pinnedPluginIds}
-          lastUsedPluginId={lastUsedPluginId}
-          onTogglePin={togglePinnedPlugin}
-          onOpenSource={(plugin) => {
-            setLastUsedPluginId(plugin.id);
-            void navigateToSource(plugin.id);
-          }}
-        />
-
-        <Divider />
-
-        <AvailableSection
-          query={available}
-          entries={filteredAvailableEntries}
-          installedIds={
-            new Set(installed.data?.map((p) => p.id) ?? [])
-          }
-          onInstall={(item) => installMutation.mutate(item)}
-          installing={installMutation.isPending}
-          failures={available.data?.failures ?? []}
-        />
-
-        <Modal
-          opened={addOpen}
-          onClose={() => {
-            setAddOpen(false);
-            addRepoMutation.reset();
-          }}
-          title="Add repository"
-        >
-          <Stack gap="sm">
-            <TextInput
-              label="Repository URL"
-              placeholder="https://example.com/plugins.json"
-              value={url}
-              onChange={(event) => setUrl(event.currentTarget.value)}
-              autoFocus
+        <main className="lnr-browse-content">
+          <ConsolePanel className="lnr-browse-search-panel">
+            <PluginSearchSection
+              query={q}
+              onSearch={(nextQuery) => {
+                void navigate({
+                  to: "/browse",
+                  search: { q: nextQuery },
+                });
+              }}
             />
-            {addRepoMutation.error && (
-              <Alert color="red" variant="light" title="Add failed">
-                {addRepoMutation.error instanceof Error
+          </ConsolePanel>
+
+          <PluginSettingsSection
+            languageOptions={languageOptions}
+            selectedLanguages={pluginLanguageFilter}
+            onLanguageChange={setPluginLanguageFilter}
+            globalSearchConcurrency={globalSearchConcurrency}
+            onGlobalSearchConcurrencyChange={setGlobalSearchConcurrency}
+          />
+
+          <AvailableSection
+            query={available}
+            entries={filteredAvailableEntries}
+            installedIds={installedIds}
+            onInstall={(item) => installMutation.mutate(item)}
+            installing={installMutation.isPending}
+            failures={available.data?.failures ?? []}
+          />
+        </main>
+      </div>
+
+      <ConsoleStatusStrip>
+        <span>{repositoryCount} repositories</span>
+        <span>{filteredInstalledPlugins.length} installed sources</span>
+        <span>{pinnedCount} pinned</span>
+        <span>{filteredAvailableEntries.length} available</span>
+        <span>{failureCount} repository failures</span>
+      </ConsoleStatusStrip>
+
+      <Modal
+        opened={active && addOpen}
+        onClose={() => {
+          setAddOpen(false);
+          addRepoMutation.reset();
+        }}
+        title="Add repository"
+      >
+        <Stack gap="sm">
+          <TextInput
+            label="Repository URL"
+            placeholder="https://example.com/plugins.json"
+            value={url}
+            onChange={(event) => setUrl(event.currentTarget.value)}
+            autoFocus
+          />
+          {addRepoMutation.error && (
+            <StateView
+              color="red"
+              title="Add failed"
+              message={
+                addRepoMutation.error instanceof Error
                   ? addRepoMutation.error.message
-                  : String(addRepoMutation.error)}
-              </Alert>
-            )}
-            <Group justify="flex-end">
-              <Button
-                variant="subtle"
-                onClick={() => {
-                  setAddOpen(false);
-                  addRepoMutation.reset();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                loading={addRepoMutation.isPending}
-                disabled={url.trim() === ""}
-                onClick={() => addRepoMutation.mutate()}
-              >
-                Add
-              </Button>
-            </Group>
-          </Stack>
-        </Modal>
+                  : String(addRepoMutation.error)
+              }
+            />
+          )}
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              onClick={() => {
+                setAddOpen(false);
+                addRepoMutation.reset();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              loading={addRepoMutation.isPending}
+              disabled={url.trim() === ""}
+              onClick={() => addRepoMutation.mutate()}
+            >
+              Add
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </PageFrame>
+  );
+}
+
+interface FetchContextSectionProps {
+  visible: boolean;
+  currentUrl: string | null;
+}
+
+function FetchContextSection({
+  visible,
+  currentUrl,
+}: FetchContextSectionProps) {
+  return (
+    <ConsolePanel className="lnr-browse-panel" title="Fetch context">
+      <Stack gap="sm" p="sm">
+        <Group gap="xs" wrap="wrap">
+          <ConsoleStatusDot
+            status={visible ? "done" : "idle"}
+            label={visible ? "WebView open" : "WebView idle"}
+          />
+          <ConsoleChip>Repository HTTP</ConsoleChip>
+          <ConsoleChip tone="accent">Scraper WebView</ConsoleChip>
+          <ConsoleChip tone="warning">Cloudflare-ready</ConsoleChip>
+        </Group>
+        {currentUrl ? (
+          <Box style={{ minWidth: 0 }}>
+            <Text className="lnr-console-kicker">Prepared site</Text>
+            <Anchor
+              size="sm"
+              truncate
+              onClick={(event) => {
+                event.preventDefault();
+                openSite(currentUrl);
+              }}
+            >
+              {currentUrl}
+            </Anchor>
+          </Box>
+        ) : (
+          <Text size="sm" c="dimmed">
+            No plugin site is prepared yet.
+          </Text>
+        )}
       </Stack>
-    </Container>
+    </ConsolePanel>
   );
 }
 
@@ -439,43 +531,42 @@ function PluginSettingsSection({
   onGlobalSearchConcurrencyChange,
 }: PluginSettingsSectionProps) {
   return (
-    <Stack gap="xs">
-      <Title order={3}>Plugin settings</Title>
-      <Paper withBorder p="sm" radius="md">
-        <Stack gap="sm">
-          <MultiSelect
-            label="Plugin languages"
-            description="Only plugins matching these languages appear in installed, available, and global search lists."
-            data={languageOptions}
-            value={selectedLanguages}
-            onChange={onLanguageChange}
-            placeholder="Select languages"
-            searchable
-            clearable
-          />
-          <NumberInput
-            label="Global search concurrency"
-            description="Number of plugins searched at the same time."
-            value={globalSearchConcurrency}
-            min={1}
-            max={10}
-            step={1}
-            clampBehavior="strict"
-            onChange={(value) => {
-              if (typeof value === "number") {
-                onGlobalSearchConcurrencyChange(value);
-              }
-            }}
-          />
-        </Stack>
-      </Paper>
-      {selectedLanguages.length === 0 ? (
-        <Alert color="blue" variant="light">
-          No plugin languages are selected, so Browse shows every
-          plugin language.
-        </Alert>
-      ) : null}
-    </Stack>
+    <ConsolePanel className="lnr-browse-panel" title="Search controls">
+      <div className="lnr-browse-settings-grid">
+        <MultiSelect
+          label="Plugin languages"
+          description="Filters installed, available, and global search plugin lists."
+          data={languageOptions}
+          value={selectedLanguages}
+          onChange={onLanguageChange}
+          placeholder="Select languages"
+          searchable
+          clearable
+        />
+        <NumberInput
+          label="Global search concurrency"
+          description="Number of plugins searched at the same time."
+          value={globalSearchConcurrency}
+          min={1}
+          max={10}
+          step={1}
+          clampBehavior="strict"
+          onChange={(value) => {
+            if (typeof value === "number") {
+              onGlobalSearchConcurrencyChange(value);
+            }
+          }}
+        />
+      </div>
+      <ConsoleStatusStrip className="lnr-browse-panel-strip">
+        <span>
+          {selectedLanguages.length === 0
+            ? "All languages"
+            : `${selectedLanguages.length} languages`}
+        </span>
+        <span>{globalSearchConcurrency} concurrent searches</span>
+      </ConsoleStatusStrip>
+    </ConsolePanel>
   );
 }
 
@@ -485,34 +576,51 @@ function RepositoriesSection({
   removing,
 }: RepositoriesSectionProps) {
   return (
-    <Stack gap="xs">
-      <Title order={3}>Repositories</Title>
-      {query.isLoading ? (
-        <Group gap="sm">
-          <Loader size="sm" />
-          <Text c="dimmed">Loading...</Text>
+    <ConsolePanel className="lnr-browse-panel" title="Repositories">
+      <Stack gap="xs" p="sm">
+        <Group justify="space-between" align="center">
+          <ConsoleStatusDot status="active" label="Cache-first index" />
+          {query.data ? <ConsoleChip>{query.data.length}</ConsoleChip> : null}
         </Group>
+      {query.isLoading ? (
+        <StateView
+          title={
+            <Group gap="sm">
+              <Loader size="sm" />
+              Loading...
+            </Group>
+          }
+        />
       ) : query.error ? (
-        <Alert color="red" title="Database error">
-          {query.error instanceof Error
-            ? query.error.message
-            : String(query.error)}
-        </Alert>
+        <StateView
+          color="red"
+          title="Database error"
+          message={
+            query.error instanceof Error
+              ? query.error.message
+              : String(query.error)
+          }
+        />
       ) : query.data && query.data.length > 0 ? (
         <Stack gap={6}>
           {query.data.map((repo) => (
-            <Paper key={repo.id} withBorder p="xs" radius="md">
-              <Group justify="space-between" wrap="nowrap">
-                <Stack gap={0} style={{ minWidth: 0 }}>
-                  <Text size="sm" fw={500} truncate>
-                    {repo.name ?? repo.url}
-                  </Text>
+            <div key={repo.id} className="lnr-browse-repo-row">
+              <Group justify="space-between" align="flex-start" wrap="wrap">
+                <Box style={{ minWidth: 0, flex: "1 1 18rem" }}>
+                  <Group gap="xs" wrap="wrap">
+                    <Text size="sm" fw={500} truncate>
+                      {repo.name ?? repo.url}
+                    </Text>
+                    <Badge size="xs" variant="outline">
+                      Repository
+                    </Badge>
+                  </Group>
                   {repo.name ? (
                     <Text size="xs" c="dimmed" truncate>
                       {repo.url}
                     </Text>
                   ) : null}
-                </Stack>
+                </Box>
                 <Button
                   size="xs"
                   color="red"
@@ -523,17 +631,24 @@ function RepositoriesSection({
                   Remove
                 </Button>
               </Group>
-            </Paper>
+            </div>
           ))}
         </Stack>
       ) : (
-        <Alert color="blue" title="No repositories yet">
-          Add a plugin repository URL, typically the lnreader-plugins
-          index JSON. Deep-link <code>lnreader://repo/add?url=...</code>{" "}
-          opens the Add dialog pre-filled.
-        </Alert>
+        <StateView
+          color="blue"
+          title="No repositories yet"
+          message={
+            <>
+              Add a plugin repository URL, typically the lnreader-plugins
+              index JSON. Deep-link <code>lnreader://repo/add?url=...</code>{" "}
+              opens the Add dialog pre-filled.
+            </>
+          }
+        />
       )}
-    </Stack>
+      </Stack>
+    </ConsolePanel>
   );
 }
 
@@ -548,11 +663,9 @@ interface InstalledSectionProps {
 }
 
 /**
- * Open the plugin's site in the in-app full-screen layered modal
- * over the main window. The scraper Webview is shared, so any
- * cookies (login, CF clearance) the user accumulates here are
- * automatically attached to the next pluginFetch; there is no
- * per-plugin cookie store on the host side.
+ * Open the plugin's site in the in-app browser overlay. The
+ * persistent scraper WebView owns browser cache and cookies, and
+ * plugin-owned fetches prepare this origin before requesting data.
  */
 function openSite(url: string): void {
   useSiteBrowserStore.getState().openAt(url);
@@ -561,6 +674,7 @@ function openSite(url: string): void {
 interface PluginRowProps {
   plugin: Plugin;
   pinned: boolean;
+  lastUsed: boolean;
   onTogglePin: (id: string) => void;
   onOpenSource: (plugin: Plugin) => void;
   onUninstall: (id: string) => void;
@@ -570,21 +684,38 @@ interface PluginRowProps {
 function PluginRow({
   plugin,
   pinned,
+  lastUsed,
   onTogglePin,
   onOpenSource,
   onUninstall,
   uninstalling,
 }: PluginRowProps) {
   return (
-    <Paper key={plugin.id} withBorder p="xs" radius="md">
-      <Group justify="space-between" wrap="nowrap">
-        <Stack gap={0} style={{ minWidth: 0 }}>
-          <Text size="sm" fw={500} truncate>
-            {plugin.name}{" "}
-            <Text span size="xs" c="dimmed">
-              ({plugin.lang} - v{plugin.version})
+    <div key={plugin.id} className="lnr-browse-plugin-row">
+      <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
+        <Box style={{ minWidth: 0, flex: "1 1 18rem" }}>
+          <Group gap="xs" wrap="wrap">
+            <Text
+              size="sm"
+              fw={600}
+              truncate
+              style={{ maxWidth: "min(100%, 28rem)" }}
+            >
+              {plugin.name}
             </Text>
-          </Text>
+            <ConsoleChip>
+              {formatPluginLanguage(plugin.lang)}
+            </ConsoleChip>
+            <ConsoleChip>
+              v{plugin.version}
+            </ConsoleChip>
+            {pinned ? (
+              <ConsoleChip active>Pinned</ConsoleChip>
+            ) : null}
+            {lastUsed ? (
+              <ConsoleChip tone="accent">Last used</ConsoleChip>
+            ) : null}
+          </Group>
           <Anchor
             size="xs"
             c="dimmed"
@@ -597,14 +728,19 @@ function PluginRow({
           >
             {plugin.site}
           </Anchor>
-        </Stack>
-        <Group gap="xs" wrap="nowrap">
-          <Button size="xs" onClick={() => onOpenSource(plugin)}>
+        </Box>
+        <Group gap="xs" wrap="wrap" justify="flex-end">
+          <Button
+            size="xs"
+            disabled={uninstalling}
+            onClick={() => onOpenSource(plugin)}
+          >
             Source
           </Button>
           <Button
             size="xs"
             variant={pinned ? "light" : "default"}
+            disabled={uninstalling}
             onClick={() => onTogglePin(plugin.id)}
           >
             {pinned ? "Unpin" : "Pin"}
@@ -612,6 +748,7 @@ function PluginRow({
           <Button
             size="xs"
             variant="default"
+            disabled={uninstalling}
             onClick={() => openSite(plugin.site)}
           >
             Open site
@@ -627,7 +764,7 @@ function PluginRow({
           </Button>
         </Group>
       </Group>
-    </Paper>
+    </div>
   );
 }
 
@@ -652,8 +789,13 @@ function InstalledSection({
   );
 
   return (
-    <Stack gap="xs">
-      <Title order={3}>Installed plugins</Title>
+    <ConsolePanel className="lnr-browse-panel" title="Installed sources">
+      <Stack gap="sm" p="sm">
+      <ConsoleSectionHeader
+        title="Sources"
+        count={plugins.length}
+        actions={<ConsoleChip active>{pinnedPlugins.length} pinned</ConsoleChip>}
+      />
       {plugins.length > 0 ? (
         <Stack gap="sm">
           {pinnedPlugins.length > 0 ? (
@@ -666,6 +808,7 @@ function InstalledSection({
                   key={plugin.id}
                   plugin={plugin}
                   pinned
+                  lastUsed={plugin.id === lastUsedPluginId}
                   onTogglePin={onTogglePin}
                   onOpenSource={onOpenSource}
                   onUninstall={onUninstall}
@@ -683,6 +826,7 @@ function InstalledSection({
               <PluginRow
                 plugin={lastUsedPlugin}
                 pinned={false}
+                lastUsed
                 onTogglePin={onTogglePin}
                 onOpenSource={onOpenSource}
                 onUninstall={onUninstall}
@@ -700,6 +844,7 @@ function InstalledSection({
                 key={plugin.id}
                 plugin={plugin}
                 pinned={false}
+                lastUsed={plugin.id === lastUsedPluginId}
                 onTogglePin={onTogglePin}
                 onOpenSource={onOpenSource}
                 onUninstall={onUninstall}
@@ -709,11 +854,14 @@ function InstalledSection({
           </Stack>
         </Stack>
       ) : (
-        <Text c="dimmed" size="sm">
-          No installed plugins match the selected languages.
-        </Text>
+        <StateView
+          color="blue"
+          title="No installed plugins"
+          message="No installed plugins match the selected languages."
+        />
       )}
-    </Stack>
+      </Stack>
+    </ConsolePanel>
   );
 }
 
@@ -735,92 +883,158 @@ function AvailableSection({
   failures,
 }: AvailableSectionProps) {
   return (
-    <Stack gap="xs">
-      <Title order={3}>Available plugins</Title>
+    <ConsolePanel className="lnr-browse-panel" title="Available source plugins">
+      <Stack gap="sm" p="sm">
+      <ConsoleSectionHeader
+        title="Repository index"
+        count={entries.length}
+        actions={
+          failures.length > 0 ? (
+            <ConsoleChip tone="error">{failures.length} failed</ConsoleChip>
+          ) : (
+            <ConsoleChip tone="success">Ready</ConsoleChip>
+          )
+        }
+      />
       {failures.length > 0 && (
         <Stack gap={4}>
           {failures.map((failure) => (
-            <Alert
+            <StateView
               key={failure.repoUrl}
               color="red"
-              variant="light"
               title={`Couldn't fetch ${failure.repoUrl}`}
-            >
-              {failure.message}
-            </Alert>
+              message={failure.message}
+            />
           ))}
         </Stack>
       )}
       {query.isLoading || query.isFetching ? (
-        <Group gap="sm">
-          <Loader size="sm" />
-          <Text c="dimmed">Fetching repository indexes...</Text>
-        </Group>
+        <StateView
+          title={
+            <Group gap="sm">
+              <Loader size="sm" />
+              Fetching repository indexes...
+            </Group>
+          }
+        />
       ) : query.error ? (
-        <Alert color="red" title="Repository fetch error">
-          {query.error instanceof Error
-            ? query.error.message
-            : String(query.error)}
-        </Alert>
+        <StateView
+          color="red"
+          title="Repository fetch error"
+          message={
+            query.error instanceof Error
+              ? query.error.message
+              : String(query.error)
+          }
+        />
       ) : entries.length > 0 ? (
         <Stack gap={6}>
           {entries.map(({ item, repoUrl }) => {
             const isInstalled = installedIds.has(item.id);
             return (
-              <Paper key={`${repoUrl}::${item.id}`} withBorder p="xs" radius="md">
-                <Group justify="space-between" wrap="nowrap">
-                  <Stack gap={0} style={{ minWidth: 0 }}>
-                    <Text size="sm" fw={500} truncate>
-                      {item.name}{" "}
-                      <Text span size="xs" c="dimmed">
-                        ({item.lang} - v{item.version})
-                      </Text>
-                    </Text>
-                    <Anchor
-                      size="xs"
-                      c="dimmed"
-                      truncate
-                      onClick={(event) => {
-                        event.preventDefault();
-                        openSite(item.site);
-                      }}
-                      title="Open site in app"
-                    >
-                      {item.site}
-                    </Anchor>
-                  </Stack>
-                  <Group gap="xs" wrap="nowrap">
-                    <Button
-                      size="xs"
-                      variant="default"
-                      onClick={() => openSite(item.site)}
-                    >
-                      Open site
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      disabled={isInstalled}
-                      loading={installing}
-                      onClick={() => onInstall(item)}
-                    >
-                      {isInstalled ? "Installed" : "Install"}
-                    </Button>
-                  </Group>
-                </Group>
-              </Paper>
+              <AvailablePluginRow
+                key={`${repoUrl}::${item.id}`}
+                item={item}
+                repoUrl={repoUrl}
+                isInstalled={isInstalled}
+                installing={installing}
+                onInstall={onInstall}
+              />
             );
           })}
         </Stack>
       ) : (
-        <Text c="dimmed" size="sm">
-          {!query.data
-            ? "Add a repository to populate this list."
-            : failures.length > 0
-              ? "All configured repositories failed; see the errors above."
-              : "No plugins exposed by the configured repositories."}
-        </Text>
+        <StateView
+          color="blue"
+          title="No available plugins"
+          message={
+            !query.data
+              ? "Add a repository to populate this list."
+              : failures.length > 0
+                ? "All configured repositories failed; see the errors above."
+                : "No plugins exposed by the configured repositories."
+          }
+        />
       )}
-    </Stack>
+      </Stack>
+    </ConsolePanel>
+  );
+}
+
+interface AvailablePluginRowProps {
+  item: PluginItem;
+  repoUrl: string;
+  isInstalled: boolean;
+  installing: boolean;
+  onInstall: (item: PluginItem) => void;
+}
+
+function AvailablePluginRow({
+  item,
+  repoUrl,
+  isInstalled,
+  installing,
+  onInstall,
+}: AvailablePluginRowProps) {
+  return (
+    <div className="lnr-browse-plugin-row">
+      <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
+        <Box style={{ minWidth: 0, flex: "1 1 18rem" }}>
+          <Group gap="xs" wrap="wrap">
+            <Text
+              size="sm"
+              fw={600}
+              truncate
+              style={{ maxWidth: "min(100%, 28rem)" }}
+            >
+              {item.name}
+            </Text>
+            <ConsoleChip>
+              {formatPluginLanguage(item.lang)}
+            </ConsoleChip>
+            <ConsoleChip>
+              v{item.version}
+            </ConsoleChip>
+            {isInstalled ? (
+              <ConsoleChip tone="success">Installed</ConsoleChip>
+            ) : null}
+          </Group>
+          <Anchor
+            size="xs"
+            c="dimmed"
+            truncate
+            onClick={(event) => {
+              event.preventDefault();
+              openSite(item.site);
+            }}
+            title="Open site in app"
+          >
+            {item.site}
+          </Anchor>
+          <Text size="xs" c="dimmed" truncate>
+            Repository: {repoUrl}
+          </Text>
+        </Box>
+        <Group gap="xs" wrap="wrap" justify="flex-end">
+          <Button
+            size="xs"
+            variant="default"
+            disabled={installing}
+            onClick={() => openSite(item.site)}
+          >
+            Open site
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            disabled={isInstalled}
+            loading={installing && !isInstalled}
+            onClick={() => onInstall(item)}
+          >
+            {isInstalled ? "Installed" : "Install"}
+          </Button>
+        </Group>
+      </Group>
+    </div>
   );
 }

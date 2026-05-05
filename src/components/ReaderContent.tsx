@@ -8,24 +8,32 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent,
+  type Ref,
+  type WheelEvent,
 } from "react";
 import { Box } from "@mantine/core";
-import { useReaderStore } from "../store/reader";
-
-export type ClickZone = "top" | "middle" | "bottom";
+import {
+  useReaderStore,
+  type ReaderTapAction,
+  type ReaderTapZone,
+} from "../store/reader";
 
 export interface ReaderContentHandle {
+  completeIfAtEnd: () => boolean;
   scrollByPage: (direction: 1 | -1) => void;
   scrollToStart: () => void;
 }
 
 interface ReaderContentProps {
+  bottomOverlayOffset?: number;
   html: string;
   initialProgress?: number;
+  interactionBlocked?: boolean;
   onProgressChange?: (progress: number) => void;
   onPageIndexChange?: (pageIndex: number) => void;
   onToggleChrome?: () => void;
   onBoundaryPage?: (direction: 1 | -1) => void;
+  viewportHeight?: string;
 }
 
 interface BatteryManagerLike {
@@ -35,10 +43,18 @@ interface BatteryManagerLike {
   removeEventListener?: (type: string, listener: () => void) => void;
 }
 
-const PAGED_COLUMN_GAP = 48;
+interface PageInfo {
+  current: number;
+  total: number;
+}
+
 const SCROLL_MAX_WIDTH = 760;
 const SCROLL_PAGE_FRACTION = 0.9;
 const PROGRESS_SAVE_DELAY_MS = 350;
+const WHEEL_PAGE_COOLDOWN_MS = 220;
+const WHEEL_PAGE_DELTA_THRESHOLD = 20;
+const WHEEL_DELTA_LINE = 1;
+const WHEEL_DELTA_PAGE = 2;
 
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
@@ -86,18 +102,82 @@ function applyBionicReading(html: string): string {
 
 function getProgress(node: HTMLElement, pageReader: boolean): number {
   if (pageReader) {
-    const maxLeft = node.scrollWidth - node.clientWidth;
-    return maxLeft <= 0 ? 100 : (node.scrollLeft / maxLeft) * 100;
+    const scrollWidth = Math.max(0, node.scrollWidth);
+    if (scrollWidth <= node.clientWidth + 2) return 0;
+    const pageLeft = getPagedLeft(node, getPagedPageIndex(node));
+    return (pageLeft / scrollWidth) * 100;
   }
   const maxTop = node.scrollHeight - node.clientHeight;
   return maxTop <= 0 ? 100 : (node.scrollTop / maxTop) * 100;
 }
 
+function getPagedStep(node: HTMLElement): number {
+  return Math.max(1, node.clientWidth);
+}
+
+function getPagedPageCount(node: HTMLElement): number {
+  const maxLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+  if (maxLeft <= 2) return 1;
+  return Math.max(1, Math.ceil(maxLeft / getPagedStep(node)) + 1);
+}
+
+function getPagedPageIndex(node: HTMLElement): number {
+  const total = getPagedPageCount(node);
+  const maxLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+  if (maxLeft <= 2) return 1;
+  if (node.scrollLeft >= maxLeft - 2) return total;
+  const current = Math.floor(node.scrollLeft / getPagedStep(node)) + 1;
+  return Math.max(1, Math.min(total, current));
+}
+
+function getPagedLeft(node: HTMLElement, pageIndex: number): number {
+  const maxLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+  return Math.max(0, Math.min(maxLeft, (pageIndex - 1) * getPagedStep(node)));
+}
+
+function getProgressPageIndex(node: HTMLElement, progress: number): number {
+  const total = getPagedPageCount(node);
+  if (total <= 1) return 1;
+  const ratio = clampProgress(progress) / 100;
+  if (ratio >= 1) return total;
+  const targetLeft = node.scrollWidth * ratio;
+  const maxLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+  if (targetLeft >= maxLeft - 2) return total;
+  const pageIndex = Math.floor(targetLeft / getPagedStep(node)) + 1;
+  return Math.max(1, Math.min(total, pageIndex));
+}
+
+function isAtReadingEnd(node: HTMLElement, pageReader: boolean): boolean {
+  if (pageReader) {
+    return getPagedPageIndex(node) >= getPagedPageCount(node);
+  }
+  const maxTop = node.scrollHeight - node.clientHeight;
+  return maxTop <= 2 || node.scrollTop >= maxTop - 2;
+}
+
 function getPageIndex(node: HTMLElement, pageReader: boolean): number {
   if (pageReader) {
-    return Math.floor(node.scrollLeft / Math.max(1, node.clientWidth)) + 1;
+    return getPagedPageIndex(node);
   }
   return Math.floor(node.scrollTop / Math.max(1, node.clientHeight)) + 1;
+}
+
+function getPageInfo(node: HTMLElement, pageReader: boolean): PageInfo {
+  if (pageReader) {
+    const total = getPagedPageCount(node);
+    return {
+      current: Math.max(1, Math.min(total, getPagedPageIndex(node))),
+      total,
+    };
+  }
+  const total = Math.max(
+    1,
+    Math.ceil(node.scrollHeight / Math.max(1, node.clientHeight)),
+  );
+  return {
+    current: Math.max(1, Math.min(total, getPageIndex(node, false))),
+    total,
+  };
 }
 
 function scrollToProgress(
@@ -108,28 +188,59 @@ function scrollToProgress(
 ): void {
   const ratio = clampProgress(progress) / 100;
   if (pageReader) {
-    const maxLeft = node.scrollWidth - node.clientWidth;
-    node.scrollTo({ left: maxLeft * ratio, behavior });
+    const pageIndex = getProgressPageIndex(node, progress);
+    node.scrollTo({ left: getPagedLeft(node, pageIndex), behavior });
     return;
   }
   const maxTop = node.scrollHeight - node.clientHeight;
   node.scrollTo({ top: maxTop * ratio, behavior });
 }
 
-export const ReaderContent = forwardRef<
-  ReaderContentHandle,
-  ReaderContentProps
->(function ReaderContent(
-  {
+function getNormalizedWheelDelta(event: WheelEvent<HTMLElement>): number {
+  const primaryDelta =
+    Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+      ? event.deltaY
+      : event.deltaX;
+  if (event.deltaMode === WHEEL_DELTA_LINE) return primaryDelta * 16;
+  if (event.deltaMode === WHEEL_DELTA_PAGE) {
+    return primaryDelta * window.innerHeight;
+  }
+  return primaryDelta;
+}
+
+function getTapZone(
+  rect: DOMRect,
+  clientX: number,
+  clientY: number,
+): ReaderTapZone {
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const column =
+    x < rect.width / 3 ? "Left" : x > (rect.width * 2) / 3 ? "Right" : "Center";
+  const row =
+    y < rect.height / 3
+      ? "top"
+      : y > (rect.height * 2) / 3
+        ? "bottom"
+        : "middle";
+  return `${row}${column}` as ReaderTapZone;
+}
+
+function ReaderContentInner(
+  props: ReaderContentProps,
+  ref: Ref<ReaderContentHandle>,
+) {
+  const {
     html,
+    bottomOverlayOffset,
     initialProgress = 0,
+    interactionBlocked = false,
     onProgressChange,
     onPageIndexChange,
     onToggleChrome,
     onBoundaryPage,
-  },
-  ref,
-) {
+    viewportHeight: requestedViewportHeight,
+  } = props;
   const general = useReaderStore((state) => state.general);
   const appearance = useReaderStore((state) => state.appearance);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -137,8 +248,16 @@ export const ReaderContent = forwardRef<
   const latestProgressRef = useRef(clampProgress(initialProgress));
   const lastSavedProgressRef = useRef(Math.round(clampProgress(initialProgress)));
   const progressTimerRef = useRef<number | null>(null);
+  const completedForNavigationRef = useRef(false);
+  const wheelDeltaRef = useRef(0);
+  const wheelCooldownTimerRef = useRef<number | null>(null);
+  const wheelPagingLockedRef = useRef(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [progress, setProgress] = useState(clampProgress(initialProgress));
+  const [pageInfo, setPageInfo] = useState<PageInfo>({
+    current: 1,
+    total: 1,
+  });
   const [now, setNow] = useState(() => new Date());
   const [battery, setBattery] = useState<string | null>(null);
 
@@ -147,18 +266,32 @@ export const ReaderContent = forwardRef<
     [general.bionicReading, html],
   );
 
-  const viewportHeight = general.fullScreen
-    ? "100vh"
-    : "calc(100vh - 56px)";
+  const viewportHeight =
+    requestedViewportHeight ?? (general.fullScreen ? "100vh" : "calc(100vh - 56px)");
+  const overlayBottom = bottomOverlayOffset ?? 8;
 
   const scrollByPage = useCallback(
     (direction: 1 | -1) => {
       const node = viewportRef.current;
       if (!node) return;
-      const axisMax = general.pageReader
-        ? node.scrollWidth - node.clientWidth
-        : node.scrollHeight - node.clientHeight;
-      const current = general.pageReader ? node.scrollLeft : node.scrollTop;
+      if (direction === -1) {
+        completedForNavigationRef.current = false;
+      }
+      if (general.pageReader) {
+        const currentPage = getPagedPageIndex(node);
+        const targetPage = currentPage + direction;
+        if (targetPage < 1 || targetPage > getPagedPageCount(node)) {
+          onBoundaryPage?.(direction);
+          return;
+        }
+        node.scrollTo({
+          left: getPagedLeft(node, targetPage),
+          behavior: "smooth",
+        });
+        return;
+      }
+      const axisMax = node.scrollHeight - node.clientHeight;
+      const current = node.scrollTop;
       if (
         (direction === 1 && current >= axisMax - 2) ||
         (direction === -1 && current <= 2)
@@ -166,29 +299,10 @@ export const ReaderContent = forwardRef<
         onBoundaryPage?.(direction);
         return;
       }
-      const amount = general.pageReader
-        ? node.clientWidth
-        : node.clientHeight * SCROLL_PAGE_FRACTION;
-      if (general.pageReader) {
-        node.scrollBy({ left: amount * direction, behavior: "smooth" });
-      } else {
-        node.scrollBy({ top: amount * direction, behavior: "smooth" });
-      }
+      const amount = node.clientHeight * SCROLL_PAGE_FRACTION;
+      node.scrollBy({ top: amount * direction, behavior: "smooth" });
     },
     [general.pageReader, onBoundaryPage],
-  );
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      scrollByPage,
-      scrollToStart() {
-        const node = viewportRef.current;
-        if (!node) return;
-        node.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-      },
-    }),
-    [scrollByPage],
   );
 
   const flushProgress = useCallback(
@@ -219,33 +333,87 @@ export const ReaderContent = forwardRef<
     [flushProgress],
   );
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      completeIfAtEnd() {
+        const node = viewportRef.current;
+        if (!node || !isAtReadingEnd(node, general.pageReader)) return false;
+        completedForNavigationRef.current = true;
+        latestProgressRef.current = 100;
+        setProgress(100);
+        if (progressTimerRef.current !== null) {
+          window.clearTimeout(progressTimerRef.current);
+          progressTimerRef.current = null;
+        }
+        flushProgress(100);
+        return true;
+      },
+      scrollByPage,
+      scrollToStart() {
+        const node = viewportRef.current;
+        if (!node) return;
+        node.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+      },
+    }),
+    [flushProgress, general.pageReader, scrollByPage],
+  );
+
+  const applyPageInfo = useCallback(
+    (nextPageInfo: PageInfo) => {
+      setPageInfo((current) =>
+        current.current === nextPageInfo.current &&
+        current.total === nextPageInfo.total
+          ? current
+          : nextPageInfo,
+      );
+      onPageIndexChange?.(nextPageInfo.current);
+    },
+    [onPageIndexChange],
+  );
+
+  const restoreProgressPosition = useCallback(
+    (value: number) => {
+      const node = viewportRef.current;
+      if (!node) return;
+      scrollToProgress(node, value, general.pageReader, "auto");
+      if (!completedForNavigationRef.current) {
+        const restoredProgress = clampProgress(
+          getProgress(node, general.pageReader),
+        );
+        latestProgressRef.current = restoredProgress;
+        setProgress(restoredProgress);
+      }
+      applyPageInfo(getPageInfo(node, general.pageReader));
+    },
+    [applyPageInfo, general.pageReader],
+  );
+
   const updateProgressFromScroll = useCallback(() => {
     const node = viewportRef.current;
     if (!node) return;
+    if (completedForNavigationRef.current) return;
     const nextProgress = clampProgress(getProgress(node, general.pageReader));
     latestProgressRef.current = nextProgress;
     setProgress(nextProgress);
-    onPageIndexChange?.(getPageIndex(node, general.pageReader));
+    applyPageInfo(getPageInfo(node, general.pageReader));
     scheduleProgressSave(nextProgress);
-  }, [general.pageReader, onPageIndexChange, scheduleProgressSave]);
+  }, [applyPageInfo, general.pageReader, scheduleProgressSave]);
 
   useEffect(() => {
     latestProgressRef.current = clampProgress(initialProgress);
     setProgress(clampProgress(initialProgress));
     lastSavedProgressRef.current = Math.round(clampProgress(initialProgress));
+    if (clampProgress(initialProgress) < 97) {
+      completedForNavigationRef.current = false;
+    }
   }, [initialProgress]);
 
   useEffect(() => {
     const node = viewportRef.current;
     if (!node) return;
     window.requestAnimationFrame(() => {
-      scrollToProgress(
-        node,
-        latestProgressRef.current,
-        general.pageReader,
-        "auto",
-      );
-      updateProgressFromScroll();
+      restoreProgressPosition(latestProgressRef.current);
     });
   }, [
     renderedHtml,
@@ -253,9 +421,22 @@ export const ReaderContent = forwardRef<
     appearance.lineHeight,
     appearance.padding,
     appearance.textSize,
-    general.pageReader,
-    updateProgressFromScroll,
+    restoreProgressPosition,
   ]);
+
+  useEffect(() => {
+    const node = viewportRef.current;
+    const content = contentRef.current;
+    if (!node || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => {
+        restoreProgressPosition(latestProgressRef.current);
+      });
+    });
+    observer.observe(node);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [restoreProgressPosition]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -357,49 +538,77 @@ export const ReaderContent = forwardRef<
       if (progressTimerRef.current !== null) {
         window.clearTimeout(progressTimerRef.current);
       }
+      if (wheelCooldownTimerRef.current !== null) {
+        window.clearTimeout(wheelCooldownTimerRef.current);
+      }
       flushProgress(latestProgressRef.current);
     },
     [flushProgress],
   );
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (interactionBlocked) return;
     if (isInteractiveTarget(event.target)) return;
     const node = viewportRef.current;
     if (!node) return;
     const rect = node.getBoundingClientRect();
-    if (general.pageReader) {
-      const x = event.clientX - rect.left;
-      if (x < rect.width / 3) {
-        scrollByPage(-1);
-      } else if (x > (rect.width * 2) / 3) {
-        scrollByPage(1);
-      } else {
-        onToggleChrome?.();
-      }
-      return;
-    }
 
-    const y = event.clientY - rect.top;
-    if (general.tapToScroll && y < rect.height / 3) {
-      scrollByPage(-1);
-    } else if (general.tapToScroll && y > (rect.height * 2) / 3) {
-      scrollByPage(1);
-    } else {
-      onToggleChrome?.();
+    const zone = getTapZone(rect, event.clientX, event.clientY);
+    const zoneMap =
+      rect.width > rect.height
+        ? general.landscapeTapZones
+        : general.portraitTapZones;
+    const action: ReaderTapAction =
+      zone === "middleCenter"
+        ? "menu"
+        : general.tapToScroll
+          ? zoneMap[zone]
+          : "none";
+
+    switch (action) {
+      case "previous":
+        scrollByPage(-1);
+        break;
+      case "next":
+        scrollByPage(1);
+        break;
+      case "menu":
+        onToggleChrome?.();
+        break;
+      case "none":
+        break;
     }
   };
 
-  const handleSeek = (value: string) => {
-    const node = viewportRef.current;
-    if (!node) return;
-    const nextProgress = Number(value);
-    latestProgressRef.current = nextProgress;
-    setProgress(nextProgress);
-    scrollToProgress(node, nextProgress, general.pageReader, "auto");
-    scheduleProgressSave(nextProgress);
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (interactionBlocked || event.ctrlKey) return;
+    if (isInteractiveTarget(event.target)) return;
+
+    const delta = getNormalizedWheelDelta(event);
+    if (Math.abs(delta) < 1) return;
+
+    event.preventDefault();
+    if (wheelPagingLockedRef.current) return;
+
+    wheelDeltaRef.current += delta;
+    if (Math.abs(wheelDeltaRef.current) < WHEEL_PAGE_DELTA_THRESHOLD) return;
+
+    const direction: 1 | -1 = wheelDeltaRef.current > 0 ? 1 : -1;
+    wheelDeltaRef.current = 0;
+    wheelPagingLockedRef.current = true;
+    scrollByPage(direction);
+
+    if (wheelCooldownTimerRef.current !== null) {
+      window.clearTimeout(wheelCooldownTimerRef.current);
+    }
+    wheelCooldownTimerRef.current = window.setTimeout(() => {
+      wheelPagingLockedRef.current = false;
+      wheelCooldownTimerRef.current = null;
+    }, WHEEL_PAGE_COOLDOWN_MS);
   };
 
   const contentStyle: CSSProperties = {
+    boxSizing: "border-box",
     color: appearance.textColor,
     fontSize: `${appearance.textSize}px`,
     lineHeight: appearance.lineHeight,
@@ -410,10 +619,8 @@ export const ReaderContent = forwardRef<
 
   const pageStyle: CSSProperties = general.pageReader
     ? {
-        columnWidth: `min(${SCROLL_MAX_WIDTH}px, calc(100vw - ${
-          appearance.padding * 2
-        }px))`,
-        columnGap: `${PAGED_COLUMN_GAP}px`,
+        columnWidth: `calc(100vw - ${appearance.padding * 2}px)`,
+        columnGap: `${appearance.padding * 2}px`,
         height: "100%",
         maxWidth: "none",
       }
@@ -433,11 +640,19 @@ export const ReaderContent = forwardRef<
       }
       onClick={handleClick}
       onScroll={updateProgressFromScroll}
+      onWheel={handleWheel}
       onTouchStart={(event) => {
+        if (interactionBlocked) return;
         const touch = event.changedTouches[0];
-        if (touch) touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+        if (touch) {
+          touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+        }
       }}
       onTouchEnd={(event) => {
+        if (interactionBlocked) {
+          touchStartRef.current = null;
+          return;
+        }
         if (!general.swipeGestures || !touchStartRef.current) return;
         const touch = event.changedTouches[0];
         if (!touch) return;
@@ -484,49 +699,22 @@ export const ReaderContent = forwardRef<
             font-weight: 800;
           }
           .reader-viewport-paged {
-            scroll-snap-type: x proximity;
+            overscroll-behavior-x: contain;
+            scroll-snap-type: x mandatory;
+            scrollbar-width: none;
+          }
+          .reader-viewport-paged::-webkit-scrollbar {
+            display: none;
           }
         `}
       </style>
-      {general.showSeekbar ? (
-        <input
-          aria-label="Reading progress"
-          type="range"
-          min={0}
-          max={100}
-          step={1}
-          value={Math.round(progress)}
-          onChange={(event) => handleSeek(event.currentTarget.value)}
-          onClick={(event) => event.stopPropagation()}
-          style={
-            general.verticalSeekbar
-              ? {
-                  position: "fixed",
-                  right: 8,
-                  top: general.fullScreen ? "8vh" : "calc(56px + 8vh)",
-                  height: "70vh",
-                  width: 24,
-                  writingMode: "vertical-lr",
-                  zIndex: 5,
-                }
-              : {
-                  position: "fixed",
-                  left: 16,
-                  right: 16,
-                  bottom: general.showBatteryAndTime ? 36 : 12,
-                  width: "calc(100vw - 32px)",
-                  zIndex: 5,
-                }
-          }
-        />
-      ) : null}
       {(general.showScrollPercentage || general.showBatteryAndTime) && (
         <Box
           style={{
             position: "fixed",
             left: 12,
             right: 12,
-            bottom: 8,
+            bottom: overlayBottom,
             display: "flex",
             justifyContent: "space-between",
             gap: 12,
@@ -539,7 +727,9 @@ export const ReaderContent = forwardRef<
         >
           <span>
             {general.showScrollPercentage
-              ? `${Math.round(progress)}%`
+              ? general.pageReader
+                ? `${pageInfo.current}/${pageInfo.total}`
+                : `${Math.round(progress)}%`
               : ""}
           </span>
           <span>
@@ -551,4 +741,6 @@ export const ReaderContent = forwardRef<
       )}
     </Box>
   );
-});
+}
+
+export const ReaderContent = forwardRef(ReaderContentInner);

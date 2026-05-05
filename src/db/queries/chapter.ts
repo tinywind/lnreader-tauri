@@ -132,7 +132,7 @@ export async function updateChapterProgress(
       `UPDATE chapter
        SET
          progress   = $2,
-         unread     = CASE WHEN $2 >= 97 THEN 0 ELSE unread END,
+         unread     = CASE WHEN $2 >= 100 THEN 0 ELSE unread END,
          read_at    = CASE WHEN $2 > 0 THEN unixepoch() ELSE read_at END,
          updated_at = unixepoch()
        WHERE id = $1`,
@@ -153,7 +153,7 @@ export async function updateChapterProgress(
     `UPDATE chapter
      SET
        progress   = $2,
-       unread     = CASE WHEN $2 >= 97 THEN 0 ELSE unread END,
+       unread     = CASE WHEN $2 >= 100 THEN 0 ELSE unread END,
        updated_at = unixepoch()
      WHERE id = $1`,
     [chapterId, clamped],
@@ -175,6 +175,22 @@ export async function markChapterOpened(chapterId: number): Promise<void> {
        SELECT novel_id FROM chapter WHERE id = $1
      )`,
     [chapterId],
+  );
+}
+
+export async function clearNovelHistory(novelId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE chapter
+     SET read_at = NULL, updated_at = unixepoch()
+     WHERE novel_id = $1 AND read_at IS NOT NULL`,
+    [novelId],
+  );
+  await db.execute(
+    `UPDATE novel
+     SET last_read_at = NULL, updated_at = unixepoch()
+     WHERE id = $1`,
+    [novelId],
   );
 }
 
@@ -240,6 +256,7 @@ export async function clearChapterContent(
 export interface LibraryUpdateEntry {
   chapterId: number;
   novelId: number;
+  pluginId: string;
   chapterName: string;
   position: number;
   foundAt: number;
@@ -267,6 +284,7 @@ export async function listLibraryUpdates(
     `SELECT
        c.id              AS chapterId,
        c.novel_id        AS novelId,
+       n.plugin_id       AS pluginId,
        c.name            AS chapterName,
        c.position,
        COALESCE(c.created_at, c.updated_at) AS foundAt,
@@ -305,8 +323,8 @@ export interface RecentlyReadEntry {
 const DEFAULT_HISTORY_LIMIT = 100;
 
 /**
- * Recently read chapters across the whole library, sorted by read
- * timestamp descending. Excludes never-read chapters.
+ * Latest read chapter per novel, sorted by read timestamp descending.
+ * Excludes novels with no recorded reading history.
  */
 export async function listRecentlyRead(
   limit: number = DEFAULT_HISTORY_LIMIT,
@@ -324,8 +342,14 @@ export async function listRecentlyRead(
        n.cover           AS novelCover
      FROM chapter c
      JOIN novel n ON n.id = c.novel_id
-     WHERE c.read_at IS NOT NULL
-     ORDER BY c.read_at DESC
+     WHERE c.id = (
+       SELECT c2.id
+       FROM chapter c2
+       WHERE c2.novel_id = c.novel_id AND c2.read_at IS NOT NULL
+       ORDER BY c2.read_at DESC, c2.position DESC, c2.id DESC
+       LIMIT 1
+     )
+     ORDER BY c.read_at DESC, c.position DESC, c.id DESC
      LIMIT $1`,
     [Math.max(1, Math.floor(limit))],
   );

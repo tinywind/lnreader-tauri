@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { GlobalSearchResult } from "../lib/plugins/global-search";
 
 export const DEFAULT_GLOBAL_SEARCH_CONCURRENCY = 3;
 
@@ -23,6 +24,22 @@ function normalizeConcurrency(value: unknown): number {
   return Math.max(1, Math.min(10, Math.round(numeric)));
 }
 
+interface BrowseGlobalSearchState {
+  query: string;
+  searchKey: string;
+  results: GlobalSearchResult[];
+  searching: boolean;
+  totalPluginCount: number;
+}
+
+const EMPTY_GLOBAL_SEARCH: BrowseGlobalSearchState = {
+  query: "",
+  searchKey: "",
+  results: [],
+  searching: false,
+  totalPluginCount: 0,
+};
+
 interface BrowseState {
   /**
    * URL pending insertion via the Add Repository modal, set by
@@ -34,12 +51,20 @@ interface BrowseState {
   globalSearchConcurrency: number;
   pinnedPluginIds: string[];
   lastUsedPluginId: string | null;
+  globalSearch: BrowseGlobalSearchState;
   setPendingRepoUrl: (url: string | null) => void;
   clearPendingRepoUrl: () => void;
   setPluginLanguageFilter: (languages: string[]) => void;
   setGlobalSearchConcurrency: (concurrency: number) => void;
   togglePinnedPlugin: (pluginId: string) => void;
   setLastUsedPluginId: (pluginId: string | null) => void;
+  beginGlobalSearch: (search: BrowseGlobalSearchState) => void;
+  appendGlobalSearchResult: (
+    searchKey: string,
+    result: GlobalSearchResult,
+  ) => void;
+  finishGlobalSearch: (searchKey: string) => void;
+  clearGlobalSearch: () => void;
 }
 
 export const useBrowseStore = create<BrowseState>()(
@@ -50,6 +75,7 @@ export const useBrowseStore = create<BrowseState>()(
       globalSearchConcurrency: DEFAULT_GLOBAL_SEARCH_CONCURRENCY,
       pinnedPluginIds: [],
       lastUsedPluginId: null,
+      globalSearch: EMPTY_GLOBAL_SEARCH,
       setPendingRepoUrl: (pendingRepoUrl) => set({ pendingRepoUrl }),
       clearPendingRepoUrl: () => set({ pendingRepoUrl: null }),
       setPluginLanguageFilter: (pluginLanguageFilter) =>
@@ -72,6 +98,32 @@ export const useBrowseStore = create<BrowseState>()(
             : [...state.pinnedPluginIds, pluginId],
         })),
       setLastUsedPluginId: (lastUsedPluginId) => set({ lastUsedPluginId }),
+      beginGlobalSearch: (globalSearch) => set({ globalSearch }),
+      appendGlobalSearchResult: (searchKey, result) =>
+        set((state) => {
+          if (state.globalSearch.searchKey !== searchKey) return state;
+          const results = state.globalSearch.results.filter(
+            (row) => row.pluginId !== result.pluginId,
+          );
+          return {
+            globalSearch: {
+              ...state.globalSearch,
+              results: [...results, result],
+            },
+          };
+        }),
+      finishGlobalSearch: (searchKey) =>
+        set((state) =>
+          state.globalSearch.searchKey === searchKey
+            ? {
+                globalSearch: {
+                  ...state.globalSearch,
+                  searching: false,
+                },
+              }
+            : state,
+        ),
+      clearGlobalSearch: () => set({ globalSearch: EMPTY_GLOBAL_SEARCH }),
     }),
     {
       name: "browse-plugin-settings",
