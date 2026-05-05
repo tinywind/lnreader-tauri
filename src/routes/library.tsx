@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Alert,
   Badge,
@@ -22,6 +23,7 @@ const SEARCH_DEBOUNCE_MS = 200;
 
 export function LibraryPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const search = useLibraryStore((s) => s.search);
   const setSearch = useLibraryStore((s) => s.setSearch);
@@ -79,10 +81,11 @@ export function LibraryPage() {
     (id: number) => {
       if (selectedIds.size > 0) {
         toggleSelected(id);
+        return;
       }
-      // TODO: Sprint 6 — navigate to /novel/${id}.
+      void navigate({ to: "/novel", search: { id } });
     },
-    [selectedIds, toggleSelected],
+    [selectedIds, toggleSelected, navigate],
   );
 
   const handleLongPress = useCallback(
