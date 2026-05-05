@@ -1,19 +1,35 @@
-import { useEffect, useState } from "react";
-import { Anchor, AppShell, Burger, Group, Title } from "@mantine/core";
-import { Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { CategoriesDrawer } from "../components/CategoriesDrawer";
+import { useEffect } from "react";
+import { Anchor, AppShell, Group, Title } from "@mantine/core";
+import {
+  Link,
+  Outlet,
+  useNavigate,
+  useRouterState,
+} from "@tanstack/react-router";
 import { SiteBrowserOverlay } from "../components/SiteBrowserOverlay";
 import { startDeepLinkListener } from "../lib/deep-link";
+import { useAppearanceStore } from "../store/appearance";
 import { useBrowseStore } from "../store/browse";
-import { useLibraryStore } from "../store/library";
+import { useReaderStore } from "../store/reader";
+
+const NAV_ITEMS = [
+  { to: "/", label: "Library", compact: "Lib" },
+  { to: "/browse", label: "Browse", compact: "Src" },
+  { to: "/search", label: "Search", compact: "Find" },
+  { to: "/reader", label: "Reader", compact: "Read" },
+  { to: "/more", label: "More", compact: "More" },
+] as const;
 
 export function RootLayout() {
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const selectedCategoryId = useLibraryStore((s) => s.selectedCategoryId);
-  const setSelectedCategoryId = useLibraryStore(
-    (s) => s.setSelectedCategoryId,
-  );
+  const showHistoryTab = useAppearanceStore((s) => s.showHistoryTab);
+  const showUpdatesTab = useAppearanceStore((s) => s.showUpdatesTab);
+  const showLabelsInNav = useAppearanceStore((s) => s.showLabelsInNav);
+  const fullScreenReader = useReaderStore((s) => s.general.fullScreen);
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
   const navigate = useNavigate();
+  const hideHeader = fullScreenReader && pathname === "/reader";
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -36,101 +52,72 @@ export function RootLayout() {
   }, [navigate]);
 
   return (
-    <AppShell header={{ height: 56 }} padding={0}>
-      <AppShell.Header>
+    <AppShell header={{ height: hideHeader ? 0 : 56 }} padding={0}>
+      <AppShell.Header
+        style={{
+          display: hideHeader ? "none" : undefined,
+          background: "var(--lnr-surface)",
+          color: "var(--lnr-on-surface)",
+          borderColor: "var(--lnr-outline)",
+        }}
+      >
         <Group h="100%" px="md" gap="md" wrap="nowrap">
-          <Burger
-            opened={drawerOpen}
-            onClick={() => setDrawerOpen((open) => !open)}
-            size="sm"
-            aria-label="Toggle categories drawer"
-          />
           <Title order={3} style={{ flexShrink: 0 }}>
             LNReaderTauri
           </Title>
           <Group gap="md" wrap="nowrap">
-            <Anchor
-              component={Link}
-              to="/"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              Library
-            </Anchor>
-            <Anchor
-              component={Link}
-              to="/browse"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              Browse
-            </Anchor>
-            <Anchor
-              component={Link}
-              to="/search"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              Search
-            </Anchor>
-            <Anchor
-              component={Link}
-              to="/updates"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              Updates
-            </Anchor>
-            <Anchor
-              component={Link}
-              to="/history"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              History
-            </Anchor>
-            <Anchor
-              component={Link}
-              to="/reader"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              Reader
-            </Anchor>
-            <Anchor
-              component={Link}
-              to="/more"
-              size="sm"
-              underline="hover"
-              fw={500}
-              activeProps={{ style: { textDecoration: "underline" } }}
-            >
-              More
-            </Anchor>
+            {NAV_ITEMS.map((item) => (
+              <Anchor
+                key={item.to}
+                component={Link}
+                to={item.to}
+                size="sm"
+                underline="hover"
+                fw={500}
+                title={item.label}
+                activeProps={{ style: { textDecoration: "underline" } }}
+              >
+                {showLabelsInNav ? item.label : item.compact}
+              </Anchor>
+            ))}
+            {showUpdatesTab ? (
+              <Anchor
+                component={Link}
+                to="/updates"
+                size="sm"
+                underline="hover"
+                fw={500}
+                title="Updates"
+                activeProps={{ style: { textDecoration: "underline" } }}
+              >
+                {showLabelsInNav ? "Updates" : "Upd"}
+              </Anchor>
+            ) : null}
+            {showHistoryTab ? (
+              <Anchor
+                component={Link}
+                to="/history"
+                size="sm"
+                underline="hover"
+                fw={500}
+                title="History"
+                activeProps={{ style: { textDecoration: "underline" } }}
+              >
+                {showLabelsInNav ? "History" : "Hist"}
+              </Anchor>
+            ) : null}
           </Group>
         </Group>
       </AppShell.Header>
-      <AppShell.Main>
+      <AppShell.Main
+        style={{
+          minHeight: "100vh",
+          background: "var(--lnr-background)",
+          color: "var(--lnr-on-background)",
+        }}
+      >
         <Outlet />
       </AppShell.Main>
-      <CategoriesDrawer
-        opened={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        selectedCategoryId={selectedCategoryId}
-        onSelect={setSelectedCategoryId}
-      />
       <SiteBrowserOverlay />
     </AppShell>
   );
