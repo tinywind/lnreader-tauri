@@ -30,9 +30,12 @@ const browseRoute = createRoute({
   component: BrowsePage,
 });
 
-const globalSearchRoute = createRoute({
+export const globalSearchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/search",
+  validateSearch: (search: Record<string, unknown>) => ({
+    q: typeof search.q === "string" ? search.q : "",
+  }),
   component: GlobalSearchPage,
 });
 
@@ -83,6 +86,7 @@ export const sourceRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     pluginId:
       typeof search.pluginId === "string" ? search.pluginId : "",
+    query: typeof search.query === "string" ? search.query : "",
   }),
   component: SourcePage,
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -11,6 +11,8 @@ import {
   Group,
   Loader,
   Modal,
+  MultiSelect,
+  NumberInput,
   Paper,
   Stack,
   Text,
@@ -28,7 +30,7 @@ import {
   removeRepository,
   type PluginRepository,
 } from "../db/queries/repository";
-import { pluginManager } from "../lib/plugins/manager";
+import { isValidPluginItem, pluginManager } from "../lib/plugins/manager";
 import type { Plugin, PluginItem } from "../lib/plugins/types";
 import { useBrowseStore } from "../store/browse";
 
@@ -49,6 +51,62 @@ interface RepoFetchFailure {
 interface AvailableResult {
   entries: AvailableEntry[];
   failures: RepoFetchFailure[];
+}
+
+interface LanguageOption {
+  value: string;
+  label: string;
+}
+
+function formatPluginLanguage(lang: string): string {
+  if (lang === "multi") return "Multi";
+  try {
+    const displayNames = new Intl.DisplayNames(["en"], {
+      type: "language",
+    });
+    return displayNames.of(lang) ?? lang;
+  } catch {
+    return lang;
+  }
+}
+
+function makeLanguageOptions(
+  plugins: readonly PluginItem[],
+  selectedLanguages: readonly string[],
+): LanguageOption[] {
+  const languages = [
+    ...selectedLanguages.filter(isNonEmptyString),
+    ...plugins.map((p) => p.lang).filter(isNonEmptyString),
+  ];
+  return [...new Set(languages)]
+    .sort((a, b) =>
+      formatPluginLanguage(a).localeCompare(formatPluginLanguage(b)),
+    )
+    .map((lang) => ({
+      value: lang,
+      label: `${formatPluginLanguage(lang)} (${lang})`,
+    }));
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function filterByLanguage<T extends PluginItem>(
+  plugins: readonly T[],
+  languages: readonly string[],
+): T[] {
+  if (languages.length === 0) return [...plugins];
+  return plugins.filter(
+    (plugin) =>
+      isNonEmptyString(plugin.lang) && languages.includes(plugin.lang),
+  );
+}
+
+function sortByName<T extends PluginItem>(plugins: readonly T[]): T[] {
+  return [...plugins].sort((a, b) =>
+    (a.name ?? a.id).localeCompare(b.name ?? b.id),
+  );
 }
 
 /**
@@ -74,7 +132,7 @@ async function fetchAllAvailable(
       let items: PluginItem[] | null = null;
       if (!forceRefresh) {
         const cached = await getCachedRepoIndex(repo.url);
-        if (cached) items = cached.items;
+        if (cached) items = cached.items.filter(isValidPluginItem);
       }
       if (items === null) {
         items = await pluginManager.fetchRepository(repo.url);
@@ -95,6 +153,7 @@ async function fetchAllAvailable(
 
 export function BrowsePage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const repos = useQuery({
     queryKey: REPO_QUERY_KEY,
     queryFn: listRepositories,
@@ -122,9 +181,60 @@ export function BrowsePage() {
   const clearPendingRepoUrl = useBrowseStore(
     (s) => s.clearPendingRepoUrl,
   );
+  const pluginLanguageFilter = useBrowseStore(
+    (s) => s.pluginLanguageFilter,
+  );
+  const setPluginLanguageFilter = useBrowseStore(
+    (s) => s.setPluginLanguageFilter,
+  );
+  const globalSearchConcurrency = useBrowseStore(
+    (s) => s.globalSearchConcurrency,
+  );
+  const setGlobalSearchConcurrency = useBrowseStore(
+    (s) => s.setGlobalSearchConcurrency,
+  );
+  const pinnedPluginIds = useBrowseStore((s) => s.pinnedPluginIds);
+  const togglePinnedPlugin = useBrowseStore((s) => s.togglePinnedPlugin);
+  const lastUsedPluginId = useBrowseStore((s) => s.lastUsedPluginId);
+  const setLastUsedPluginId = useBrowseStore(
+    (s) => s.setLastUsedPluginId,
+  );
 
   const [addOpen, setAddOpen] = useState(false);
   const [url, setUrl] = useState("");
+
+  const navigateToSource = (pluginId: string) =>
+    navigate({
+      to: "/source",
+      search: { pluginId, query: "" },
+    });
+
+  const installedPlugins = installed.data ?? [];
+  const availableEntries = available.data?.entries ?? [];
+  const languageOptions = useMemo(
+    () =>
+      makeLanguageOptions(
+        [
+          ...installedPlugins,
+          ...availableEntries.map((entry) => entry.item),
+        ],
+        pluginLanguageFilter,
+      ),
+    [availableEntries, installedPlugins, pluginLanguageFilter],
+  );
+  const filteredInstalledPlugins = useMemo(
+    () => filterByLanguage(installedPlugins, pluginLanguageFilter),
+    [installedPlugins, pluginLanguageFilter],
+  );
+  const filteredAvailableEntries = useMemo(
+    () =>
+      pluginLanguageFilter.length === 0
+        ? availableEntries
+        : availableEntries.filter(({ item }) =>
+            pluginLanguageFilter.includes(item.lang),
+          ),
+    [availableEntries, pluginLanguageFilter],
+  );
 
   // Deep-link entry: pre-fill the URL and open the modal.
   useEffect(() => {
@@ -168,6 +278,14 @@ export function BrowsePage() {
   const uninstallMutation = useMutation({
     mutationFn: async (id: string): Promise<void> => {
       pluginManager.uninstallPlugin(id);
+    },
+    onMutate: (id) => {
+      if (lastUsedPluginId === id) {
+        setLastUsedPluginId(null);
+      }
+      if (pinnedPluginIds.includes(id)) {
+        togglePinnedPlugin(id);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["plugin"] });
@@ -215,16 +333,34 @@ export function BrowsePage() {
 
         <Divider />
 
+        <PluginSettingsSection
+          languageOptions={languageOptions}
+          selectedLanguages={pluginLanguageFilter}
+          onLanguageChange={setPluginLanguageFilter}
+          globalSearchConcurrency={globalSearchConcurrency}
+          onGlobalSearchConcurrencyChange={setGlobalSearchConcurrency}
+        />
+
+        <Divider />
+
         <InstalledSection
-          query={installed}
+          plugins={filteredInstalledPlugins}
           onUninstall={(id) => uninstallMutation.mutate(id)}
           uninstalling={uninstallMutation.isPending}
+          pinnedPluginIds={pinnedPluginIds}
+          lastUsedPluginId={lastUsedPluginId}
+          onTogglePin={togglePinnedPlugin}
+          onOpenSource={(plugin) => {
+            setLastUsedPluginId(plugin.id);
+            void navigateToSource(plugin.id);
+          }}
         />
 
         <Divider />
 
         <AvailableSection
           query={available}
+          entries={filteredAvailableEntries}
           installedIds={
             new Set(installed.data?.map((p) => p.id) ?? [])
           }
@@ -287,6 +423,62 @@ interface RepositoriesSectionProps {
   removing: boolean;
 }
 
+interface PluginSettingsSectionProps {
+  languageOptions: readonly LanguageOption[];
+  selectedLanguages: string[];
+  onLanguageChange: (languages: string[]) => void;
+  globalSearchConcurrency: number;
+  onGlobalSearchConcurrencyChange: (concurrency: number) => void;
+}
+
+function PluginSettingsSection({
+  languageOptions,
+  selectedLanguages,
+  onLanguageChange,
+  globalSearchConcurrency,
+  onGlobalSearchConcurrencyChange,
+}: PluginSettingsSectionProps) {
+  return (
+    <Stack gap="xs">
+      <Title order={3}>Plugin settings</Title>
+      <Paper withBorder p="sm" radius="md">
+        <Stack gap="sm">
+          <MultiSelect
+            label="Plugin languages"
+            description="Only plugins matching these languages appear in installed, available, and global search lists."
+            data={languageOptions}
+            value={selectedLanguages}
+            onChange={onLanguageChange}
+            placeholder="Select languages"
+            searchable
+            clearable
+          />
+          <NumberInput
+            label="Global search concurrency"
+            description="Number of plugins searched at the same time."
+            value={globalSearchConcurrency}
+            min={1}
+            max={10}
+            step={1}
+            clampBehavior="strict"
+            onChange={(value) => {
+              if (typeof value === "number") {
+                onGlobalSearchConcurrencyChange(value);
+              }
+            }}
+          />
+        </Stack>
+      </Paper>
+      {selectedLanguages.length === 0 ? (
+        <Alert color="blue" variant="light">
+          No plugin languages are selected, so Browse shows every
+          plugin language.
+        </Alert>
+      ) : null}
+    </Stack>
+  );
+}
+
 function RepositoriesSection({
   query,
   onRemove,
@@ -298,7 +490,7 @@ function RepositoriesSection({
       {query.isLoading ? (
         <Group gap="sm">
           <Loader size="sm" />
-          <Text c="dimmed">Loading…</Text>
+          <Text c="dimmed">Loading...</Text>
         </Group>
       ) : query.error ? (
         <Alert color="red" title="Database error">
@@ -336,8 +528,8 @@ function RepositoriesSection({
         </Stack>
       ) : (
         <Alert color="blue" title="No repositories yet">
-          Add a plugin repository URL — typically the lnreader-plugins
-          index JSON. Deep-link <code>lnreader://repo/add?url=…</code>{" "}
+          Add a plugin repository URL, typically the lnreader-plugins
+          index JSON. Deep-link <code>lnreader://repo/add?url=...</code>{" "}
           opens the Add dialog pre-filled.
         </Alert>
       )}
@@ -346,92 +538,179 @@ function RepositoriesSection({
 }
 
 interface InstalledSectionProps {
-  query: ReturnType<typeof useQuery<Plugin[]>>;
+  plugins: Plugin[];
   onUninstall: (id: string) => void;
   uninstalling: boolean;
+  pinnedPluginIds: readonly string[];
+  lastUsedPluginId: string | null;
+  onTogglePin: (id: string) => void;
+  onOpenSource: (plugin: Plugin) => void;
 }
 
 /**
  * Open the plugin's site in the in-app full-screen layered modal
  * over the main window. The scraper Webview is shared, so any
  * cookies (login, CF clearance) the user accumulates here are
- * automatically attached to the next pluginFetch — there is no
+ * automatically attached to the next pluginFetch; there is no
  * per-plugin cookie store on the host side.
  */
 function openSite(url: string): void {
   useSiteBrowserStore.getState().openAt(url);
 }
 
-function InstalledSection({
-  query,
+interface PluginRowProps {
+  plugin: Plugin;
+  pinned: boolean;
+  onTogglePin: (id: string) => void;
+  onOpenSource: (plugin: Plugin) => void;
+  onUninstall: (id: string) => void;
+  uninstalling: boolean;
+}
+
+function PluginRow({
+  plugin,
+  pinned,
+  onTogglePin,
+  onOpenSource,
   onUninstall,
   uninstalling,
+}: PluginRowProps) {
+  return (
+    <Paper key={plugin.id} withBorder p="xs" radius="md">
+      <Group justify="space-between" wrap="nowrap">
+        <Stack gap={0} style={{ minWidth: 0 }}>
+          <Text size="sm" fw={500} truncate>
+            {plugin.name}{" "}
+            <Text span size="xs" c="dimmed">
+              ({plugin.lang} - v{plugin.version})
+            </Text>
+          </Text>
+          <Anchor
+            size="xs"
+            c="dimmed"
+            truncate
+            onClick={(event) => {
+              event.preventDefault();
+              openSite(plugin.site);
+            }}
+            title="Open site in app"
+          >
+            {plugin.site}
+          </Anchor>
+        </Stack>
+        <Group gap="xs" wrap="nowrap">
+          <Button size="xs" onClick={() => onOpenSource(plugin)}>
+            Source
+          </Button>
+          <Button
+            size="xs"
+            variant={pinned ? "light" : "default"}
+            onClick={() => onTogglePin(plugin.id)}
+          >
+            {pinned ? "Unpin" : "Pin"}
+          </Button>
+          <Button
+            size="xs"
+            variant="default"
+            onClick={() => openSite(plugin.site)}
+          >
+            Open site
+          </Button>
+          <Button
+            size="xs"
+            color="red"
+            variant="subtle"
+            loading={uninstalling}
+            onClick={() => onUninstall(plugin.id)}
+          >
+            Uninstall
+          </Button>
+        </Group>
+      </Group>
+    </Paper>
+  );
+}
+
+function InstalledSection({
+  plugins,
+  onUninstall,
+  uninstalling,
+  pinnedPluginIds,
+  lastUsedPluginId,
+  onTogglePin,
+  onOpenSource,
 }: InstalledSectionProps) {
-  const navigate = useNavigate();
+  const sortedPlugins = sortByName(plugins);
+  const pinnedPlugins = sortedPlugins.filter((plugin) =>
+    pinnedPluginIds.includes(plugin.id),
+  );
+  const unpinnedPlugins = sortedPlugins.filter(
+    (plugin) => !pinnedPluginIds.includes(plugin.id),
+  );
+  const lastUsedPlugin = unpinnedPlugins.find(
+    (plugin) => plugin.id === lastUsedPluginId,
+  );
+
   return (
     <Stack gap="xs">
       <Title order={3}>Installed plugins</Title>
-      {query.data && query.data.length > 0 ? (
-        <Stack gap={6}>
-          {query.data.map((plugin) => (
-            <Paper key={plugin.id} withBorder p="xs" radius="md">
-              <Group justify="space-between" wrap="nowrap">
-                <Stack gap={0} style={{ minWidth: 0 }}>
-                  <Text size="sm" fw={500} truncate>
-                    {plugin.name}{" "}
-                    <Text span size="xs" c="dimmed">
-                      ({plugin.lang} · v{plugin.version})
-                    </Text>
-                  </Text>
-                  <Anchor
-                    size="xs"
-                    c="dimmed"
-                    truncate
-                    onClick={(event) => {
-                      event.preventDefault();
-                      openSite(plugin.site);
-                    }}
-                    title="Open site in default browser"
-                  >
-                    {plugin.site}
-                  </Anchor>
-                </Stack>
-                <Group gap="xs" wrap="nowrap">
-                  <Button
-                    size="xs"
-                    onClick={() =>
-                      void navigate({
-                        to: "/source",
-                        search: { pluginId: plugin.id },
-                      })
-                    }
-                  >
-                    Source
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="default"
-                    onClick={() => openSite(plugin.site)}
-                  >
-                    Open site
-                  </Button>
-                  <Button
-                    size="xs"
-                    color="red"
-                    variant="subtle"
-                    loading={uninstalling}
-                    onClick={() => onUninstall(plugin.id)}
-                  >
-                    Uninstall
-                  </Button>
-                </Group>
-              </Group>
-            </Paper>
-          ))}
+      {plugins.length > 0 ? (
+        <Stack gap="sm">
+          {pinnedPlugins.length > 0 ? (
+            <Stack gap={6}>
+              <Text size="xs" fw={600} c="dimmed">
+                Pinned plugins
+              </Text>
+              {pinnedPlugins.map((plugin) => (
+                <PluginRow
+                  key={plugin.id}
+                  plugin={plugin}
+                  pinned
+                  onTogglePin={onTogglePin}
+                  onOpenSource={onOpenSource}
+                  onUninstall={onUninstall}
+                  uninstalling={uninstalling}
+                />
+              ))}
+            </Stack>
+          ) : null}
+
+          {lastUsedPlugin ? (
+            <Stack gap={6}>
+              <Text size="xs" fw={600} c="dimmed">
+                Last used
+              </Text>
+              <PluginRow
+                plugin={lastUsedPlugin}
+                pinned={false}
+                onTogglePin={onTogglePin}
+                onOpenSource={onOpenSource}
+                onUninstall={onUninstall}
+                uninstalling={uninstalling}
+              />
+            </Stack>
+          ) : null}
+
+          <Stack gap={6}>
+            <Text size="xs" fw={600} c="dimmed">
+              All installed plugins
+            </Text>
+            {unpinnedPlugins.map((plugin) => (
+              <PluginRow
+                key={plugin.id}
+                plugin={plugin}
+                pinned={false}
+                onTogglePin={onTogglePin}
+                onOpenSource={onOpenSource}
+                onUninstall={onUninstall}
+                uninstalling={uninstalling}
+              />
+            ))}
+          </Stack>
         </Stack>
       ) : (
         <Text c="dimmed" size="sm">
-          No plugins installed yet. Install one from the list below.
+          No installed plugins match the selected languages.
         </Text>
       )}
     </Stack>
@@ -440,6 +719,7 @@ function InstalledSection({
 
 interface AvailableSectionProps {
   query: ReturnType<typeof useQuery<AvailableResult>>;
+  entries: readonly AvailableEntry[];
   installedIds: ReadonlySet<string>;
   onInstall: (item: PluginItem) => void;
   installing: boolean;
@@ -448,12 +728,12 @@ interface AvailableSectionProps {
 
 function AvailableSection({
   query,
+  entries,
   installedIds,
   onInstall,
   installing,
   failures,
 }: AvailableSectionProps) {
-  const entries = query.data?.entries ?? [];
   return (
     <Stack gap="xs">
       <Title order={3}>Available plugins</Title>
@@ -474,7 +754,7 @@ function AvailableSection({
       {query.isLoading || query.isFetching ? (
         <Group gap="sm">
           <Loader size="sm" />
-          <Text c="dimmed">Fetching repository indexes…</Text>
+          <Text c="dimmed">Fetching repository indexes...</Text>
         </Group>
       ) : query.error ? (
         <Alert color="red" title="Repository fetch error">
@@ -493,7 +773,7 @@ function AvailableSection({
                     <Text size="sm" fw={500} truncate>
                       {item.name}{" "}
                       <Text span size="xs" c="dimmed">
-                        ({item.lang} · v{item.version})
+                        ({item.lang} - v{item.version})
                       </Text>
                     </Text>
                     <Anchor
@@ -504,7 +784,7 @@ function AvailableSection({
                         event.preventDefault();
                         openSite(item.site);
                       }}
-                      title="Open site in default browser"
+                      title="Open site in app"
                     >
                       {item.site}
                     </Anchor>
@@ -537,7 +817,7 @@ function AvailableSection({
           {!query.data
             ? "Add a repository to populate this list."
             : failures.length > 0
-              ? "All configured repositories failed — see the error(s) above."
+              ? "All configured repositories failed; see the errors above."
               : "No plugins exposed by the configured repositories."}
         </Text>
       )}

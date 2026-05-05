@@ -1,5 +1,5 @@
 import type { PluginManager } from "./manager";
-import type { NovelItem } from "./types";
+import type { NovelItem, Plugin } from "./types";
 
 export interface GlobalSearchResult {
   pluginId: string;
@@ -11,6 +11,7 @@ export interface GlobalSearchResult {
 export interface GlobalSearchOptions {
   /** Default 3, mirrors upstream's `globalSearchConcurrency`. */
   concurrency?: number;
+  plugins?: readonly Plugin[];
   /** When the signal aborts, no further results are yielded. */
   signal?: AbortSignal;
   /** Called as each plugin's task settles. */
@@ -66,7 +67,7 @@ export async function globalSearch(
   term: string,
   options: GlobalSearchOptions = {},
 ): Promise<GlobalSearchResult[]> {
-  const plugins = manager.list();
+  const plugins = options.plugins ?? manager.list();
   if (plugins.length === 0) return [];
 
   const concurrency = Math.max(

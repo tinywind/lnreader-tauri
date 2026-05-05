@@ -2,16 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Badge,
+  Box,
+  Button,
   Container,
   Group,
   Loader,
   Paper,
-  SimpleGrid,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
-import { useDebouncedValue } from "@mantine/hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { NovelCard } from "../components/NovelCard";
@@ -23,8 +23,10 @@ import {
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { pluginManager } from "../lib/plugins/manager";
 import type { NovelItem } from "../lib/plugins/types";
+import { globalSearchRoute } from "../router";
+import { useBrowseStore } from "../store/browse";
 
-const SEARCH_DEBOUNCE_MS = 300;
+const PREVIEW_RESULT_COUNT = 6;
 
 function resultKey(pluginId: string, novelPath: string): string {
   return `${pluginId}::${novelPath}`;
@@ -38,55 +40,71 @@ interface SearchResultSectionProps {
   row: GlobalSearchResult;
   openingKey: string | null;
   onOpen: (row: GlobalSearchResult, novel: NovelItem) => void;
+  onMore: (row: GlobalSearchResult) => void;
 }
 
 function SearchResultSection({
   row,
   openingKey,
   onOpen,
+  onMore,
 }: SearchResultSectionProps) {
+  const previewNovels = row.novels.slice(0, PREVIEW_RESULT_COUNT);
+
   return (
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
-        <Group justify="space-between" wrap="nowrap" align="baseline">
-          <Text size="sm" fw={600}>
-            {row.pluginName}
-          </Text>
-          {row.error ? (
-            <Text size="xs" c="red">
-              Failed
+        <Group justify="space-between" wrap="nowrap" align="center">
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Text size="sm" fw={600} truncate>
+              {row.pluginName}
             </Text>
-          ) : (
-            <Text size="xs" c="dimmed">
-              {row.novels.length} result
-              {row.novels.length === 1 ? "" : "s"}
-            </Text>
-          )}
+            {row.error ? (
+              <Text size="xs" c="red">
+                Failed
+              </Text>
+            ) : (
+              <Text size="xs" c="dimmed">
+                {row.novels.length} result
+                {row.novels.length === 1 ? "" : "s"}
+              </Text>
+            )}
+          </Stack>
+          {!row.error && row.novels.length > 0 ? (
+            <Button size="xs" variant="light" onClick={() => onMore(row)}>
+              More
+            </Button>
+          ) : null}
         </Group>
 
         {row.error ? (
           <Alert color="red" variant="light">
             {row.error}
           </Alert>
-        ) : row.novels.length > 0 ? (
-          <SimpleGrid
-            cols={{ base: 2, xs: 3, sm: 4, md: 5, lg: 6 }}
-            spacing="md"
-            verticalSpacing="lg"
+        ) : previewNovels.length > 0 ? (
+          <Group
+            align="stretch"
+            wrap="nowrap"
+            gap="md"
+            style={{ overflowX: "auto", paddingBottom: 4 }}
           >
-            {row.novels.map((novel, index) => {
+            {previewNovels.map((novel, index) => {
               const key = resultKey(row.pluginId, novel.path);
               return (
-                <NovelCard
+                <Box
                   key={`${key}::${index}`}
-                  name={novel.name}
-                  cover={novel.cover ?? null}
-                  selected={openingKey === key}
-                  onActivate={() => onOpen(row, novel)}
-                />
+                  style={{ flex: "0 0 140px", width: 140 }}
+                >
+                  <NovelCard
+                    name={novel.name}
+                    cover={novel.cover ?? null}
+                    selected={openingKey === key}
+                    onActivate={() => onOpen(row, novel)}
+                  />
+                </Box>
               );
             })}
-          </SimpleGrid>
+          </Group>
         ) : (
           <Text size="sm" c="dimmed">
             No results from this source.
@@ -98,10 +116,15 @@ function SearchResultSection({
 }
 
 export function GlobalSearchPage() {
+  const { q } = globalSearchRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+  const pluginLanguageFilter = useBrowseStore((s) => s.pluginLanguageFilter);
+  const globalSearchConcurrency = useBrowseStore(
+    (s) => s.globalSearchConcurrency,
+  );
+  const setLastUsedPluginId = useBrowseStore((s) => s.setLastUsedPluginId);
+  const [search, setSearch] = useState(q);
   const [results, setResults] = useState<GlobalSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [openingKey, setOpeningKey] = useState<string | null>(null);
@@ -109,10 +132,14 @@ export function GlobalSearchPage() {
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    setSearch(q);
+  }, [q]);
+
+  useEffect(() => {
     controllerRef.current?.abort();
     setOpenError(null);
 
-    const trimmed = debouncedSearch.trim();
+    const trimmed = q.trim();
     if (trimmed === "") {
       setResults([]);
       setSearching(false);
@@ -124,7 +151,14 @@ export function GlobalSearchPage() {
     setSearching(true);
     setResults([]);
 
+    const searchablePlugins = pluginManager
+      .list()
+      .filter((plugin) => pluginLanguageFilter.includes(plugin.lang))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     globalSearch(pluginManager, trimmed, {
+      concurrency: globalSearchConcurrency,
+      plugins: searchablePlugins,
       signal: controller.signal,
       onResult: (result) => {
         if (controller.signal.aborted) return;
@@ -141,7 +175,7 @@ export function GlobalSearchPage() {
       });
 
     return () => controller.abort();
-  }, [debouncedSearch]);
+  }, [globalSearchConcurrency, pluginLanguageFilter, q]);
 
   const handleOpenNovel = useCallback(
     async (row: GlobalSearchResult, novel: NovelItem) => {
@@ -154,6 +188,7 @@ export function GlobalSearchPage() {
       }
 
       const key = resultKey(row.pluginId, novel.path);
+      setLastUsedPluginId(row.pluginId);
       setOpeningKey(key);
       setOpenError(null);
       try {
@@ -166,11 +201,31 @@ export function GlobalSearchPage() {
         setOpeningKey((current) => (current === key ? null : current));
       }
     },
-    [navigate, openingKey, queryClient],
+    [navigate, openingKey, queryClient, setLastUsedPluginId],
   );
 
-  const installedCount = pluginManager.size();
-  const hasSearchTerm = debouncedSearch.trim() !== "";
+  const submitSearch = () => {
+    void navigate({
+      to: "/search",
+      search: { q: search.trim() },
+    });
+  };
+
+  const openPluginResults = useCallback(
+    (row: GlobalSearchResult) => {
+      setLastUsedPluginId(row.pluginId);
+      void navigate({
+        to: "/source",
+        search: { pluginId: row.pluginId, query: q.trim() },
+      });
+    },
+    [navigate, q, setLastUsedPluginId],
+  );
+
+  const installedCount = pluginManager
+    .list()
+    .filter((plugin) => pluginLanguageFilter.includes(plugin.lang)).length;
+  const hasSearchTerm = q.trim() !== "";
   const hasOnlyEmptyResults =
     hasSearchTerm &&
     results.length > 0 &&
@@ -186,11 +241,17 @@ export function GlobalSearchPage() {
           </Badge>
         </Group>
 
-        <SearchBar value={search} onChange={setSearch} />
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          onSubmit={submitSearch}
+          placeholder="Search across installed plugins..."
+        />
 
         {installedCount === 0 ? (
           <Alert color="blue" title="No plugins installed">
-            Install a plugin from the Browse tab to enable global search.
+            Install a plugin from the Browse tab, or enable one of its
+            languages in Browse settings, to use global search.
           </Alert>
         ) : null}
 
@@ -219,7 +280,7 @@ export function GlobalSearchPage() {
 
         {!searching && hasOnlyEmptyResults ? (
           <Alert color="yellow" title="No matches">
-            None of the installed plugins matched "{debouncedSearch}".
+            None of the installed plugins matched "{q}".
           </Alert>
         ) : null}
 
@@ -232,6 +293,7 @@ export function GlobalSearchPage() {
               onOpen={(resultRow, novel) => {
                 void handleOpenNovel(resultRow, novel);
               }}
+              onMore={openPluginResults}
             />
           ))}
         </Stack>

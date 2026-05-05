@@ -16,7 +16,6 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useDebouncedValue } from "@mantine/hooks";
 import { NovelCard } from "../components/NovelCard";
 import {
   PluginFilters,
@@ -30,12 +29,10 @@ import type { NovelItem } from "../lib/plugins/types";
 import { sourceRoute } from "../router";
 import { useSiteBrowserStore } from "../store/site-browser";
 
-const SEARCH_DEBOUNCE_MS = 300;
-
 type ListingMode = "popular" | "latest";
 
 export function SourcePage() {
-  const { pluginId } = sourceRoute.useSearch();
+  const { pluginId, query } = sourceRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
@@ -45,8 +42,8 @@ export function SourcePage() {
   const [mode, setMode] = useState<ListingMode>("popular");
   const [page, setPage] = useState(1);
   const [accumulated, setAccumulated] = useState<NovelItem[]>([]);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+  const [search, setSearch] = useState(query);
+  const [submittedSearch, setSubmittedSearch] = useState(query);
 
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const initialFilters = useMemo<ResolvedFilterValues>(
@@ -58,10 +55,14 @@ export function SourcePage() {
   const [activeFilters, setActiveFilters] =
     useState<ResolvedFilterValues>(initialFilters);
 
-  const trimmedSearch = debouncedSearch.trim();
+  useEffect(() => {
+    setSearch(query);
+    setSubmittedSearch(query);
+  }, [query]);
+
+  const trimmedSearch = submittedSearch.trim();
   const isSearchMode = trimmedSearch.length > 0;
 
-  // Reset accumulator when the inputs that define the listing change.
   const lastKey = useRef("");
   useEffect(() => {
     const key = `${mode}|${trimmedSearch}|${JSON.stringify(activeFilters)}|${pluginId}`;
@@ -95,7 +96,6 @@ export function SourcePage() {
     },
   });
 
-  // Append the latest page once it lands.
   useEffect(() => {
     if (listing.data) {
       setAccumulated((prev) =>
@@ -182,15 +182,20 @@ export function SourcePage() {
           )}
         </Group>
 
-        <SearchBar value={search} onChange={setSearch} />
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          onSubmit={() => setSubmittedSearch(search)}
+          placeholder={`Search ${plugin.name}...`}
+        />
 
         {listing.isLoading && page === 1 ? (
           <Group gap="sm">
             <Loader size="sm" />
             <Text c="dimmed">
               {isSearchMode
-                ? `Searching ${plugin.name} for "${trimmedSearch}"…`
-                : `Loading ${mode}…`}
+                ? `Searching ${plugin.name} for "${trimmedSearch}"...`
+                : `Loading ${mode}...`}
             </Text>
           </Group>
         ) : listing.error ? (
