@@ -186,7 +186,10 @@ export function BrowsePage() {
 
         <Modal
           opened={addOpen}
-          onClose={() => setAddOpen(false)}
+          onClose={() => {
+            setAddOpen(false);
+            addRepoMutation.reset();
+          }}
           title="Add repository"
         >
           <Stack gap="sm">
@@ -197,8 +200,21 @@ export function BrowsePage() {
               onChange={(event) => setUrl(event.currentTarget.value)}
               autoFocus
             />
+            {addRepoMutation.error && (
+              <Alert color="red" variant="light" title="Add failed">
+                {addRepoMutation.error instanceof Error
+                  ? addRepoMutation.error.message
+                  : String(addRepoMutation.error)}
+              </Alert>
+            )}
             <Group justify="flex-end">
-              <Button variant="subtle" onClick={() => setAddOpen(false)}>
+              <Button
+                variant="subtle"
+                onClick={() => {
+                  setAddOpen(false);
+                  addRepoMutation.reset();
+                }}
+              >
                 Cancel
               </Button>
               <Button
