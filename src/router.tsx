@@ -7,6 +7,7 @@ import { RootLayout } from "./routes/__root";
 import { BrowsePage } from "./routes/browse";
 import { GlobalSearchPage } from "./routes/global-search";
 import { LibraryPage } from "./routes/library";
+import { ReaderPage } from "./routes/reader";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -30,10 +31,17 @@ const globalSearchRoute = createRoute({
   component: GlobalSearchPage,
 });
 
+const readerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/reader",
+  component: ReaderPage,
+});
+
 const routeTree = rootRoute.addChildren([
   libraryRoute,
   browseRoute,
   globalSearchRoute,
+  readerRoute,
 ]);
 
 export const router = createRouter({ routeTree });
