@@ -80,6 +80,7 @@ export interface BackupManifest {
   chapters: BackupChapter[];
   categories: BackupCategory[];
   novelCategories: BackupNovelCategory[];
+  /** The app stores at most one configured plugin repository. */
   repositories: BackupRepository[];
 }
 

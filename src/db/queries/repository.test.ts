@@ -26,9 +26,8 @@ beforeEach(() => {
 });
 
 describe("listRepositories", () => {
-  it("orders by added_at then id descending", async () => {
+  it("returns the configured repository row", async () => {
     mockSelect.mockResolvedValueOnce([
-      { id: 2, url: "https://b.test/index.json", name: null, addedAt: 200 },
       {
         id: 1,
         url: "https://a.test/index.json",
@@ -41,13 +40,13 @@ describe("listRepositories", () => {
 
     const [sql] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("FROM repository");
-    expect(sql).toContain("ORDER BY added_at DESC");
-    expect(rows).toHaveLength(2);
+    expect(sql).toContain("ORDER BY id");
+    expect(rows).toHaveLength(1);
   });
 });
 
 describe("addRepository", () => {
-  it("uses INSERT OR IGNORE with $1 url + $2 name", async () => {
+  it("upserts the singleton repository with $1 url + $2 name", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
 
     await addRepository({
@@ -56,8 +55,9 @@ describe("addRepository", () => {
     });
 
     const [sql, params] = mockExecute.mock.calls[0]!;
-    expect(sql).toContain("INSERT OR IGNORE INTO repository");
-    expect(sql).toContain("(url, name) VALUES ($1, $2)");
+    expect(sql).toContain("INSERT INTO repository (id, url, name)");
+    expect(sql).toContain("VALUES (1, $1, $2)");
+    expect(sql).toContain("ON CONFLICT(id) DO UPDATE");
     expect(params).toEqual(["https://example.test/p.json", "Demo"]);
   });
 
@@ -69,17 +69,33 @@ describe("addRepository", () => {
     const [, params] = mockExecute.mock.calls[0]!;
     expect(params).toEqual(["https://example.test/p.json", null]);
   });
+
+  it("drops cached indexes for the previous repository URL", async () => {
+    mockExecute.mockResolvedValue(undefined);
+
+    await addRepository({ url: "https://example.test/p.json" });
+
+    const [sql, params] = mockExecute.mock.calls[1]!;
+    expect(sql).toContain("DELETE FROM repository_index_cache");
+    expect(sql).toContain("repo_url <> $1");
+    expect(params).toEqual(["https://example.test/p.json"]);
+  });
 });
 
 describe("removeRepository", () => {
-  it("DELETE WHERE id = $1", async () => {
-    mockExecute.mockResolvedValueOnce(undefined);
+  it("deletes the cache row before deleting the repository", async () => {
+    mockExecute.mockResolvedValue(undefined);
 
     await removeRepository(42);
 
-    const [sql, params] = mockExecute.mock.calls[0]!;
-    expect(sql).toContain("DELETE FROM repository");
-    expect(sql).toContain("WHERE id = $1");
-    expect(params).toEqual([42]);
+    const [cacheSql, cacheParams] = mockExecute.mock.calls[0]!;
+    expect(cacheSql).toContain("DELETE FROM repository_index_cache");
+    expect(cacheSql).toContain("SELECT url FROM repository WHERE id = $1");
+    expect(cacheParams).toEqual([42]);
+
+    const [repoSql, repoParams] = mockExecute.mock.calls[1]!;
+    expect(repoSql).toContain("DELETE FROM repository");
+    expect(repoSql).toContain("WHERE id = $1");
+    expect(repoParams).toEqual([42]);
   });
 });

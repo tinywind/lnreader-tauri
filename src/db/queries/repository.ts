@@ -16,7 +16,7 @@ export async function listRepositories(): Promise<PluginRepository[]> {
       name,
       added_at AS addedAt
     FROM repository
-    ORDER BY added_at DESC, id DESC
+    ORDER BY id
   `);
 }
 
@@ -28,12 +28,26 @@ export interface AddRepositoryInput {
 export async function addRepository(input: AddRepositoryInput): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT OR IGNORE INTO repository (url, name) VALUES ($1, $2)`,
+    `INSERT INTO repository (id, url, name)
+     VALUES (1, $1, $2)
+     ON CONFLICT(id) DO UPDATE SET
+       url = excluded.url,
+       name = excluded.name,
+       added_at = unixepoch()`,
     [input.url, input.name ?? null],
+  );
+  await db.execute(
+    `DELETE FROM repository_index_cache WHERE repo_url <> $1`,
+    [input.url],
   );
 }
 
 export async function removeRepository(id: number): Promise<void> {
   const db = await getDb();
+  await db.execute(
+    `DELETE FROM repository_index_cache
+     WHERE repo_url = (SELECT url FROM repository WHERE id = $1)`,
+    [id],
+  );
   await db.execute(`DELETE FROM repository WHERE id = $1`, [id]);
 }

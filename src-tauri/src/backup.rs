@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The manifest is the source of truth for structure (novels,
-//! categories, repositories, chapter rows, etc.). Chapter HTML lives
+//! categories, repository, chapter rows, etc.). Chapter HTML lives
 //! in separate entries so the JSON stays small and the archive is
 //! human-inspectable. The TS wrappers `src/lib/backup/pack.ts` and
 //! `unpack.ts` strip / re-merge `chapter.content` around these

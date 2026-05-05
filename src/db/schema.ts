@@ -126,8 +126,8 @@ export const novelCategoryTable = sqliteTable(
   }),
 );
 
-// Repository: plugin source registry (a URL pointing at a JSON
-// catalog of available plugins).
+// Repository: single plugin source registry URL pointing at a JSON
+// catalog of available plugins.
 export const repositoryTable = sqliteTable(
   "repository",
   {
@@ -140,6 +140,7 @@ export const repositoryTable = sqliteTable(
   },
   (t) => ({
     urlUniq: uniqueIndex("repository_url_uniq").on(t.url),
+    singletonUniq: uniqueIndex("repository_singleton_uniq").on(sql`(1)`),
   }),
 );
 
@@ -163,9 +164,9 @@ export const installedPluginTable = sqliteTable(
   },
 );
 
-// RepositoryIndexCache: last-known plugins.json index per repo URL
-// so Browse renders instantly on tab open. Refresh button re-fetches
-// and overwrites.
+// RepositoryIndexCache: last-known plugins.json index for the
+// configured repository URL so Browse renders instantly on tab open.
+// Refresh button re-fetches and overwrites.
 export const repositoryIndexCacheTable = sqliteTable(
   "repository_index_cache",
   {

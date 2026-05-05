@@ -203,6 +203,16 @@ function toCategory(row: RawCategoryRow): BackupCategory {
   };
 }
 
+function selectBackupRepository(
+  repositories: readonly BackupRepository[],
+): BackupRepository | null {
+  return (
+    [...repositories].sort(
+      (a, b) => b.addedAt - a.addedAt || b.id - a.id,
+    )[0] ?? null
+  );
+}
+
 /**
  * Read every row from the 5 backup-relevant tables and return a
  * fresh `BackupManifest` ready to feed `encodeBackupManifest` and
@@ -257,9 +267,10 @@ export async function applyBackupSnapshot(
       cat.isSystem,
     ]);
   }
-  for (const repo of manifest.repositories) {
+  const repo = selectBackupRepository(manifest.repositories);
+  if (repo) {
     await db.execute(INSERT_REPOSITORY, [
-      repo.id,
+      1,
       repo.url,
       repo.name,
       repo.addedAt,

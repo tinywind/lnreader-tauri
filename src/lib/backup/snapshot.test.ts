@@ -166,4 +166,40 @@ describe("applyBackupSnapshot", () => {
       "novel_category",
     ]);
   });
+
+  it("restores only the newest repository as the singleton row", async () => {
+    const manifest = parseBackupManifest(
+      encodeBackupManifest({
+        ...(await gatherForTest()),
+        repositories: [
+          {
+            id: 2,
+            url: "https://old.example.test/p.json",
+            name: "Old",
+            addedAt: 1_600_000_000,
+          },
+          {
+            id: 3,
+            url: "https://new.example.test/p.json",
+            name: "New",
+            addedAt: 1_700_000_000,
+          },
+        ],
+      }),
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    const repositoryInserts = mockExecute.mock.calls.filter(([sql]) =>
+      String(sql).includes("INSERT INTO repository"),
+    );
+    expect(repositoryInserts).toHaveLength(1);
+    expect(repositoryInserts[0]?.[1]).toEqual([
+      1,
+      "https://new.example.test/p.json",
+      "New",
+      1_700_000_000,
+    ]);
+  });
 });

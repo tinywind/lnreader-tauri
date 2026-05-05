@@ -32,6 +32,12 @@ pub fn run() {
             sql: include_str!("../../drizzle/0003_update_discovery_timestamps.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "enforce single plugin repository",
+            sql: include_str!("../../drizzle/0004_single_repository.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
