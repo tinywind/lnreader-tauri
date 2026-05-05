@@ -1,6 +1,7 @@
 mod backup;
-mod cf_webview;
+mod scraper;
 
+use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -19,6 +20,12 @@ pub fn run() {
             sql: include_str!("../../drizzle/0001_fuzzy_adam_warlock.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "installed_plugin + repository_index_cache tables",
+            sql: include_str!("../../drizzle/0002_plugin_persistence.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -32,11 +39,18 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
-            cf_webview::cf_solve,
             backup::backup_pack,
             backup::backup_unpack,
+            scraper::webview_fetch,
+            scraper::scraper_navigate,
+            scraper::scraper_set_bounds,
+            scraper::scraper_hide,
+            scraper::scraper_open_devtools,
         ])
         .setup(|app| {
+            app.manage(scraper::ScraperState::default());
+            scraper::init_scraper(app.handle())
+                .map_err(|err| format!("scraper init: {err}"))?;
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

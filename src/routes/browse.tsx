@@ -16,7 +16,11 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { useSiteBrowserStore } from "../store/site-browser";
+import {
+  getCachedRepoIndex,
+  setCachedRepoIndex,
+} from "../db/queries/repo-index-cache";
 import {
   addRepository,
   listRepositories,
@@ -46,14 +50,35 @@ interface AvailableResult {
   failures: RepoFetchFailure[];
 }
 
+/**
+ * Cache-first index loader.
+ *
+ * `forceRefresh=false` (default — Browse mount, query refetch):
+ *   Per repo, return the cached items if any. If no cache row
+ *   exists yet for a repo (first-ever load), do a single network
+ *   fetch + write the cache so it's instant from then on. Already-
+ *   cached repos NEVER hit the network on tab open.
+ *
+ * `forceRefresh=true` (the Refresh button):
+ *   Always re-fetch from network and overwrite the cache.
+ */
 async function fetchAllAvailable(
   repos: readonly PluginRepository[],
+  forceRefresh: boolean,
 ): Promise<AvailableResult> {
   const entries: AvailableEntry[] = [];
   const failures: RepoFetchFailure[] = [];
   for (const repo of repos) {
     try {
-      const items = await pluginManager.fetchRepository(repo.url);
+      let items: PluginItem[] | null = null;
+      if (!forceRefresh) {
+        const cached = await getCachedRepoIndex(repo.url);
+        if (cached) items = cached.items;
+      }
+      if (items === null) {
+        items = await pluginManager.fetchRepository(repo.url);
+        await setCachedRepoIndex(repo.url, items);
+      }
       for (const item of items) {
         entries.push({ item, repoUrl: repo.url });
       }
@@ -80,9 +105,15 @@ export function BrowsePage() {
     staleTime: 0,
   });
 
+  const [forceRefreshNext, setForceRefreshNext] = useState(false);
+
   const available = useQuery({
     queryKey: AVAILABLE_QUERY_KEY,
-    queryFn: () => fetchAllAvailable(repos.data ?? []),
+    queryFn: async () => {
+      const force = forceRefreshNext;
+      setForceRefreshNext(false);
+      return fetchAllAvailable(repos.data ?? [], force);
+    },
     enabled: !!repos.data && repos.data.length > 0,
   });
 
@@ -162,11 +193,12 @@ export function BrowsePage() {
               size="xs"
               variant="subtle"
               loading={available.isFetching}
-              onClick={() =>
-                queryClient.invalidateQueries({
+              onClick={() => {
+                setForceRefreshNext(true);
+                void queryClient.invalidateQueries({
                   queryKey: AVAILABLE_QUERY_KEY,
-                })
-              }
+                });
+              }}
               disabled={!repos.data || repos.data.length === 0}
             >
               Refresh
@@ -318,8 +350,15 @@ interface InstalledSectionProps {
   uninstalling: boolean;
 }
 
+/**
+ * Open the plugin's site in the in-app full-screen layered modal
+ * over the main window. The scraper Webview is shared, so any
+ * cookies (login, CF clearance) the user accumulates here are
+ * automatically attached to the next pluginFetch — there is no
+ * per-plugin cookie store on the host side.
+ */
 function openSite(url: string): void {
-  void openExternal(url);
+  useSiteBrowserStore.getState().openAt(url);
 }
 
 function InstalledSection({

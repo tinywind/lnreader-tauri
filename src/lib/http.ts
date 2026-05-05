@@ -1,80 +1,68 @@
-import { fetch } from "@tauri-apps/plugin-http";
-import { isCloudflareChallenge, solveCloudflare } from "./cf_webview";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface HttpInit {
   method?: string;
   headers?: Record<string, string>;
-  body?: string | FormData;
+  /** Only string bodies survive the IPC hop; FormData is v0.2. */
+  body?: string;
+  /** Reserved for v0.2; the WebView fetch IPC ignores it today. */
   signal?: AbortSignal;
 }
 
-/**
- * Header set we always merge in for plugin-scraper fetches.
- *
- * The list mirrors upstream lnreader's `@libs/fetch.fetchApi`
- * defaults (see `docs/plugins/contract.md §6`). The User-Agent
- * is intentionally absent — each plugin's `imageRequestInit`
- * carries its own UA, and the host fills in a device default
- * for plugins that omit one.
- */
-const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
-  Accept: "*/*",
-  "Accept-Language": "*",
-  "Accept-Encoding": "gzip, deflate",
-  Connection: "keep-alive",
-  "Cache-Control": "max-age=0",
-  "Sec-Fetch-Mode": "cors",
-};
+interface FetchInitWire {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
 
-function buildRequestInit(init: HttpInit, extraHeaders?: Record<string, string>) {
+interface FetchResultWire {
+  status: number;
+  statusText: string;
+  body: string;
+  headers: Record<string, string>;
+  finalUrl: string;
+}
+
+function toWireInit(init: HttpInit): FetchInitWire {
   return {
-    method: init.method ?? "GET",
-    headers: { ...DEFAULT_HEADERS, ...init.headers, ...extraHeaders },
+    method: init.method,
+    headers: init.headers,
     body: init.body,
-    signal: init.signal,
   };
-}
-
-function shouldProbeCloudflare(response: Response): boolean {
-  if (response.status !== 403 && response.status !== 503) return false;
-  const ct = response.headers.get("content-type") ?? "";
-  return ct.includes("text/html");
-}
-
-function cookieHeaderFromList(
-  cookies: ReadonlyArray<{ name: string; value: string }>,
-): string {
-  return cookies
-    .map((cookie) => `${cookie.name}=${cookie.value}`)
-    .join("; ");
 }
 
 /**
  * Plugin-scraper-facing HTTP fetch.
  *
- * Routes through `tauri-plugin-http` on the Rust side so the
- * cookie jar can be shared with the Cloudflare hidden-WebView.
- * On a 403/503 + text/html response with a Cloudflare challenge
- * marker, hands off to `solveCloudflare(url)` to clear the
- * challenge and retries once with the returned cookies attached
- * via the `Cookie` header. Returns a `Response`-like object;
- * consumers should check `.ok` / `.status`.
+ * Every request is routed through the persistent in-app Webview
+ * (see `src-tauri/src/scraper.rs`). That gives us a real browser's
+ * TLS fingerprint, Sec-Fetch-* headers, User-Agent and cookie jar
+ * — Cloudflare, JA3-fingerprinting CDNs and login-walled sites
+ * accept it the same way they accept any browser tab. There is no
+ * host-side cookie store: the Webview owns the jar.
+ *
+ * The response is reconstituted into a standard `Response` object
+ * so callers (and sandboxed plugins via `@libs/fetch`) keep the
+ * familiar fetch-style API. `Response.url` is patched on so plugins
+ * that follow redirects can still see the final URL.
  */
 export async function pluginFetch(
   url: string,
   init: HttpInit = {},
 ): Promise<Response> {
-  const response = await fetch(url, buildRequestInit(init));
-
-  if (shouldProbeCloudflare(response)) {
-    const body = await response.clone().text();
-    if (isCloudflareChallenge(body)) {
-      const result = await solveCloudflare(url);
-      const cookie = cookieHeaderFromList(result.cookies);
-      return fetch(url, buildRequestInit(init, cookie ? { Cookie: cookie } : undefined));
-    }
-  }
-
+  const result = await invoke<FetchResultWire>("webview_fetch", {
+    url,
+    init: toWireInit(init),
+  });
+  const response = new Response(result.body, {
+    status: result.status,
+    statusText: result.statusText,
+    headers: result.headers,
+  });
+  Object.defineProperty(response, "url", {
+    value: result.finalUrl,
+    configurable: true,
+  });
   return response;
 }
 

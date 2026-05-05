@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>scraper</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #0b0b0b;
+        color: #888;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Persistent scraper WebView homepage. Loaded via
+      WebviewUrl::App so the page has a stable Tauri-served
+      origin (tauri://localhost in production, the dev URL in
+      development). That stable origin is required for IPC
+      requests originating from this webview to survive
+      Tauri's `missing Origin header` check.
+
+      The page intentionally has no JS — the host eval()s
+      everything it needs at runtime. Body text only shows when
+      the user opens the site browser overlay AND has not yet
+      navigated the scraper to a real plugin site.
+    -->
+    <div style="padding: 16px">scraper webview ready</div>
+  </body>
+</html>

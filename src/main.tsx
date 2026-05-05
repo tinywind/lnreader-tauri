@@ -11,6 +11,7 @@ import {
   QueryClient,
   QueryClientProvider,
 } from "@tanstack/react-query";
+import { pluginManager } from "./lib/plugins/manager";
 import { router } from "./router";
 
 const theme = createTheme({
@@ -51,6 +52,15 @@ const queryClient = new QueryClient({
       staleTime: 30_000,
     },
   },
+});
+
+/**
+ * Rehydrate previously-installed plugins from the DB at app start.
+ * Fire-and-forget; failures get logged but don't block boot.
+ */
+void pluginManager.loadInstalledFromDb().catch((error: unknown) => {
+  // eslint-disable-next-line no-console
+  console.warn("[bootstrap] failed to rehydrate installed plugins", error);
 });
 
 /**

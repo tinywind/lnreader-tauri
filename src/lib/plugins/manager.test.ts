@@ -4,6 +4,11 @@ vi.mock("../http", () => ({
   pluginFetch: vi.fn(),
   pluginFetchText: vi.fn(),
 }));
+vi.mock("../../db/queries/installed-plugin", () => ({
+  upsertInstalledPlugin: vi.fn().mockResolvedValue(undefined),
+  deleteInstalledPlugin: vi.fn().mockResolvedValue(undefined),
+  listInstalledPlugins: vi.fn().mockResolvedValue([]),
+}));
 
 import { pluginFetchText } from "../http";
 import {

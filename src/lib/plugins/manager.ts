@@ -1,3 +1,8 @@
+import {
+  deleteInstalledPlugin,
+  listInstalledPlugins,
+  upsertInstalledPlugin,
+} from "../../db/queries/installed-plugin";
 import { pluginFetchText } from "../http";
 import { loadPlugin } from "./sandbox";
 import { createShimResolver } from "./shims";
@@ -65,9 +70,10 @@ export class PluginManager {
   }
 
   /**
-   * Download `item.url`, sandbox-load it, and register the result
-   * keyed by the loaded plugin's `id`. Throws if the loaded
-   * plugin's `id` doesn't match `item.id`.
+   * Download `item.url`, sandbox-load it, register the result keyed
+   * by the loaded plugin's `id`, and persist the source to DB so
+   * the next app start rehydrates it without re-fetching. Throws if
+   * the loaded plugin's `id` doesn't match `item.id`.
    */
   async installPlugin(item: PluginItem): Promise<Plugin> {
     const source = await pluginFetchText(item.url);
@@ -80,7 +86,47 @@ export class PluginManager {
       );
     }
     this.installed.set(plugin.id, plugin);
+    // Some plugin sources (e.g. Komga) only set `id`/`name`/
+    // `version`/`site` on the loaded instance and rely on the
+    // repository index for `lang`/`iconUrl`. Fall back to the
+    // index entry so the DB UPSERT never sees null for NOT NULL
+    // columns (otherwise SQLite trips on
+    // `installed_plugin.lang NOT NULL constraint`).
+    await upsertInstalledPlugin({
+      id: plugin.id,
+      name: plugin.name ?? item.name,
+      site: plugin.site ?? item.site,
+      lang: plugin.lang ?? item.lang,
+      version: plugin.version ?? item.version,
+      iconUrl: plugin.iconUrl ?? item.iconUrl,
+      sourceUrl: item.url,
+      sourceCode: source,
+    });
     return plugin;
+  }
+
+  /**
+   * Rehydrate every previously-installed plugin from the DB by
+   * sandbox-loading its stored source. Called once at app start.
+   * Failures per plugin are logged via console.warn; the rest still
+   * load so a single broken plugin never blocks startup.
+   */
+  async loadInstalledFromDb(): Promise<void> {
+    const rows = await listInstalledPlugins();
+    for (const row of rows) {
+      try {
+        const plugin = loadPlugin(row.sourceCode, {
+          resolveRequire: createShimResolver(row.id),
+        });
+        this.installed.set(plugin.id, plugin);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[PluginManager] failed to reload '${row.id}' from DB:`,
+          error,
+        );
+      }
+    }
   }
 
   getPlugin(id: string): Plugin | undefined {
@@ -88,7 +134,17 @@ export class PluginManager {
   }
 
   uninstallPlugin(id: string): boolean {
-    return this.installed.delete(id);
+    const removed = this.installed.delete(id);
+    if (removed) {
+      void deleteInstalledPlugin(id).catch((error: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[PluginManager] failed to delete '${id}' from DB:`,
+          error,
+        );
+      });
+    }
+    return removed;
   }
 
   list(): Plugin[] {

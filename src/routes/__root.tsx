@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Anchor, AppShell, Burger, Group, Title } from "@mantine/core";
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
+import { SiteBrowserOverlay } from "../components/SiteBrowserOverlay";
 import { startDeepLinkListener } from "../lib/deep-link";
 import { useBrowseStore } from "../store/browse";
 import { useLibraryStore } from "../store/library";
@@ -130,6 +131,7 @@ export function RootLayout() {
         selectedCategoryId={selectedCategoryId}
         onSelect={setSelectedCategoryId}
       />
+      <SiteBrowserOverlay />
     </AppShell>
   );
 }

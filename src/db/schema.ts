@@ -141,6 +141,40 @@ export const repositoryTable = sqliteTable(
   }),
 );
 
+// InstalledPlugin — persisted plugin source so the in-memory
+// PluginManager can rehydrate at app start without re-fetching
+// from the repository every time.
+export const installedPluginTable = sqliteTable(
+  "installed_plugin",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    site: text("site").notNull(),
+    lang: text("lang").notNull(),
+    version: text("version").notNull(),
+    iconUrl: text("icon_url").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    sourceCode: text("source_code").notNull(),
+    installedAt: integer("installed_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+);
+
+// RepositoryIndexCache — last-known plugins.json index per repo
+// URL so Browse renders instantly on tab open. Refresh button
+// re-fetches and overwrites.
+export const repositoryIndexCacheTable = sqliteTable(
+  "repository_index_cache",
+  {
+    repoUrl: text("repo_url").primaryKey(),
+    fetchedAt: integer("fetched_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    itemsJson: text("items_json").notNull(),
+  },
+);
+
 export type Novel = typeof novelTable.$inferSelect;
 export type NovelInsert = typeof novelTable.$inferInsert;
 export type Chapter = typeof chapterTable.$inferSelect;
@@ -151,3 +185,7 @@ export type NovelCategory = typeof novelCategoryTable.$inferSelect;
 export type NovelCategoryInsert = typeof novelCategoryTable.$inferInsert;
 export type Repository = typeof repositoryTable.$inferSelect;
 export type RepositoryInsert = typeof repositoryTable.$inferInsert;
+export type InstalledPlugin = typeof installedPluginTable.$inferSelect;
+export type InstalledPluginInsert = typeof installedPluginTable.$inferInsert;
+export type RepositoryIndexCache = typeof repositoryIndexCacheTable.$inferSelect;
+export type RepositoryIndexCacheInsert = typeof repositoryIndexCacheTable.$inferInsert;

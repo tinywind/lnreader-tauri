@@ -1,145 +1,102 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/plugin-http", () => ({
-  fetch: vi.fn(),
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
 }));
 
-vi.mock("./cf_webview", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./cf_webview")>();
-  return {
-    ...actual,
-    solveCloudflare: vi.fn(),
-  };
-});
+import { invoke } from "@tauri-apps/api/core";
+import { pluginFetch, pluginFetchText } from "./http";
 
-import { fetch as mockedRawFetch } from "@tauri-apps/plugin-http";
-import { solveCloudflare } from "./cf_webview";
-import { pluginFetch } from "./http";
-
-const fetchMock = vi.mocked(mockedRawFetch);
-const solveMock = vi.mocked(solveCloudflare);
-
-function htmlResponse(body: string, status: number): Response {
-  return new Response(body, {
-    status,
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
-}
+const invokeMock = vi.mocked(invoke);
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  invokeMock.mockReset();
 });
 
-describe("pluginFetch — happy path", () => {
-  it("returns the first response when not a Cloudflare challenge", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response("hello", { status: 200 }),
-    );
+function wireOk(
+  body: string,
+  overrides: Partial<{
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    finalUrl: string;
+  }> = {},
+): unknown {
+  return {
+    status: overrides.status ?? 200,
+    statusText: overrides.statusText ?? "OK",
+    body,
+    headers: overrides.headers ?? { "content-type": "text/plain" },
+    finalUrl: overrides.finalUrl ?? "https://ok.test/",
+  };
+}
 
-    const response = await pluginFetch("https://ok.test/");
+describe("pluginFetch", () => {
+  it("forwards url + init to the webview_fetch IPC and rebuilds a Response", async () => {
+    invokeMock.mockResolvedValueOnce(wireOk("hello"));
+
+    const response = await pluginFetch("https://ok.test/", {
+      method: "POST",
+      headers: { "X-Custom": "1" },
+      body: "payload",
+    });
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    const [command, args] = invokeMock.mock.calls[0]!;
+    expect(command).toBe("webview_fetch");
+    expect(args).toEqual({
+      url: "https://ok.test/",
+      init: {
+        method: "POST",
+        headers: { "X-Custom": "1" },
+        body: "payload",
+      },
+    });
 
     expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(solveMock).not.toHaveBeenCalled();
+    expect(response.ok).toBe(true);
+    expect(await response.text()).toBe("hello");
   });
 
-  it("does NOT trigger the CF path on a non-html 403", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response('{"error":"forbidden"}', {
-        status: 403,
-        headers: { "content-type": "application/json" },
-      }),
+  it("preserves the final URL on the rebuilt Response", async () => {
+    invokeMock.mockResolvedValueOnce(
+      wireOk("redirected", { finalUrl: "https://ok.test/after-redirect" }),
     );
 
-    const response = await pluginFetch("https://api.test/");
-
-    expect(response.status).toBe(403);
-    expect(solveMock).not.toHaveBeenCalled();
+    const response = await pluginFetch("https://ok.test/before");
+    expect(response.url).toBe("https://ok.test/after-redirect");
   });
 
-  it("does NOT trigger the CF path on a 403 html that isn't a CF challenge", async () => {
-    fetchMock.mockResolvedValueOnce(
-      htmlResponse("<html><body>Forbidden</body></html>", 403),
+  it("surfaces non-2xx status as a Response with ok=false", async () => {
+    invokeMock.mockResolvedValueOnce(
+      wireOk("not found", { status: 404, statusText: "Not Found" }),
     );
 
-    const response = await pluginFetch("https://example.test/");
+    const response = await pluginFetch("https://ok.test/missing");
+    expect(response.ok).toBe(false);
+    expect(response.status).toBe(404);
+  });
 
-    expect(response.status).toBe(403);
-    expect(solveMock).not.toHaveBeenCalled();
+  it("propagates an IPC rejection so the global toast can fire", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("scraper not ready"));
+    await expect(pluginFetch("https://ok.test/")).rejects.toThrow(
+      "scraper not ready",
+    );
   });
 });
 
-describe("pluginFetch — CF retry", () => {
-  it("solves the challenge and retries with the Cookie header on 503 + CF body", async () => {
-    fetchMock.mockResolvedValueOnce(
-      htmlResponse(
-        "<html><head><title>Just a moment...</title></head></html>",
-        503,
-      ),
-    );
-    solveMock.mockResolvedValueOnce({
-      final_url: "https://protected.test/",
-      cookies: [
-        {
-          name: "cf_clearance",
-          value: "abc123",
-          domain: ".protected.test",
-          path: "/",
-        },
-        {
-          name: "__cf_bm",
-          value: "xyz",
-          domain: ".protected.test",
-          path: "/",
-        },
-      ],
-    });
-    fetchMock.mockResolvedValueOnce(new Response("ok", { status: 200 }));
-
-    const response = await pluginFetch("https://protected.test/");
-
-    expect(response.status).toBe(200);
-    expect(solveMock).toHaveBeenCalledWith("https://protected.test/");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    const retryCall = fetchMock.mock.calls[1]!;
-    const headers = (retryCall[1] as { headers: Record<string, string> })
-      .headers;
-    expect(headers.Cookie).toBe("cf_clearance=abc123; __cf_bm=xyz");
+describe("pluginFetchText", () => {
+  it("returns the body text on a 2xx response", async () => {
+    invokeMock.mockResolvedValueOnce(wireOk("body"));
+    expect(await pluginFetchText("https://ok.test/")).toBe("body");
   });
 
-  it("triggers retry on 403 + CF challenge marker (cf_chl_opt)", async () => {
-    fetchMock.mockResolvedValueOnce(
-      htmlResponse("<script>window.cf_chl_opt={};</script>", 403),
+  it("throws on a non-2xx response with a status-aware message", async () => {
+    invokeMock.mockResolvedValueOnce(
+      wireOk("nope", { status: 503, statusText: "Service Unavailable" }),
     );
-    solveMock.mockResolvedValueOnce({
-      final_url: "https://protected.test/",
-      cookies: [
-        {
-          name: "cf_clearance",
-          value: "v",
-          domain: null,
-          path: null,
-        },
-      ],
-    });
-    fetchMock.mockResolvedValueOnce(new Response("ok", { status: 200 }));
-
-    const response = await pluginFetch("https://protected.test/");
-
-    expect(response.status).toBe(200);
-    expect(solveMock).toHaveBeenCalledOnce();
-  });
-
-  it("propagates a solveCloudflare rejection", async () => {
-    fetchMock.mockResolvedValueOnce(
-      htmlResponse("<title>Just a moment...</title>", 503),
+    await expect(pluginFetchText("https://ok.test/")).rejects.toThrow(
+      /HTTP 503 Service Unavailable on https:\/\/ok\.test\//,
     );
-    solveMock.mockRejectedValueOnce(new Error("cf_solve: timeout"));
-
-    await expect(pluginFetch("https://protected.test/")).rejects.toThrow(
-      /cf_solve: timeout/,
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
