@@ -4,6 +4,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { RootLayout } from "./routes/__root";
+import { BrowsePage } from "./routes/browse";
 import { LibraryPage } from "./routes/library";
 
 const rootRoute = createRootRoute({
@@ -16,7 +17,13 @@ const libraryRoute = createRoute({
   component: LibraryPage,
 });
 
-const routeTree = rootRoute.addChildren([libraryRoute]);
+const browseRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/browse",
+  component: BrowsePage,
+});
+
+const routeTree = rootRoute.addChildren([libraryRoute, browseRoute]);
 
 export const router = createRouter({ routeTree });
 

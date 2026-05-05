@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { AppShell, Burger, Group, Title } from "@mantine/core";
-import { Outlet } from "@tanstack/react-router";
+import { Anchor, AppShell, Burger, Group, Title } from "@mantine/core";
+import { Link, Outlet } from "@tanstack/react-router";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
-import { SearchBar } from "../components/SearchBar";
 import { useLibraryStore } from "../store/library";
 
 export function RootLayout() {
@@ -11,8 +10,6 @@ export function RootLayout() {
   const setSelectedCategoryId = useLibraryStore(
     (s) => s.setSelectedCategoryId,
   );
-  const search = useLibraryStore((s) => s.search);
-  const setSearch = useLibraryStore((s) => s.setSearch);
 
   return (
     <AppShell header={{ height: 56 }} padding={0}>
@@ -27,7 +24,28 @@ export function RootLayout() {
           <Title order={3} style={{ flexShrink: 0 }}>
             LNReaderTauri
           </Title>
-          <SearchBar value={search} onChange={setSearch} />
+          <Group gap="md" wrap="nowrap">
+            <Anchor
+              component={Link}
+              to="/"
+              size="sm"
+              underline="hover"
+              fw={500}
+              activeProps={{ style: { textDecoration: "underline" } }}
+            >
+              Library
+            </Anchor>
+            <Anchor
+              component={Link}
+              to="/browse"
+              size="sm"
+              underline="hover"
+              fw={500}
+              activeProps={{ style: { textDecoration: "underline" } }}
+            >
+              Browse
+            </Anchor>
+          </Group>
         </Group>
       </AppShell.Header>
       <AppShell.Main>

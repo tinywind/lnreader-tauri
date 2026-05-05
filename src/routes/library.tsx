@@ -14,6 +14,7 @@ import {
 import { useDebouncedValue } from "@mantine/hooks";
 import { LibraryGrid } from "../components/LibraryGrid";
 import { LibrarySelectionToolbar } from "../components/LibrarySelectionToolbar";
+import { SearchBar } from "../components/SearchBar";
 import { insertNovel, listLibraryNovels } from "../db/queries/novel";
 import { useLibraryStore } from "../store/library";
 
@@ -23,6 +24,7 @@ export function LibraryPage() {
   const queryClient = useQueryClient();
 
   const search = useLibraryStore((s) => s.search);
+  const setSearch = useLibraryStore((s) => s.setSearch);
   const selectedCategoryId = useLibraryStore((s) => s.selectedCategoryId);
   const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
 
@@ -112,6 +114,8 @@ export function LibraryPage() {
             </Button>
           </Group>
         </Group>
+
+        <SearchBar value={search} onChange={setSearch} />
 
         {selectedIds.size > 0 ? (
           <LibrarySelectionToolbar
