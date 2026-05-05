@@ -193,7 +193,7 @@ type FetchInit = {
 
 1. Always merge a default header set: `Connection: keep-alive`, `Accept: */*`, `Accept-Language: *`, `Sec-Fetch-Mode: cors`, `Accept-Encoding: gzip, deflate`, `Cache-Control: max-age=0`, `User-Agent: getUserAgent()`. Caller-provided headers override these by key.
 2. Run the network fetch.
-3. **Cloudflare detection** — only if the response status is 403 or 503 AND the content-type is `text/html`. Read the body once; check the regex `Just a moment\.\.\.|cf_chl_opt|challenge-platform|cf-mitigated`. If any match, escalate to the WebView fallback (see [`docs/plugins/cloudflare-bypass.md`](./cloudflare-bypass.md)). Otherwise return the original response.
+3. **Cloudflare detection** — only if the response status is 403 or 503 AND the content-type is `text/html`. Read the body once; check the regex `Just a moment\.\.\.|cf_chl_opt|challenge-platform|cf-mitigated`. If any match, escalate to the WebView fallback. The v0.1 implementation lives in `src-tauri/src/scraper.rs` (cookie jar via the embedded scraper Webview) and `src/lib/http.ts` (`pluginFetch` / `pluginFetchText`). Otherwise return the original response.
 
 `fetchText` is the same merge-headers wrapper but reads the body as
 text via `FileReader.readAsText(blob, encoding)` so legacy non-UTF8
@@ -242,11 +242,15 @@ webViewFetch(url: string, options?: {
 
 The host opens a hidden WebView, navigates to `url`, injects the
 provided JS, and resolves with whatever the page calls
-`window.ReactNativeWebView.postMessage(...)` with. See
-[cloudflare-bypass.md](./cloudflare-bypass.md) for the lifecycle.
+`window.ReactNativeWebView.postMessage(...)` with.
 
-The new app should expose the same JS-side API, even if the
-implementation underneath uses a Tauri `WebviewWindow`.
+The v0.1 implementation diverges: instead of an opt-in hidden
+WebView per call, a single persistent embedded scraper Webview
+(`src-tauri/src/scraper.rs`) holds the cookie jar, and
+`webview_fetch` in Rust + `src/lib/http.ts` issues the request
+through reqwest with those cookies attached. The visible
+"Open site" overlay reuses the same Webview for manual
+challenge-clearing; cookies persist across requests.
 
 ## 9. `@libs/storage`
 

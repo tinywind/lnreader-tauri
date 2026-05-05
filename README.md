@@ -13,7 +13,7 @@ compatibility constraints.
   [`prd.md §3`](./prd.md#3-out-of-scope-v01).
 - **Source-of-truth doc**: [`prd.md`](./prd.md). Read before opening
   an issue.
-- **Upstream behavioral reference**: [`docs/HANDOFF.md`](./docs/HANDOFF.md).
+- **v0.1 status snapshot + remaining manual smoke**: [`docs/HANDOFF.md`](./docs/HANDOFF.md).
 
 ## Status
 

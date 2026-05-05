@@ -1,58 +1,13 @@
-# Handoff from upstream lnreader (reference only)
+# LNReaderTauri — v0.1 status
 
-This `docs/` tree captures upstream lnreader's product knowledge at
-commit `639a2538` of `lnreader/lnreader` (HEAD as of 2026-05-04) as
-**reference material** for the new app.
-
-> **LNReaderTauri is a separate, independent project. No invariants
-> from these documents are binding.** The new app's actual specs are
-> authored as code lands in Sprint 0 onward.
-
-## How to use this tree
-
-| Type | Path | Use |
-|---|---|---|
-| Reader behaviors worth reproducing | [`reader/specification.md`](./reader/specification.md) | Reading-experience inspiration. |
-| Plugin scraper contract (upstream's) | [`plugins/contract.md`](./plugins/contract.md) | Pattern reference; we may diverge from the literal contract where simpler. |
-| Per-screen layouts | [`screens/`](./screens/) | UX inspiration only. |
-| Critical user paths | [`acceptance/critical-paths.md`](./acceptance/critical-paths.md) | User-journey inspiration. |
-| Code signing / auto-update plan | [`release/signing.md`](./release/signing.md) | **Deferred to v0.2.** v0.1 ships unsigned debug builds. |
-
-Removed (no longer tracked because the v0.1 implementation
-diverged enough that the upstream notes were just confusing):
-
-- `backup/format.md` — superseded by our own format in
-  `src/lib/backup/format.ts` + Sprint 5 commits.
-- `domain/model.md` — superseded by `src/db/schema.ts` (drizzle).
-- `settings/catalog.md` — superseded by per-feature Zustand stores
-  + DB tables.
-- `plugins/cloudflare-bypass.md` — described upstream's hidden
-  webview auto-solver. v0.1 instead routes plugin fetches through
-  Rust `reqwest` with cookies harvested from a persistent embedded
-  scraper Webview (the user clears CF interactively in the in-app
-  site browser, cookies persist, subsequent fetches reuse them).
-  See `src-tauri/src/scraper.rs` and `src/lib/http.ts`.
-
-## Pinned upstream version
-
-`https://github.com/lnreader/lnreader/blob/639a2538/<path>` is the
-URL pattern for any code reference in this tree. That commit is a
-**frozen reference snapshot**, not a contract.
-
-## What is NOT in this tree
-
-- Per-screen layouts and interaction specs are partial — only the
-  most-touched surfaces (Library, Browse, Novel, Reader chrome,
-  Settings, More, History, Updates, Onboarding/utility) have docs.
-- Critical-path acceptance is sketched but not exhaustive — fill in
-  as the new app implements each surface.
-- Visual regression screenshot gallery is empty until the new app
-  starts producing screens.
-
-These gaps are intentional. The new app's authored specs replace
-them as Sprint 0+ deliverables.
-
----
+> Originally this file was the index for an upstream-lnreader
+> reference tree (`docs/{screens,acceptance,reader,release,backup,
+> domain,settings,plugins/cloudflare-bypass}`). Those reference
+> trees served their purpose during Sprint 0–6 implementation and
+> were removed once the v0.1 surface was complete; the only
+> upstream-reference doc still tracked is
+> [`plugins/contract.md`](./plugins/contract.md) because source
+> code JSDoc still cites its section numbers.
 
 ## v0.1 status snapshot (as of 2026-05-05)
 

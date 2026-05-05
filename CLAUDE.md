@@ -49,7 +49,7 @@ lnreader-tauri/
 ├── CLAUDE.md            ← this file
 ├── README.md
 ├── prd.md               ← product + engineering plan
-├── docs/                ← upstream behavioral reference (mostly)
+├── docs/                ← v0.1 status (HANDOFF.md) + plugin contract reference
 ├── src/                 ← TypeScript code lands here in Sprint 0
 ├── src-tauri/           ← Rust core (lands in Sprint 0)
 ├── assets/              ← icons + splash (sourced from upstream — fine to use)
@@ -231,9 +231,9 @@ Korean replies are preferred for user-facing summaries; code,
 comments, commits, and docs remain in English.
 
 When the user asks for analysis or a multi-step task and parallel
-sub-agents help, use them — the `docs/screens/` and
-`docs/acceptance/` trees were originally produced by 10 parallel
-sub-agents.
+sub-agents help, use them — the original upstream `docs/screens/`
+and `docs/acceptance/` trees (now removed once v0.1 was complete)
+were authored by 10 parallel sub-agents.
 
 ## 13. References
 
