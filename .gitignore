@@ -14,6 +14,10 @@ build/
 src-tauri/target/
 src-tauri/gen/schemas/
 
+# tsc -b composite emit alongside vite.config.ts
+vite.config.d.ts
+vite.config.js
+
 # IDE
 .vscode/*
 !.vscode/extensions.json
