@@ -1,22 +1,101 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+export type LibraryDisplayMode =
+  | "compact"
+  | "comfortable"
+  | "cover-only"
+  | "list";
+
+export type LibrarySortOrder =
+  | "nameAsc"
+  | "nameDesc"
+  | "downloadedAsc"
+  | "downloadedDesc"
+  | "totalChaptersAsc"
+  | "totalChaptersDesc"
+  | "unreadChaptersAsc"
+  | "unreadChaptersDesc"
+  | "dateAddedAsc"
+  | "dateAddedDesc"
+  | "lastReadAsc"
+  | "lastReadDesc"
+  | "lastUpdatedAsc"
+  | "lastUpdatedDesc";
+
+export type DefaultChapterSort = "asc" | "desc";
 
 interface LibraryState {
   selectedCategoryId: number | null;
   search: string;
+  displayMode: LibraryDisplayMode;
+  novelsPerRow: number;
+  sortOrder: LibrarySortOrder;
+  showDownloadBadges: boolean;
+  showUnreadBadges: boolean;
+  showNumberBadges: boolean;
+  downloadedOnlyMode: boolean;
+  incognitoMode: boolean;
+  defaultChapterSort: DefaultChapterSort;
   setSelectedCategoryId: (id: number | null) => void;
   setSearch: (search: string) => void;
+  setDisplayMode: (displayMode: LibraryDisplayMode) => void;
+  setNovelsPerRow: (novelsPerRow: number) => void;
+  setSortOrder: (sortOrder: LibrarySortOrder) => void;
+  setShowDownloadBadges: (showDownloadBadges: boolean) => void;
+  setShowUnreadBadges: (showUnreadBadges: boolean) => void;
+  setShowNumberBadges: (showNumberBadges: boolean) => void;
+  setDownloadedOnlyMode: (downloadedOnlyMode: boolean) => void;
+  setIncognitoMode: (incognitoMode: boolean) => void;
+  setDefaultChapterSort: (defaultChapterSort: DefaultChapterSort) => void;
 }
 
-/**
- * Library tab UI/transient state.
- *
- * Server (DB) state is owned by TanStack Query. This store holds
- * only client-side selections that aren't worth persisting yet
- * (the search-as-URL strategy lands when filtering matures).
- */
-export const useLibraryStore = create<LibraryState>((set) => ({
-  selectedCategoryId: null,
-  search: "",
-  setSelectedCategoryId: (selectedCategoryId) => set({ selectedCategoryId }),
-  setSearch: (search) => set({ search }),
-}));
+export const useLibraryStore = create<LibraryState>()(
+  persist(
+    (set) => ({
+      selectedCategoryId: null,
+      search: "",
+      displayMode: "comfortable",
+      novelsPerRow: 3,
+      sortOrder: "dateAddedDesc",
+      showDownloadBadges: true,
+      showUnreadBadges: true,
+      showNumberBadges: false,
+      downloadedOnlyMode: false,
+      incognitoMode: false,
+      defaultChapterSort: "asc",
+      setSelectedCategoryId: (selectedCategoryId) =>
+        set({ selectedCategoryId }),
+      setSearch: (search) => set({ search }),
+      setDisplayMode: (displayMode) => set({ displayMode }),
+      setNovelsPerRow: (novelsPerRow) =>
+        set({ novelsPerRow: Math.max(1, Math.min(5, novelsPerRow)) }),
+      setSortOrder: (sortOrder) => set({ sortOrder }),
+      setShowDownloadBadges: (showDownloadBadges) =>
+        set({ showDownloadBadges }),
+      setShowUnreadBadges: (showUnreadBadges) =>
+        set({ showUnreadBadges }),
+      setShowNumberBadges: (showNumberBadges) =>
+        set({ showNumberBadges }),
+      setDownloadedOnlyMode: (downloadedOnlyMode) =>
+        set({ downloadedOnlyMode }),
+      setIncognitoMode: (incognitoMode) => set({ incognitoMode }),
+      setDefaultChapterSort: (defaultChapterSort) =>
+        set({ defaultChapterSort }),
+    }),
+    {
+      name: "lnreader-library-settings",
+      partialize: (state) => ({
+        displayMode: state.displayMode,
+        novelsPerRow: state.novelsPerRow,
+        sortOrder: state.sortOrder,
+        showDownloadBadges: state.showDownloadBadges,
+        showUnreadBadges: state.showUnreadBadges,
+        showNumberBadges: state.showNumberBadges,
+        downloadedOnlyMode: state.downloadedOnlyMode,
+        incognitoMode: state.incognitoMode,
+        defaultChapterSort: state.defaultChapterSort,
+      }),
+    },
+  ),
+);

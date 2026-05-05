@@ -1,4 +1,5 @@
 import { getDb } from "../client";
+import type { LibrarySortOrder } from "../../store/library";
 
 /**
  * Shape returned by the Library list query.
@@ -14,7 +15,12 @@ export interface LibraryNovel {
   name: string;
   cover: string | null;
   inLibrary: boolean;
+  isLocal: boolean;
+  totalChapters: number;
+  chaptersDownloaded: number;
+  chaptersUnread: number;
   lastReadAt: number | null;
+  lastUpdatedAt: number;
 }
 
 export interface LibraryFilter {
@@ -22,7 +28,31 @@ export interface LibraryFilter {
   search?: string;
   /** Restrict to novels assigned to this category. `null`/undefined → all. */
   categoryId?: number | null;
+  downloadedOnly?: boolean;
+  sortOrder?: LibrarySortOrder;
 }
+
+interface RawLibraryNovel extends Omit<LibraryNovel, "inLibrary" | "isLocal"> {
+  inLibrary: number;
+  isLocal: number;
+}
+
+const LIBRARY_SORT_SQL: Record<LibrarySortOrder, string> = {
+  nameAsc: "n.name COLLATE NOCASE ASC",
+  nameDesc: "n.name COLLATE NOCASE DESC",
+  downloadedAsc: "chaptersDownloaded ASC",
+  downloadedDesc: "chaptersDownloaded DESC",
+  totalChaptersAsc: "totalChapters ASC",
+  totalChaptersDesc: "totalChapters DESC",
+  unreadChaptersAsc: "chaptersUnread ASC",
+  unreadChaptersDesc: "chaptersUnread DESC",
+  dateAddedAsc: "n.id ASC",
+  dateAddedDesc: "n.id DESC",
+  lastReadAsc: "COALESCE(n.last_read_at, 0) ASC",
+  lastReadDesc: "COALESCE(n.last_read_at, 0) DESC",
+  lastUpdatedAsc: "lastUpdatedAt ASC",
+  lastUpdatedDesc: "lastUpdatedAt DESC",
+};
 
 export async function listLibraryNovels(
   filter: LibraryFilter = {},
@@ -45,6 +75,13 @@ export async function listLibraryNovels(
       `EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id AND nc.category_id = $${params.length})`,
     );
   }
+  if (filter.downloadedOnly) {
+    conditions.push(
+      `(n.is_local = 1 OR EXISTS (SELECT 1 FROM chapter dc WHERE dc.novel_id = n.id AND dc.is_downloaded = 1))`,
+    );
+  }
+
+  const orderBy = LIBRARY_SORT_SQL[filter.sortOrder ?? "dateAddedDesc"];
 
   const sql = `
     SELECT
@@ -54,13 +91,36 @@ export async function listLibraryNovels(
       n.name,
       n.cover,
       n.in_library   AS inLibrary,
-      n.last_read_at AS lastReadAt
+      n.is_local     AS isLocal,
+      COUNT(c.id) AS totalChapters,
+      COALESCE(SUM(CASE WHEN c.is_downloaded = 1 THEN 1 ELSE 0 END), 0)
+        AS chaptersDownloaded,
+      COALESCE(SUM(CASE WHEN c.unread = 1 THEN 1 ELSE 0 END), 0)
+        AS chaptersUnread,
+      n.last_read_at AS lastReadAt,
+      MAX(COALESCE(c.updated_at, n.updated_at)) AS lastUpdatedAt
     FROM novel n
+    LEFT JOIN chapter c ON c.novel_id = n.id
     WHERE ${conditions.join(" AND ")}
-    ORDER BY COALESCE(n.last_read_at, 0) DESC, n.name
+    GROUP BY
+      n.id,
+      n.plugin_id,
+      n.path,
+      n.name,
+      n.cover,
+      n.in_library,
+      n.is_local,
+      n.last_read_at,
+      n.updated_at
+    ORDER BY ${orderBy}, n.name COLLATE NOCASE ASC
   `;
 
-  return db.select<LibraryNovel[]>(sql, params);
+  const rows = await db.select<RawLibraryNovel[]>(sql, params);
+  return rows.map((row) => ({
+    ...row,
+    inLibrary: !!row.inLibrary,
+    isLocal: !!row.isLocal,
+  }));
 }
 
 /**
@@ -83,6 +143,7 @@ export interface NovelDetailRecord {
   isLocal: boolean;
   createdAt: number;
   updatedAt: number;
+  libraryAddedAt: number | null;
   lastReadAt: number | null;
 }
 
@@ -107,6 +168,7 @@ const SELECT_NOVEL_DETAIL = `
     is_local       AS isLocal,
     created_at     AS createdAt,
     updated_at     AS updatedAt,
+    library_added_at AS libraryAddedAt,
     last_read_at   AS lastReadAt
   FROM novel
   WHERE id = $1
@@ -137,9 +199,12 @@ export async function setNovelInLibrary(
   const db = await getDb();
   await db.execute(
     `UPDATE novel
-     SET in_library = $2, updated_at = unixepoch()
+     SET
+       in_library = $2,
+       library_added_at = CASE WHEN $2 = 1 THEN unixepoch() ELSE NULL END,
+       updated_at = unixepoch()
      WHERE id = $1`,
-    [id, inLibrary],
+    [id, inLibrary ? 1 : 0],
   );
 }
 
@@ -161,15 +226,17 @@ export interface InsertNovelInput {
 
 export async function insertNovel(input: InsertNovelInput): Promise<void> {
   const db = await getDb();
+  const inLibrary = (input.inLibrary ?? true) ? 1 : 0;
   await db.execute(
-    `INSERT OR IGNORE INTO novel (plugin_id, path, name, cover, in_library)
-     VALUES ($1, $2, $3, $4, $5)`,
+    `INSERT OR IGNORE INTO novel
+       (plugin_id, path, name, cover, in_library, library_added_at)
+     VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 1 THEN unixepoch() ELSE NULL END)`,
     [
       input.pluginId,
       input.path,
       input.name,
       input.cover ?? null,
-      input.inLibrary ?? true,
+      inLibrary,
     ],
   );
 }

@@ -15,6 +15,20 @@
       "when": 1777955384273,
       "tag": "0001_fuzzy_adam_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777987733192,
+      "tag": "0002_plugin_persistence",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1777987733193,
+      "tag": "0003_update_discovery_timestamps",
+      "breakpoints": true
     }
   ]
 }

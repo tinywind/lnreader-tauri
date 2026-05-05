@@ -1,4 +1,4 @@
-import { getDb } from "../client";
+﻿import { getDb } from "../client";
 
 export interface ChapterRow {
   id: number;
@@ -15,6 +15,7 @@ export interface ChapterRow {
   content: string | null;
   releaseTime: string | null;
   readAt: number | null;
+  createdAt: number | null;
   updatedAt: number;
 }
 
@@ -33,6 +34,7 @@ const SELECT_FIELDS = `
   content,
   release_time   AS releaseTime,
   read_at        AS readAt,
+  created_at     AS createdAt,
   updated_at     AS updatedAt
 `;
 
@@ -78,8 +80,8 @@ export async function insertChapter(
   const db = await getDb();
   await db.execute(
     `INSERT OR IGNORE INTO chapter
-       (novel_id, path, name, position, chapter_number, page, release_time)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       (novel_id, path, name, position, chapter_number, page, release_time, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch())`,
     [
       input.novelId,
       input.path,
@@ -96,8 +98,8 @@ export async function upsertChapter(input: InsertChapterInput): Promise<void> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO chapter
-       (novel_id, path, name, position, chapter_number, page, release_time)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (novel_id, path, name, position, chapter_number, page, release_time, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch())
      ON CONFLICT(novel_id, path) DO UPDATE SET
        name           = excluded.name,
        position       = excluded.position,
@@ -120,18 +122,59 @@ export async function upsertChapter(input: InsertChapterInput): Promise<void> {
 export async function updateChapterProgress(
   chapterId: number,
   progress: number,
+  options: { recordHistory?: boolean } = {},
 ): Promise<void> {
   const db = await getDb();
   const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+  const recordHistory = options.recordHistory ?? true;
+  if (recordHistory) {
+    await db.execute(
+      `UPDATE chapter
+       SET
+         progress   = $2,
+         unread     = CASE WHEN $2 >= 97 THEN 0 ELSE unread END,
+         read_at    = CASE WHEN $2 > 0 THEN unixepoch() ELSE read_at END,
+         updated_at = unixepoch()
+       WHERE id = $1`,
+      [chapterId, clamped],
+    );
+    await db.execute(
+      `UPDATE novel
+       SET last_read_at = unixepoch(), updated_at = unixepoch()
+       WHERE id = (
+         SELECT novel_id FROM chapter WHERE id = $1
+       )`,
+      [chapterId],
+    );
+    return;
+  }
+
   await db.execute(
     `UPDATE chapter
      SET
        progress   = $2,
        unread     = CASE WHEN $2 >= 97 THEN 0 ELSE unread END,
-       read_at    = CASE WHEN $2 >= 97 THEN unixepoch() ELSE read_at END,
        updated_at = unixepoch()
      WHERE id = $1`,
     [chapterId, clamped],
+  );
+}
+
+export async function markChapterOpened(chapterId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE chapter
+     SET read_at = unixepoch(), updated_at = unixepoch()
+     WHERE id = $1`,
+    [chapterId],
+  );
+  await db.execute(
+    `UPDATE novel
+     SET last_read_at = unixepoch(), updated_at = unixepoch()
+     WHERE id = (
+       SELECT novel_id FROM chapter WHERE id = $1
+     )`,
+    [chapterId],
   );
 }
 
@@ -191,15 +234,15 @@ export async function clearChapterContent(
 }
 
 /**
- * One unread chapter for a novel that's currently in the library —
- * the row shape powering the Updates tab.
+ * One unread chapter for a novel that's currently in the library.
+ * This is the row shape powering the Updates tab.
  */
 export interface LibraryUpdateEntry {
   chapterId: number;
   novelId: number;
   chapterName: string;
   position: number;
-  updatedAt: number;
+  foundAt: number;
   isDownloaded: boolean;
   novelName: string;
   novelCover: string | null;
@@ -212,10 +255,9 @@ interface RawLibraryUpdate extends Omit<LibraryUpdateEntry, "isDownloaded"> {
 const DEFAULT_UPDATES_LIMIT = 200;
 
 /**
- * Unread chapters of in-library novels, sorted by `updated_at`
- * descending — i.e. the freshly-indexed chapters since the last
- * library sync. v0.1 keeps the definition simple; refining "what
- * counts as new" is a v0.2 concern.
+ * Unread chapters first discovered after the novel entered the
+ * library. The Updates tab calls a user-triggered source refresh;
+ * this query only reads the resulting local index.
  */
 export async function listLibraryUpdates(
   limit: number = DEFAULT_UPDATES_LIMIT,
@@ -227,14 +269,18 @@ export async function listLibraryUpdates(
        c.novel_id        AS novelId,
        c.name            AS chapterName,
        c.position,
-       c.updated_at      AS updatedAt,
+       COALESCE(c.created_at, c.updated_at) AS foundAt,
        c.is_downloaded   AS isDownloaded,
        n.name            AS novelName,
        n.cover           AS novelCover
      FROM chapter c
      JOIN novel n ON n.id = c.novel_id
-     WHERE n.in_library = 1 AND c.unread = 1
-     ORDER BY c.updated_at DESC
+     WHERE
+       n.in_library = 1
+       AND c.unread = 1
+       AND COALESCE(c.created_at, c.updated_at) >=
+         COALESCE(n.library_added_at, n.updated_at, n.created_at)
+     ORDER BY COALESCE(c.created_at, c.updated_at) DESC
      LIMIT $1`,
     [Math.max(1, Math.floor(limit))],
   );

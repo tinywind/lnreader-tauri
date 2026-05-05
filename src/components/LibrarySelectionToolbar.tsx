@@ -8,9 +8,8 @@ interface LibrarySelectionToolbarProps {
 /**
  * Top bar that appears when one or more novels are selected.
  *
- * Action buttons (Mark read, Remove from library) are deliberately
- * disabled in v0.1 — Sprint 1 only ships the *UI shell* per
- * `prd.md §8`. Real wiring lands in Sprint 6 alongside the
+ * Action buttons are deliberately disabled in v0.1. Sprint 1 only
+ * ships the UI shell; real bulk actions land with the remaining
  * Settings/More surface.
  */
 export function LibrarySelectionToolbar({

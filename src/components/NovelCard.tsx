@@ -1,5 +1,15 @@
 import { useRef } from "react";
-import { Card, Image, Text, useMantineTheme } from "@mantine/core";
+import {
+  Badge,
+  Box,
+  Card,
+  Group,
+  Image,
+  Stack,
+  Text,
+  useMantineTheme,
+} from "@mantine/core";
+import type { LibraryDisplayMode } from "../store/library";
 
 const FALLBACK_COVER = "https://placehold.co/140x210?text=No+Cover";
 const LONG_PRESS_MS = 500;
@@ -7,6 +17,16 @@ const LONG_PRESS_MS = 500;
 interface NovelCardProps {
   name: string;
   cover: string | null;
+  /** Library display mode. Browse/source views can omit and get the default cover+title layout. */
+  displayMode?: LibraryDisplayMode;
+  itemNumber?: number;
+  /** Library row metadata. Browse/source views default these to 0/false. */
+  chaptersDownloaded?: number;
+  chaptersUnread?: number;
+  totalChapters?: number;
+  showDownloadBadge?: boolean;
+  showUnreadBadge?: boolean;
+  showNumberBadge?: boolean;
   selected?: boolean;
   /** Click/tap (without holding). Suppressed if a long press fired. */
   onActivate?: () => void;
@@ -17,6 +37,14 @@ interface NovelCardProps {
 export function NovelCard({
   name,
   cover,
+  displayMode = "comfortable",
+  itemNumber,
+  chaptersDownloaded = 0,
+  chaptersUnread = 0,
+  totalChapters = 0,
+  showDownloadBadge = false,
+  showUnreadBadge = false,
+  showNumberBadge = false,
   selected = false,
   onActivate,
   onLongPress,
@@ -54,6 +82,75 @@ export function NovelCard({
   };
 
   const interactive = Boolean(onActivate || onLongPress);
+  const showBadges =
+    showNumberBadge ||
+    (showDownloadBadge && chaptersDownloaded > 0) ||
+    (showUnreadBadge && chaptersUnread > 0);
+
+  const badges = showBadges ? (
+    <Group
+      gap={4}
+      wrap="nowrap"
+      pos="absolute"
+      top={8}
+      left={8}
+      style={{ zIndex: 1 }}
+    >
+      {showNumberBadge && itemNumber != null ? (
+        <Badge size="xs" variant="filled" color="gray">
+          {itemNumber}
+        </Badge>
+      ) : null}
+      {showDownloadBadge && chaptersDownloaded > 0 ? (
+        <Badge size="xs" variant="filled" color="green">
+          {chaptersDownloaded}
+        </Badge>
+      ) : null}
+      {showUnreadBadge && chaptersUnread > 0 ? (
+        <Badge size="xs" variant="filled" color="blue">
+          {chaptersUnread}
+        </Badge>
+      ) : null}
+    </Group>
+  ) : null;
+
+  const coverImage = (
+    <Box pos="relative">
+      {badges}
+      <Image
+        src={cover ?? FALLBACK_COVER}
+        fallbackSrc={FALLBACK_COVER}
+        h={displayMode === "list" ? 92 : 210}
+        w={displayMode === "list" ? 62 : undefined}
+        alt={name}
+        draggable={false}
+      />
+      {displayMode === "compact" ? (
+        <Box
+          pos="absolute"
+          left={0}
+          right={0}
+          bottom={0}
+          p="xs"
+          style={{
+            background:
+              "linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.78))",
+          }}
+        >
+          <Text size="sm" fw={600} lineClamp={2} c="white" title={name}>
+            {name}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+
+  const title =
+    displayMode === "comfortable" ? (
+      <Text size="sm" fw={500} lineClamp={2} mt="xs" title={name}>
+        {name}
+      </Text>
+    ) : null;
 
   return (
     <Card
@@ -73,18 +170,24 @@ export function NovelCard({
         userSelect: "none",
       }}
     >
-      <Card.Section>
-        <Image
-          src={cover ?? FALLBACK_COVER}
-          fallbackSrc={FALLBACK_COVER}
-          h={210}
-          alt={name}
-          draggable={false}
-        />
-      </Card.Section>
-      <Text size="sm" fw={500} lineClamp={2} mt="xs" title={name}>
-        {name}
-      </Text>
+      {displayMode === "list" ? (
+        <Group gap="sm" align="center" wrap="nowrap">
+          {coverImage}
+          <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+            <Text size="sm" fw={600} lineClamp={2} title={name}>
+              {name}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {totalChapters} chapters
+            </Text>
+          </Stack>
+        </Group>
+      ) : (
+        <>
+          <Card.Section>{coverImage}</Card.Section>
+          {title}
+        </>
+      )}
     </Card>
   );
 }

@@ -7,7 +7,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
-// Novel — a title in the user's library or browsable from a source plugin.
+// Novel: a title in the user's library or browsable from a source plugin.
 export const novelTable = sqliteTable(
   "novel",
   {
@@ -33,6 +33,7 @@ export const novelTable = sqliteTable(
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
+    libraryAddedAt: integer("library_added_at", { mode: "timestamp" }),
     lastReadAt: integer("last_read_at", { mode: "timestamp" }),
   },
   (t) => ({
@@ -44,7 +45,7 @@ export const novelTable = sqliteTable(
   }),
 );
 
-// Chapter — one readable unit, owned by a novel.
+// Chapter: one readable unit, owned by a novel.
 export const chapterTable = sqliteTable(
   "chapter",
   {
@@ -68,6 +69,7 @@ export const chapterTable = sqliteTable(
     content: text("content"),
     releaseTime: text("release_time"),
     readAt: integer("read_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }),
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -84,7 +86,7 @@ export const chapterTable = sqliteTable(
   }),
 );
 
-// Category — user-defined Library tab grouping. `is_system` flags
+// Category: user-defined Library tab grouping. `is_system` flags
 // the seeded "Default" and "Local" categories so the UI can hide
 // rename/delete affordances for them.
 export const categoryTable = sqliteTable(
@@ -103,7 +105,7 @@ export const categoryTable = sqliteTable(
   }),
 );
 
-// NovelCategory — many-to-many bridge between Novel and Category.
+// NovelCategory: many-to-many bridge between Novel and Category.
 export const novelCategoryTable = sqliteTable(
   "novel_category",
   {
@@ -124,7 +126,7 @@ export const novelCategoryTable = sqliteTable(
   }),
 );
 
-// Repository — plugin source registry (a URL pointing at a JSON
+// Repository: plugin source registry (a URL pointing at a JSON
 // catalog of available plugins).
 export const repositoryTable = sqliteTable(
   "repository",
@@ -141,7 +143,7 @@ export const repositoryTable = sqliteTable(
   }),
 );
 
-// InstalledPlugin — persisted plugin source so the in-memory
+// InstalledPlugin: persisted plugin source so the in-memory
 // PluginManager can rehydrate at app start without re-fetching
 // from the repository every time.
 export const installedPluginTable = sqliteTable(
@@ -161,9 +163,9 @@ export const installedPluginTable = sqliteTable(
   },
 );
 
-// RepositoryIndexCache — last-known plugins.json index per repo
-// URL so Browse renders instantly on tab open. Refresh button
-// re-fetches and overwrites.
+// RepositoryIndexCache: last-known plugins.json index per repo URL
+// so Browse renders instantly on tab open. Refresh button re-fetches
+// and overwrites.
 export const repositoryIndexCacheTable = sqliteTable(
   "repository_index_cache",
   {

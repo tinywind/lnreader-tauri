@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 
 describe("listLibraryNovels", () => {
-  it("filters by in_library=1 and orders by last_read_at then name (default)", async () => {
+  it("filters by in_library=1 and coerces booleans on the default sort", async () => {
     const db = stubDb();
     db.select.mockResolvedValueOnce([
       {
@@ -41,8 +41,13 @@ describe("listLibraryNovels", () => {
         path: "p1",
         name: "Sample A",
         cover: null,
-        inLibrary: true,
+        inLibrary: 1,
+        isLocal: 0,
+        totalChapters: 10,
+        chaptersDownloaded: 0,
+        chaptersUnread: 5,
         lastReadAt: 1000,
+        lastUpdatedAt: 1_700_000_000,
       },
     ]);
 
@@ -63,7 +68,12 @@ describe("listLibraryNovels", () => {
         name: "Sample A",
         cover: null,
         inLibrary: true,
+        isLocal: false,
+        totalChapters: 10,
+        chaptersDownloaded: 0,
+        chaptersUnread: 5,
         lastReadAt: 1000,
+        lastUpdatedAt: 1_700_000_000,
       },
     ]);
   });
@@ -147,7 +157,8 @@ describe("insertNovel", () => {
     expect(db.execute).toHaveBeenCalledOnce();
     const [sql, params] = db.execute.mock.calls[0]!;
     expect(sql).toContain("INSERT OR IGNORE INTO novel");
-    expect(params).toEqual(["local", "p1", "Sample", null, true]);
+    expect(sql).toContain("library_added_at");
+    expect(params).toEqual(["local", "p1", "Sample", null, 1]);
   });
 
   it("forwards a non-default cover and inLibrary=false", async () => {
@@ -168,7 +179,7 @@ describe("insertNovel", () => {
       "/n/abc",
       "Title",
       "https://example.test/c.jpg",
-      false,
+      0,
     ]);
   });
 });
@@ -203,6 +214,7 @@ describe("getNovelById", () => {
         isLocal: 0,
         createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
+        libraryAddedAt: 1_700_000_000,
         lastReadAt: null,
       },
     ]);
@@ -225,9 +237,10 @@ describe("setNovelInLibrary", () => {
 
     const [sql, params] = db.execute.mock.calls[0]!;
     expect(sql).toContain("UPDATE novel");
-    expect(sql).toContain("SET in_library = $2");
+    expect(sql).toContain("in_library = $2");
+    expect(sql).toContain("library_added_at");
     expect(sql).toContain("updated_at = unixepoch()");
-    expect(params).toEqual([7, true]);
+    expect(params).toEqual([7, 1]);
   });
 
   it("can flip the flag back to false", async () => {
@@ -237,6 +250,6 @@ describe("setNovelInLibrary", () => {
     await setNovelInLibrary(7, false);
 
     const [, params] = db.execute.mock.calls[0]!;
-    expect(params).toEqual([7, false]);
+    expect(params).toEqual([7, 0]);
   });
 });

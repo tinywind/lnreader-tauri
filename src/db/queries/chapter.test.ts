@@ -14,6 +14,7 @@ import {
   listChaptersByNovel,
   listLibraryUpdates,
   listRecentlyRead,
+  markChapterOpened,
   saveChapterContent,
   setChapterBookmark,
   updateChapterProgress,
@@ -75,6 +76,7 @@ describe("insertChapter", () => {
 
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("INSERT OR IGNORE INTO chapter");
+    expect(sql).toContain("created_at");
     expect(params).toEqual([
       1,
       "/c/1",
@@ -116,6 +118,7 @@ describe("upsertChapter", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("ON CONFLICT(novel_id, path) DO UPDATE");
     expect(sql).toContain("name           = excluded.name");
+    expect(sql).toContain("created_at");
     expect(sql).toContain("updated_at     = unixepoch()");
     expect(sql).not.toContain("progress");
     expect(sql).not.toContain("is_downloaded");
@@ -153,14 +156,41 @@ describe("updateChapterProgress", () => {
     expect(params).toEqual([5, 34]);
   });
 
-  it("flips unread + read_at when crossing the 97 threshold", async () => {
+  it("flips unread at 97 and records read_at for history", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
     await updateChapterProgress(5, 97);
     const [sql] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("CASE WHEN $2 >= 97 THEN 0 ELSE unread END");
     expect(sql).toContain(
-      "CASE WHEN $2 >= 97 THEN unixepoch() ELSE read_at END",
+      "CASE WHEN $2 > 0 THEN unixepoch() ELSE read_at END",
     );
+  });
+
+  it("bumps the parent novel last_read_at", async () => {
+    mockExecute.mockResolvedValue(undefined);
+    await updateChapterProgress(5, 50);
+    const [sql, params] = mockExecute.mock.calls[1]!;
+    expect(sql).toContain("UPDATE novel");
+    expect(sql).toContain("last_read_at = unixepoch()");
+    expect(sql).toContain("SELECT novel_id FROM chapter WHERE id = $1");
+    expect(params).toEqual([5]);
+  });
+});
+
+describe("markChapterOpened", () => {
+  it("updates chapter history and parent novel last_read_at", async () => {
+    mockExecute.mockResolvedValue(undefined);
+    await markChapterOpened(17);
+
+    const [chapterSql, chapterParams] = mockExecute.mock.calls[0]!;
+    expect(chapterSql).toContain("UPDATE chapter");
+    expect(chapterSql).toContain("read_at = unixepoch()");
+    expect(chapterParams).toEqual([17]);
+
+    const [novelSql, novelParams] = mockExecute.mock.calls[1]!;
+    expect(novelSql).toContain("UPDATE novel");
+    expect(novelSql).toContain("last_read_at = unixepoch()");
+    expect(novelParams).toEqual([17]);
   });
 });
 
@@ -242,7 +272,7 @@ describe("getAdjacentChapter", () => {
 });
 
 describe("listLibraryUpdates", () => {
-  it("filters in-library + unread and orders by updated_at DESC", async () => {
+  it("filters in-library + unread chapters discovered after library registration", async () => {
     mockSelect.mockResolvedValueOnce([]);
 
     await listLibraryUpdates();
@@ -250,7 +280,8 @@ describe("listLibraryUpdates", () => {
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("n.in_library = 1");
     expect(sql).toContain("c.unread = 1");
-    expect(sql).toContain("ORDER BY c.updated_at DESC");
+    expect(sql).toContain("n.library_added_at");
+    expect(sql).toContain("COALESCE(c.created_at, c.updated_at)");
     expect(params).toEqual([200]);
   });
 
@@ -261,7 +292,7 @@ describe("listLibraryUpdates", () => {
         novelId: 1,
         chapterName: "Ch1",
         position: 1,
-        updatedAt: 1_700_000_000,
+        foundAt: 1_700_000_000,
         isDownloaded: 1,
         novelName: "Sample",
         novelCover: null,
