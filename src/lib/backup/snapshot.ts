@@ -32,6 +32,7 @@ interface RawNovelRow {
   isLocal: number;
   createdAt: number;
   updatedAt: number;
+  libraryAddedAt: number | null;
   lastReadAt: number | null;
 }
 
@@ -50,6 +51,7 @@ interface RawChapterRow {
   content: string | null;
   releaseTime: string | null;
   readAt: number | null;
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -76,6 +78,7 @@ const SELECT_NOVELS = `
     is_local       AS isLocal,
     created_at     AS createdAt,
     updated_at     AS updatedAt,
+    library_added_at AS libraryAddedAt,
     last_read_at   AS lastReadAt
   FROM novel
   ORDER BY id
@@ -97,6 +100,7 @@ const SELECT_CHAPTERS = `
     content,
     release_time   AS releaseTime,
     read_at        AS readAt,
+    COALESCE(created_at, updated_at) AS createdAt,
     updated_at     AS updatedAt
   FROM chapter
   ORDER BY id
@@ -124,16 +128,16 @@ const INSERT_NOVEL = `
   INSERT INTO novel (
     id, plugin_id, path, name, cover, summary, author, artist,
     status, genres, in_library, is_local,
-    created_at, updated_at, last_read_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    created_at, updated_at, library_added_at, last_read_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 `;
 
 const INSERT_CHAPTER = `
   INSERT INTO chapter (
     id, novel_id, path, name, chapter_number, position, page,
     bookmark, unread, progress, is_downloaded, content,
-    release_time, read_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    release_time, read_at, created_at, updated_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 `;
 
 const INSERT_CATEGORY = `
@@ -164,6 +168,7 @@ function toNovel(row: RawNovelRow): BackupNovel {
     isLocal: !!row.isLocal,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    libraryAddedAt: row.libraryAddedAt,
     lastReadAt: row.lastReadAt,
   };
 }
@@ -184,6 +189,7 @@ function toChapter(row: RawChapterRow): BackupChapter {
     content: row.content,
     releaseTime: row.releaseTime,
     readAt: row.readAt,
+    createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -275,6 +281,7 @@ export async function applyBackupSnapshot(
       novel.isLocal,
       novel.createdAt,
       novel.updatedAt,
+      novel.libraryAddedAt,
       novel.lastReadAt,
     ]);
   }
@@ -294,6 +301,7 @@ export async function applyBackupSnapshot(
       chapter.content,
       chapter.releaseTime,
       chapter.readAt,
+      chapter.createdAt,
       chapter.updatedAt,
     ]);
   }

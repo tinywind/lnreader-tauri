@@ -35,6 +35,7 @@ function makeLeanManifest(): BackupManifest {
         isLocal: false,
         createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
+        libraryAddedAt: 1_700_000_000,
         lastReadAt: null,
       },
     ],
@@ -54,6 +55,7 @@ function makeLeanManifest(): BackupManifest {
         content: null,
         releaseTime: null,
         readAt: null,
+        createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
       },
       {
@@ -71,6 +73,7 @@ function makeLeanManifest(): BackupManifest {
         content: null,
         releaseTime: null,
         readAt: null,
+        createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
       },
     ],

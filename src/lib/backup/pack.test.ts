@@ -30,6 +30,7 @@ function makeManifest(): BackupManifest {
         isLocal: false,
         createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
+        libraryAddedAt: 1_700_000_000,
         lastReadAt: null,
       },
     ],
@@ -49,6 +50,7 @@ function makeManifest(): BackupManifest {
         content: "<p>downloaded</p>",
         releaseTime: null,
         readAt: null,
+        createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
       },
       {
@@ -66,6 +68,7 @@ function makeManifest(): BackupManifest {
         content: null,
         releaseTime: null,
         readAt: null,
+        createdAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
       },
     ],

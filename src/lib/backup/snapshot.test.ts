@@ -41,6 +41,7 @@ const RAW_NOVEL = {
   isLocal: 0,
   createdAt: 1_700_000_000,
   updatedAt: 1_700_000_000,
+  libraryAddedAt: 1_700_000_000,
   lastReadAt: null,
 };
 
@@ -59,6 +60,7 @@ const RAW_CHAPTER = {
   content: "<p>hi</p>",
   releaseTime: null,
   readAt: null,
+  createdAt: 1_700_000_000,
   updatedAt: 1_700_000_000,
 };
 

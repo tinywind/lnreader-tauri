@@ -1,14 +1,14 @@
 /**
  * Backup file format v1.
  *
- * The on-disk artifact is a `.zip` whose entries are written /
+ * The on-disk artifact is a `.zip` whose entries are written and
  * read by `pack.ts` and `unpack.ts` in later iterations. This
- * module owns the *envelope* — the JSON payload that lives in
- * `manifest.json` inside the zip. Keeping the format self-
- * describing (`version` field) lets v0.2 evolve without
- * breaking older backups.
+ * module owns the envelope: the JSON payload that lives in
+ * `manifest.json` inside the zip. Keeping the format self-describing
+ * lets v0.2 evolve without breaking older backups.
  *
- * No upstream-compat constraint per `prd.md §3` and §8 Sprint 5.
+ * There is no upstream-compat constraint per `prd.md` sections 3
+ * and 8 Sprint 5.
  */
 
 export const BACKUP_FORMAT_VERSION = 1 as const;
@@ -28,6 +28,7 @@ export interface BackupNovel {
   isLocal: boolean;
   createdAt: number;
   updatedAt: number;
+  libraryAddedAt: number | null;
   lastReadAt: number | null;
 }
 
@@ -47,6 +48,7 @@ export interface BackupChapter {
   content: string | null;
   releaseTime: string | null;
   readAt: number | null;
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -118,7 +120,10 @@ function isNovel(value: unknown): value is BackupNovel {
     typeof value.inLibrary === "boolean" &&
     typeof value.isLocal === "boolean" &&
     typeof value.createdAt === "number" &&
-    typeof value.updatedAt === "number"
+    typeof value.updatedAt === "number" &&
+    (value.libraryAddedAt === null ||
+      value.libraryAddedAt === undefined ||
+      typeof value.libraryAddedAt === "number")
   );
 }
 
@@ -135,8 +140,23 @@ function isChapter(value: unknown): value is BackupChapter {
     typeof value.unread === "boolean" &&
     typeof value.progress === "number" &&
     typeof value.isDownloaded === "boolean" &&
-    typeof value.updatedAt === "number"
+    typeof value.updatedAt === "number" &&
+    (value.createdAt === undefined || typeof value.createdAt === "number")
   );
+}
+
+function normalizeNovel(novel: BackupNovel): BackupNovel {
+  return {
+    ...novel,
+    libraryAddedAt: novel.libraryAddedAt ?? null,
+  };
+}
+
+function normalizeChapter(chapter: BackupChapter): BackupChapter {
+  return {
+    ...chapter,
+    createdAt: chapter.createdAt ?? chapter.updatedAt,
+  };
 }
 
 function isCategory(value: unknown): value is BackupCategory {
@@ -187,7 +207,7 @@ export function parseBackupManifest(json: string): BackupManifest {
   }
   if (parsed.version !== BACKUP_FORMAT_VERSION) {
     throw new BackupFormatError(
-      `Unsupported backup version ${String(parsed.version)} — expected ${BACKUP_FORMAT_VERSION}.`,
+      `Unsupported backup version ${String(parsed.version)}; expected ${BACKUP_FORMAT_VERSION}.`,
     );
   }
   if (typeof parsed.exportedAt !== "number") {
@@ -197,8 +217,12 @@ export function parseBackupManifest(json: string): BackupManifest {
   return {
     version: BACKUP_FORMAT_VERSION,
     exportedAt: parsed.exportedAt,
-    novels: asArray(parsed.novels, "novels", isNovel),
-    chapters: asArray(parsed.chapters, "chapters", isChapter),
+    novels: asArray(parsed.novels, "novels", isNovel).map(normalizeNovel),
+    chapters: asArray(
+      parsed.chapters,
+      "chapters",
+      isChapter,
+    ).map(normalizeChapter),
     categories: asArray(parsed.categories, "categories", isCategory),
     novelCategories: asArray(
       parsed.novelCategories,

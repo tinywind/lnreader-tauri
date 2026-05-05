@@ -26,6 +26,7 @@ const VALID_MANIFEST: BackupManifest = {
       isLocal: false,
       createdAt: 1_700_000_000,
       updatedAt: 1_700_000_000,
+      libraryAddedAt: 1_700_000_000,
       lastReadAt: null,
     },
   ],
@@ -45,6 +46,7 @@ const VALID_MANIFEST: BackupManifest = {
       content: null,
       releaseTime: null,
       readAt: null,
+      createdAt: 1_700_000_000,
       updatedAt: 1_700_000_000,
     },
   ],
@@ -67,7 +69,7 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     expect(parsed).toEqual(VALID_MANIFEST);
   });
 
-  it("preserves chapter content (downloaded HTML) in the round trip", () => {
+  it("preserves chapter content in the round trip", () => {
     const manifest: BackupManifest = {
       ...VALID_MANIFEST,
       chapters: [
@@ -77,9 +79,26 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     const round = parseBackupManifest(encodeBackupManifest(manifest));
     expect(round.chapters[0]?.content).toBe("<p>hi</p>");
   });
+
+  it("normalizes older v1 manifests that lack discovery timestamps", () => {
+    const legacy = JSON.parse(
+      encodeBackupManifest(VALID_MANIFEST),
+    ) as Record<string, unknown>;
+    const novels = legacy.novels as Array<Record<string, unknown>>;
+    const chapters = legacy.chapters as Array<Record<string, unknown>>;
+    delete novels[0]!.libraryAddedAt;
+    delete chapters[0]!.createdAt;
+
+    const parsed = parseBackupManifest(JSON.stringify(legacy));
+
+    expect(parsed.novels[0]?.libraryAddedAt).toBeNull();
+    expect(parsed.chapters[0]?.createdAt).toBe(
+      VALID_MANIFEST.chapters[0]?.updatedAt,
+    );
+  });
 });
 
-describe("parseBackupManifest — error cases", () => {
+describe("parseBackupManifest error cases", () => {
   it("throws on invalid JSON", () => {
     expect(() => parseBackupManifest("not json")).toThrow(
       BackupFormatError,
