@@ -1,3 +1,4 @@
+mod backup;
 mod cf_webview;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -28,7 +29,11 @@ pub fn run() {
                 .add_migrations("sqlite:lnreader.db", migrations)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![cf_webview::cf_solve])
+        .invoke_handler(tauri::generate_handler![
+            cf_webview::cf_solve,
+            backup::backup_pack,
+            backup::backup_unpack,
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
