@@ -12,6 +12,7 @@ export interface ChapterRow {
   unread: boolean;
   progress: number;
   isDownloaded: boolean;
+  content: string | null;
   releaseTime: string | null;
   readAt: number | null;
   updatedAt: number;
@@ -29,6 +30,7 @@ const SELECT_FIELDS = `
   unread,
   progress,
   is_downloaded  AS isDownloaded,
+  content,
   release_time   AS releaseTime,
   read_at        AS readAt,
   updated_at     AS updatedAt
@@ -118,6 +120,48 @@ export async function setChapterBookmark(
      SET bookmark = $2, updated_at = unixepoch()
      WHERE id = $1`,
     [chapterId, bookmarked],
+  );
+}
+
+export async function saveChapterContent(
+  chapterId: number,
+  html: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE chapter
+     SET
+       content        = $2,
+       is_downloaded  = 1,
+       updated_at     = unixepoch()
+     WHERE id = $1`,
+    [chapterId, html],
+  );
+}
+
+export async function getChapterContent(
+  chapterId: number,
+): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ content: string | null }[]>(
+    `SELECT content FROM chapter WHERE id = $1`,
+    [chapterId],
+  );
+  return rows[0]?.content ?? null;
+}
+
+export async function clearChapterContent(
+  chapterId: number,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE chapter
+     SET
+       content        = NULL,
+       is_downloaded  = 0,
+       updated_at     = unixepoch()
+     WHERE id = $1`,
+    [chapterId],
   );
 }
 

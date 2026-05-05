@@ -6,10 +6,13 @@ vi.mock("../client", () => ({
 
 import { getDb } from "../client";
 import {
+  clearChapterContent,
   getAdjacentChapter,
   getChapterById,
+  getChapterContent,
   insertChapter,
   listChaptersByNovel,
+  saveChapterContent,
   setChapterBookmark,
   updateChapterProgress,
 } from "./chapter";
@@ -134,6 +137,47 @@ describe("setChapterBookmark", () => {
     expect(sql).toContain("UPDATE chapter");
     expect(sql).toContain("bookmark = $2");
     expect(params).toEqual([11, true]);
+  });
+});
+
+describe("saveChapterContent", () => {
+  it("UPDATEs content + flips is_downloaded=1 + bumps updated_at", async () => {
+    mockExecute.mockResolvedValueOnce(undefined);
+    await saveChapterContent(7, "<p>hello</p>");
+    const [sql, params] = mockExecute.mock.calls[0]!;
+    expect(sql).toContain("UPDATE chapter");
+    expect(sql).toContain("content");
+    expect(sql).toContain("is_downloaded  = 1");
+    expect(sql).toContain("updated_at     = unixepoch()");
+    expect(params).toEqual([7, "<p>hello</p>"]);
+  });
+});
+
+describe("getChapterContent", () => {
+  it("returns the content string when row exists with content", async () => {
+    mockSelect.mockResolvedValueOnce([{ content: "<p>x</p>" }]);
+    expect(await getChapterContent(7)).toBe("<p>x</p>");
+  });
+
+  it("returns null when row content is null", async () => {
+    mockSelect.mockResolvedValueOnce([{ content: null }]);
+    expect(await getChapterContent(7)).toBeNull();
+  });
+
+  it("returns null when no row matches", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+    expect(await getChapterContent(7)).toBeNull();
+  });
+});
+
+describe("clearChapterContent", () => {
+  it("nulls content and resets is_downloaded", async () => {
+    mockExecute.mockResolvedValueOnce(undefined);
+    await clearChapterContent(7);
+    const [sql, params] = mockExecute.mock.calls[0]!;
+    expect(sql).toContain("content        = NULL");
+    expect(sql).toContain("is_downloaded  = 0");
+    expect(params).toEqual([7]);
   });
 });
 

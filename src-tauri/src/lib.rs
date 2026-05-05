@@ -4,12 +4,21 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let migrations = vec![Migration {
-        version: 1,
-        description: "create initial schema (novel, chapter, category, novel_category, repository)",
-        sql: include_str!("../../drizzle/0000_slow_mach_iv.sql"),
-        kind: MigrationKind::Up,
-    }];
+    let migrations = vec![
+        Migration {
+            version: 1,
+            description:
+                "create initial schema (novel, chapter, category, novel_category, repository)",
+            sql: include_str!("../../drizzle/0000_slow_mach_iv.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "chapter: add content column (downloaded HTML body)",
+            sql: include_str!("../../drizzle/0001_fuzzy_adam_warlock.sql"),
+            kind: MigrationKind::Up,
+        },
+    ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
