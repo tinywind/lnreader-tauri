@@ -10,17 +10,31 @@ import {
   Text,
   Title,
 } from "@mantine/core";
+import { useDebouncedValue } from "@mantine/hooks";
 import { LibraryGrid } from "../components/LibraryGrid";
 import { insertNovel, listLibraryNovels } from "../db/queries/novel";
+import { useLibraryStore } from "../store/library";
 
-const LIBRARY_QUERY_KEY = ["novel", "library"] as const;
+const SEARCH_DEBOUNCE_MS = 200;
 
 export function LibraryPage() {
   const queryClient = useQueryClient();
 
+  const search = useLibraryStore((s) => s.search);
+  const selectedCategoryId = useLibraryStore((s) => s.selectedCategoryId);
+  const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+
   const novels = useQuery({
-    queryKey: LIBRARY_QUERY_KEY,
-    queryFn: listLibraryNovels,
+    queryKey: [
+      "novel",
+      "library",
+      { search: debouncedSearch, categoryId: selectedCategoryId },
+    ] as const,
+    queryFn: () =>
+      listLibraryNovels({
+        search: debouncedSearch,
+        categoryId: selectedCategoryId,
+      }),
   });
 
   const seed = useMutation({
@@ -36,6 +50,9 @@ export function LibraryPage() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["novel"] }),
   });
+
+  const filterActive =
+    debouncedSearch.trim() !== "" || selectedCategoryId !== null;
 
   return (
     <Container size="lg" py="xl">
@@ -70,6 +87,11 @@ export function LibraryPage() {
           </Alert>
         ) : novels.data && novels.data.length > 0 ? (
           <LibraryGrid novels={novels.data} />
+        ) : filterActive ? (
+          <Alert color="yellow" title="No matches">
+            No novels match the current filter. Clear the search or pick
+            a different category.
+          </Alert>
         ) : (
           <Alert color="blue" title="Empty library">
             No novels yet. Click "+ Seed novel" to insert a sample row.

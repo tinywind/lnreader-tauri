@@ -30,7 +30,7 @@ beforeEach(() => {
 });
 
 describe("listLibraryNovels", () => {
-  it("filters by in_library=1 and orders by last_read_at then name", async () => {
+  it("filters by in_library=1 and orders by last_read_at then name (default)", async () => {
     const db = stubDb();
     db.select.mockResolvedValueOnce([
       {
@@ -47,11 +47,12 @@ describe("listLibraryNovels", () => {
     const rows = await listLibraryNovels();
 
     expect(db.select).toHaveBeenCalledOnce();
-    const [sql] = db.select.mock.calls[0]!;
-    expect(sql).toContain("FROM novel");
-    expect(sql).toContain("in_library = 1");
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain("FROM novel n");
+    expect(sql).toContain("n.in_library = 1");
     expect(sql).toContain("ORDER BY");
     expect(sql).toContain("last_read_at");
+    expect(params).toEqual([]);
     expect(rows).toEqual([
       {
         id: 1,
@@ -63,6 +64,54 @@ describe("listLibraryNovels", () => {
         lastReadAt: 1000,
       },
     ]);
+  });
+
+  it("appends a case-insensitive name LIKE clause when search is provided", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ search: "  Hero " });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain("LIKE '%' || $1 || '%'");
+    expect(sql).toContain("COLLATE NOCASE");
+    expect(params).toEqual(["Hero"]);
+  });
+
+  it("appends an EXISTS novel_category clause when categoryId is provided", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ categoryId: 7 });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain(
+      "EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id AND nc.category_id = $1)",
+    );
+    expect(params).toEqual([7]);
+  });
+
+  it("combines search and categoryId with stable param order", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ search: "abc", categoryId: 3 });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain("$1");
+    expect(sql).toContain("$2");
+    expect(params).toEqual(["abc", 3]);
+  });
+
+  it("ignores blank/whitespace-only search input", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ search: "   " });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).not.toContain("LIKE");
+    expect(params).toEqual([]);
   });
 });
 
