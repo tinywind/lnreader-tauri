@@ -14,13 +14,24 @@ commit `639a2538` of `lnreader/lnreader` (HEAD as of 2026-05-04) as
 |---|---|---|
 | Reader behaviors worth reproducing | [`reader/specification.md`](./reader/specification.md) | Reading-experience inspiration. |
 | Plugin scraper contract (upstream's) | [`plugins/contract.md`](./plugins/contract.md) | Pattern reference; we may diverge from the literal contract where simpler. |
-| Cloudflare hidden-WebView pipeline | [`plugins/cloudflare-bypass.md`](./plugins/cloudflare-bypass.md) | Technical pattern (load-bearing for Sprint 2). |
 | Per-screen layouts | [`screens/`](./screens/) | UX inspiration only. |
 | Critical user paths | [`acceptance/critical-paths.md`](./acceptance/critical-paths.md) | User-journey inspiration. |
-| Backup wire format (upstream's) | [`backup/format.md`](./backup/format.md) | **Superseded.** We design our own format in Sprint 5. |
-| Settings catalog (upstream's MMKV keys) | [`settings/catalog.md`](./settings/catalog.md) | **Superseded.** We design our own keys in Sprint 0+. |
-| Domain ER model (upstream's) | [`domain/model.md`](./domain/model.md) | **Superseded.** We design fresh schema in Sprint 0. |
 | Code signing / auto-update plan | [`release/signing.md`](./release/signing.md) | **Deferred to v0.2.** v0.1 ships unsigned debug builds. |
+
+Removed (no longer tracked because the v0.1 implementation
+diverged enough that the upstream notes were just confusing):
+
+- `backup/format.md` — superseded by our own format in
+  `src/lib/backup/format.ts` + Sprint 5 commits.
+- `domain/model.md` — superseded by `src/db/schema.ts` (drizzle).
+- `settings/catalog.md` — superseded by per-feature Zustand stores
+  + DB tables.
+- `plugins/cloudflare-bypass.md` — described upstream's hidden
+  webview auto-solver. v0.1 instead routes plugin fetches through
+  Rust `reqwest` with cookies harvested from a persistent embedded
+  scraper Webview (the user clears CF interactively in the in-app
+  site browser, cookies persist, subsequent fetches reuse them).
+  See `src-tauri/src/scraper.rs` and `src/lib/http.ts`.
 
 ## Pinned upstream version
 
@@ -51,14 +62,46 @@ Sprint completion table (matches `prd.md §8`):
 |---|---|---|
 | 0 | Toolchain, scaffold, fresh DB schema, drizzle bridge | **Done** |
 | 1 | Library tab end-to-end | **Done** |
-| 2 | Plugin scraping + Cloudflare hidden-WebView | **Done** |
+| 2 | Plugin scraping + in-app site browser overlay | **Done** (architecture diverges from upstream — see below) |
 | 3 | Reader (paged + scroll, single chapter) | **Done** (real chapter content wired in part 3b) |
 | 4 | Background download | **Desktop done**, Android FG service plugin deferred |
 | 5 | Backup & restore (local) | **Done** (manifest + zip pack/unpack + DB gather/apply + dialog UI) |
 | 6 | Remaining UI surface + polish | **Mostly done** — Library, Browse, Search, Reader, Novel detail, Updates, History, More all functional |
 
-Counts: **45 commits**, **139 vitest cases / 18 files** passing,
+Counts: **60 commits**, **134 vitest cases / 17 files** passing,
 **3 cargo backup tests** passing, `tsc --noEmit` clean.
+
+### Sprint 2 architecture (diverged from upstream)
+
+Upstream's "hidden webview auto-solves CF and returns cookies
+synchronously per fetch" pattern (originally captured in the
+now-deleted `plugins/cloudflare-bypass.md`) ran into two walls in
+WebView2:
+
+- An external page's IPC fetch carries an opaque/null Origin that
+  Tauri's invoke handshake rejects with
+  *"Origin header is not a valid URL"* — the JS-eval-callback path
+  never reaches Rust.
+- `--disable-web-security` strips the Origin header on EVERY IPC
+  call (it's a process-wide WebView2 flag), so handing the scraper
+  CORS bypass that way breaks the main window's IPC too.
+
+What ships instead:
+
+- A single persistent child Webview ("scraper") attached to the
+  main window. It owns the WebView2 cookie jar and is the surface
+  React's `SiteBrowserOverlay` paints into when the user opens the
+  in-app site browser as a full-screen layered modal.
+- `webview_fetch` IPC reads cookies from the scraper's jar via
+  `Webview::cookies_for_url` and issues the request from Rust with
+  `reqwest` + an Edge-shaped User-Agent. CF challenges and logins
+  resolve by the user manually navigating the scraper to the site
+  via "Open site"; the cookies persist for subsequent fetches.
+
+Plus a small but important adjacency: `installed_plugin` and
+`repository_index_cache` tables (drizzle migration v3) so installed
+plugins survive restart and Browse renders from cache without
+re-fetching repo indexes on every mount.
 
 ### Routes shipping in v0.1
 
@@ -112,8 +155,12 @@ Per `CLAUDE.md §9`:
 - Rust 1.95.0 stable (cargo at `~/.cargo/bin`)
 - VS 2022 Build Tools (MSVC 14.44 + Win11 SDK)
 - `tauri-plugin-{sql,http,deep-link,dialog,shell}` 2.x
-- `zip = "2"` + `tempfile = "3"` (dev-dep) on the Rust side
-- `@tauri-apps/{api,plugin-sql,plugin-http,plugin-deep-link,plugin-dialog,plugin-shell}` on the JS side
+- `tauri = { features = ["unstable"] }` for the child-Webview
+  `Window::add_child` API
+- `reqwest = "0.12"` + `zip = "2"` + `tempfile = "3"` (dev-dep) on
+  the Rust side
+- `@tauri-apps/{api,plugin-sql,plugin-http,plugin-deep-link,plugin-dialog,plugin-shell}`
+  + `@mantine/notifications` on the JS side
 
 Android Studio is **not** installed in this session — the prerequisite
 for Sprint 4 part 3 work.

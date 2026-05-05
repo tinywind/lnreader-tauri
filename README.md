@@ -21,13 +21,13 @@ compatibility constraints.
 |---|---|---|
 | 0 | Toolchain, scaffold, fresh DB schema | **done** |
 | 1 | Library tab end-to-end | **done** |
-| 2 | Plugin scraping + Cloudflare hidden webview | **done** |
+| 2 | Plugin scraping + in-app site browser overlay | **done** (architecture diverges from upstream — see HANDOFF) |
 | 3 | Reader (paged + scroll) | **done** |
 | 4 | Background download | **desktop done** (Android FG-service plugin deferred to v0.2) |
 | 5 | Backup / restore (local) | **done** |
 | 6 | Remaining UI surface + polish | **done** |
 
-Counts: 46 commits, 139 vitest cases / 18 files, 3 cargo backup
+Counts: 60 commits, 134 vitest cases / 17 files, 3 cargo backup
 tests, `tsc --noEmit` clean. Desktop release build (`pnpm tauri
 build --no-bundle`) green. See
 [`docs/HANDOFF.md` v0.1 status snapshot](./docs/HANDOFF.md#v01-status-snapshot-as-of-2026-05-05)
