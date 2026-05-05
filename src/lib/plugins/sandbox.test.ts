@@ -1,0 +1,68 @@
+import { describe, expect, it, vi } from "vitest";
+import { PluginSandboxError, loadPlugin } from "./sandbox";
+
+describe("loadPlugin", () => {
+  it("returns the default export from a CommonJS plugin", () => {
+    const source = `
+      module.exports.default = {
+        id: "test-plugin",
+        name: "Test",
+        version: "1.0.0",
+      };
+    `;
+    const plugin = loadPlugin(source);
+    expect(plugin).toMatchObject({
+      id: "test-plugin",
+      name: "Test",
+      version: "1.0.0",
+    });
+  });
+
+  it("throws PluginSandboxError when no default export is set", () => {
+    expect(() => loadPlugin("module.exports = { id: 'test' };")).toThrow(
+      PluginSandboxError,
+    );
+  });
+
+  it("throws PluginSandboxError on a syntax error", () => {
+    expect(() => loadPlugin("const x = ;")).toThrow(PluginSandboxError);
+  });
+
+  it("throws PluginSandboxError when plugin code throws at load", () => {
+    const source = `throw new Error("boom"); module.exports.default = {};`;
+    expect(() => loadPlugin(source)).toThrow(PluginSandboxError);
+  });
+
+  it("forwards required modules through resolveRequire", () => {
+    const source = `
+      const helper = require("@libs/test-helper");
+      module.exports.default = { id: helper.id() };
+    `;
+    const plugin = loadPlugin(source, {
+      resolveRequire: (id) => {
+        if (id === "@libs/test-helper") {
+          return { id: () => "resolved-id" };
+        }
+        throw new Error(`unexpected require: ${id}`);
+      },
+    });
+    expect(plugin.id).toBe("resolved-id");
+  });
+
+  it("default resolveRequire rejects every module id", () => {
+    const source = `require("anything"); module.exports.default = {};`;
+    expect(() => loadPlugin(source)).toThrow(PluginSandboxError);
+  });
+
+  it("invokes the caller's resolveRequire with the requested id", () => {
+    const resolveRequire = vi.fn(() => ({ noop: true }));
+    const source = `
+      require("a");
+      require("b");
+      module.exports.default = { id: "x", name: "X", version: "1" };
+    `;
+    loadPlugin(source, { resolveRequire });
+    expect(resolveRequire).toHaveBeenCalledWith("a");
+    expect(resolveRequire).toHaveBeenCalledWith("b");
+  });
+});
