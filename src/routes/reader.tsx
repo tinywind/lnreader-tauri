@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionIcon,
   Container,
@@ -11,7 +12,11 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { ReaderContent } from "../components/ReaderContent";
+import {
+  ReaderContent,
+  type ClickZone,
+  type ReaderContentHandle,
+} from "../components/ReaderContent";
 import { useReaderStore, type ReaderTheme } from "../store/reader";
 
 const SAMPLE_CHAPTER_HTML = `
@@ -95,90 +100,175 @@ export function ReaderPage() {
   const setTheme = useReaderStore((s) => s.setTheme);
   const reset = useReaderStore((s) => s.reset);
 
+  const contentRef = useRef<ReaderContentHandle | null>(null);
+  const [chromeVisible, setChromeVisible] = useState(true);
+
+  const goNext = useCallback(() => {
+    contentRef.current?.scrollByPage(1);
+  }, []);
+  const goPrev = useCallback(() => {
+    contentRef.current?.scrollByPage(-1);
+  }, []);
+
+  const handleClickZone = useCallback(
+    (zone: ClickZone) => {
+      if (zone === "top") {
+        goPrev();
+      } else if (zone === "bottom") {
+        goNext();
+      } else {
+        setChromeVisible((open) => !open);
+      }
+    },
+    [goNext, goPrev],
+  );
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      // Ignore when focus is in a form control (Slider, Input, etc).
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      switch (event.key) {
+        case "PageDown":
+        case "ArrowDown":
+        case " ":
+        case "ArrowRight":
+          event.preventDefault();
+          goNext();
+          break;
+        case "PageUp":
+        case "ArrowUp":
+        case "ArrowLeft":
+          event.preventDefault();
+          goPrev();
+          break;
+        case "Home":
+          event.preventDefault();
+          contentRef.current?.scrollToStart();
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [goNext, goPrev]);
+
   return (
     <Stack gap={0}>
-      <Container size="lg" py="md">
-        <Paper withBorder p="md" radius="md">
-          <Stack gap="sm">
-            <Group justify="space-between" align="baseline">
-              <Title order={3}>Reader settings</Title>
-              <ActionIcon
-                variant="subtle"
-                size="sm"
-                onClick={reset}
-                aria-label="Reset reader settings"
-              >
-                ↺
-              </ActionIcon>
-            </Group>
+      {chromeVisible ? (
+        <>
+          <Container size="lg" py="md">
+            <Paper withBorder p="md" radius="md">
+              <Stack gap="sm">
+                <Group justify="space-between" align="baseline">
+                  <Title order={3}>Reader settings</Title>
+                  <Group gap="xs">
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => setChromeVisible(false)}
+                      aria-label="Hide chrome"
+                    >
+                      –
+                    </ActionIcon>
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      onClick={reset}
+                      aria-label="Reset reader settings"
+                    >
+                      ↺
+                    </ActionIcon>
+                  </Group>
+                </Group>
 
-            <Group justify="space-between" wrap="nowrap">
-              <Text size="sm">Paged mode</Text>
-              <Switch checked={paged} onChange={togglePaged} />
-            </Group>
+                <Group justify="space-between" wrap="nowrap">
+                  <Text size="sm">Paged mode</Text>
+                  <Switch checked={paged} onChange={togglePaged} />
+                </Group>
 
-            <Stack gap={2}>
-              <Group justify="space-between">
-                <Text size="sm">Font size</Text>
-                <Text size="sm" c="dimmed">
-                  {fontSize}px
+                <Stack gap={2}>
+                  <Group justify="space-between">
+                    <Text size="sm">Font size</Text>
+                    <Text size="sm" c="dimmed">
+                      {fontSize}px
+                    </Text>
+                  </Group>
+                  <Slider
+                    min={12}
+                    max={36}
+                    step={1}
+                    value={fontSize}
+                    onChange={setFontSize}
+                    marks={[
+                      { value: 14, label: "14" },
+                      { value: 20, label: "20" },
+                      { value: 28, label: "28" },
+                    ]}
+                  />
+                </Stack>
+
+                <Stack gap={2}>
+                  <Group justify="space-between">
+                    <Text size="sm">Line height</Text>
+                    <Text size="sm" c="dimmed">
+                      {lineHeight.toFixed(2)}
+                    </Text>
+                  </Group>
+                  <Slider
+                    min={1.0}
+                    max={2.4}
+                    step={0.05}
+                    value={lineHeight}
+                    onChange={setLineHeight}
+                    marks={[
+                      { value: 1.2, label: "1.2" },
+                      { value: 1.6, label: "1.6" },
+                      { value: 2.0, label: "2.0" },
+                    ]}
+                  />
+                </Stack>
+
+                <Group justify="space-between">
+                  <Text size="sm">Theme</Text>
+                  <SegmentedControl
+                    size="xs"
+                    value={theme}
+                    onChange={(value) => setTheme(value as ReaderTheme)}
+                    data={[
+                      { value: "light", label: "Light" },
+                      { value: "sepia", label: "Sepia" },
+                      { value: "dark", label: "Dark" },
+                    ]}
+                  />
+                </Group>
+
+                <Text size="xs" c="dimmed">
+                  Click the top/bottom thirds of the page to navigate.
+                  Click the middle third to hide/show this panel.
+                  Keyboard: PageDown / ArrowDown / Space → next,
+                  PageUp / ArrowUp → previous, Home → start.
                 </Text>
-              </Group>
-              <Slider
-                min={12}
-                max={36}
-                step={1}
-                value={fontSize}
-                onChange={setFontSize}
-                marks={[
-                  { value: 14, label: "14" },
-                  { value: 20, label: "20" },
-                  { value: 28, label: "28" },
-                ]}
-              />
-            </Stack>
+              </Stack>
+            </Paper>
+          </Container>
+          <Divider />
+        </>
+      ) : null}
 
-            <Stack gap={2}>
-              <Group justify="space-between">
-                <Text size="sm">Line height</Text>
-                <Text size="sm" c="dimmed">
-                  {lineHeight.toFixed(2)}
-                </Text>
-              </Group>
-              <Slider
-                min={1.0}
-                max={2.4}
-                step={0.05}
-                value={lineHeight}
-                onChange={setLineHeight}
-                marks={[
-                  { value: 1.2, label: "1.2" },
-                  { value: 1.6, label: "1.6" },
-                  { value: 2.0, label: "2.0" },
-                ]}
-              />
-            </Stack>
-
-            <Group justify="space-between">
-              <Text size="sm">Theme</Text>
-              <SegmentedControl
-                size="xs"
-                value={theme}
-                onChange={(value) => setTheme(value as ReaderTheme)}
-                data={[
-                  { value: "light", label: "Light" },
-                  { value: "sepia", label: "Sepia" },
-                  { value: "dark", label: "Dark" },
-                ]}
-              />
-            </Group>
-          </Stack>
-        </Paper>
-      </Container>
-
-      <Divider />
-
-      <ReaderContent html={SAMPLE_CHAPTER_HTML} />
+      <ReaderContent
+        ref={contentRef}
+        html={SAMPLE_CHAPTER_HTML}
+        onClickZone={handleClickZone}
+      />
     </Stack>
   );
 }
