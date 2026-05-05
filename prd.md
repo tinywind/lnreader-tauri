@@ -185,6 +185,13 @@ Everything else is configuration of plugins listed in §6.
 Each sprint is one focused week. Don't work on Sprint N+1 until
 Sprint N's acceptance is met.
 
+> **v0.1 status (2026-05-05)** — Sprints 0–3, 5, 6 fully done.
+> Sprint 4 desktop done; the Android foreground-service plugin is
+> deferred to v0.2 (acceptance requires manual smoke on a real
+> Android device, see `docs/HANDOFF.md#v01-status-snapshot`). The
+> rest of this section reflects the planned acceptance bar; see the
+> handoff snapshot for the actual delivered surface.
+
 ### Sprint 0 — toolchain, scaffold, DB bridge
 
 - `pnpm create tauri-app` with React + TypeScript + Vite.

@@ -19,13 +19,48 @@ compatibility constraints.
 
 | Sprint | Theme | Status |
 |---|---|---|
-| 0 | Toolchain, scaffold, fresh DB schema | **done** ✅ Win desktop build green; Hello DB row smoke verified |
-| 1 | Library tab end-to-end | in progress |
-| 2 | Plugin scraping + Cloudflare hidden webview | not started |
-| 3 | Reader (paged + scroll) | not started |
-| 4 | Background download (Android foreground service) | not started |
-| 5 | Backup / restore (local + self-hosted) | not started |
-| 6 | Remaining UI surface + polish | not started |
+| 0 | Toolchain, scaffold, fresh DB schema | **done** |
+| 1 | Library tab end-to-end | **done** |
+| 2 | Plugin scraping + Cloudflare hidden webview | **done** |
+| 3 | Reader (paged + scroll) | **done** |
+| 4 | Background download | **desktop done** (Android FG-service plugin deferred to v0.2) |
+| 5 | Backup / restore (local) | **done** |
+| 6 | Remaining UI surface + polish | **done** |
+
+Counts: 46 commits, 139 vitest cases / 18 files, 3 cargo backup
+tests, `tsc --noEmit` clean. Desktop release build (`pnpm tauri
+build --no-bundle`) green. See
+[`docs/HANDOFF.md` v0.1 status snapshot](./docs/HANDOFF.md#v01-status-snapshot-as-of-2026-05-05)
+for what remains before tagging 0.1.0 (manual smoke checklist +
+Android device validation).
+
+## Routes shipping in v0.1
+
+- `/` Library — search + categories + selection
+- `/browse` Browse + plugin install/uninstall
+- `/search` Global search (bounded concurrency 3 + AbortController)
+- `/novel?id=N` Novel detail + chapter list + per-chapter Download
+- `/reader?chapterId=N` Reader (paged + scroll + click zones)
+- `/updates` Unread chapters across the library
+- `/history` Recently-read chapters
+- `/more` Backup export/import + GitHub release link
+
+## Develop
+
+```bash
+pnpm install
+pnpm tauri dev          # desktop dev (Windows/Linux)
+pnpm test --run         # vitest
+pnpm tsc --noEmit       # type check
+```
+
+Rust-side checks:
+
+```bash
+cd src-tauri
+cargo check
+cargo test --lib
+```
 
 ## License
 
