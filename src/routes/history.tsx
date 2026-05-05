@@ -70,7 +70,7 @@ function HistoryRow({ entry, onOpen, onOpenNovel }: HistoryRowProps) {
             {entry.novelName}
           </Anchor>
           <Text size="sm" lineClamp={1} title={entry.chapterName}>
-            #{entry.position} — {entry.chapterName}
+            #{entry.position} - {entry.chapterName}
           </Text>
           <Text size="xs" c="dimmed">
             Read {formatDateTime(entry.readAt)}
@@ -107,7 +107,7 @@ export function HistoryPage() {
         {query.isLoading ? (
           <Group gap="sm">
             <Loader size="sm" />
-            <Text c="dimmed">Loading history…</Text>
+            <Text c="dimmed">Loading history...</Text>
           </Group>
         ) : query.error ? (
           <Alert color="red" title="Failed to load history">
@@ -128,7 +128,7 @@ export function HistoryPage() {
           </Stack>
         ) : (
           <Alert color="blue" variant="light" title="No reading yet">
-            Chapters you finish reading will show up here.
+            Chapters you start reading will show up here.
           </Alert>
         )}
       </Stack>

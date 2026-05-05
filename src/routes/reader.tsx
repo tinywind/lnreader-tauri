@@ -1,30 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
-  ActionIcon,
   Alert,
-  Container,
-  Divider,
+  Badge,
+  Box,
+  Button,
+  ColorInput,
+  Drawer,
   Group,
-  Paper,
+  NumberInput,
   SegmentedControl,
+  Select,
   Slider,
   Stack,
   Switch,
+  Tabs,
   Text,
-  Title,
+  Textarea,
 } from "@mantine/core";
 import {
   ReaderContent,
-  type ClickZone,
   type ReaderContentHandle,
 } from "../components/ReaderContent";
-import { getChapterById } from "../db/queries/chapter";
+import {
+  getAdjacentChapter,
+  getChapterById,
+  markChapterOpened,
+  setChapterBookmark,
+  updateChapterProgress,
+} from "../db/queries/chapter";
 import { readerRoute } from "../router";
-import { useReaderStore, type ReaderTheme } from "../store/reader";
+import { useLibraryStore } from "../store/library";
+import {
+  READER_FONT_OPTIONS,
+  READER_PRESET_THEMES,
+  useReaderStore,
+} from "../store/reader";
 
 const SAMPLE_CHAPTER_HTML = `
-<h1>Chapter 1 — A long road begins</h1>
+<h1>Chapter 1 - A long road begins</h1>
 <p>
   The wind carried the scent of pine and old rain across the road, and
   for a moment the boy thought he could hear the river even before he
@@ -35,7 +50,7 @@ const SAMPLE_CHAPTER_HTML = `
 <p>
   His father had said only that the journey would not be a kind one.
   His mother, who had no patience for either drama or doubt, had
-  packed his satchel with practical things — flatbread wrapped in
+  packed his satchel with practical things: flatbread wrapped in
   oiled paper, three apples, a little sealed pot of honey, the knife
   he had been allowed to whet but not yet to keep, and three coins of
   middling worth.
@@ -55,93 +70,141 @@ const SAMPLE_CHAPTER_HTML = `
   his middling coins on the windowsill and walked across without
   waking him.
 </p>
-<p>
-  On the other side the country opened out. Wheat had been brought
-  in, and the fields lay yellow and clean. Crows turned in the air
-  above the gleanings. The boy ate one of his apples and threw the
-  core to the nearest crow as a courtesy.
-</p>
-<p>
-  The day grew warm, then cooled. He passed two travellers — a man
-  with a goat on a string, and a woman with a sleeping baby slung
-  across her chest — and he greeted each of them politely in the way
-  his mother had drilled into him. They greeted him back the way
-  travellers do: tired, kind enough, in no mood to say more.
-</p>
-<h2>II.</h2>
-<p>
-  Toward evening he came upon a stand of elms ringed by a low stone
-  wall. Inside the ring there was a well, and beside the well there
-  was a bench, and on the bench there was a woman so small and still
-  that for a moment the boy mistook her for a heap of cloth left
-  there to dry. Then she opened her eyes.
-</p>
-<p>
-  "You are walking late," she said, and her voice was the voice of
-  someone who had been awake a long time but did not particularly
-  mind it. "Where are you going?"
-</p>
-<p>
-  He told her where he was going. She nodded, not surprised, the way
-  a wood-cutter nods when told a tree will fall in winter. Then she
-  asked his name, and he told her that too.
-</p>
-<p>
-  "Rest a while," she said, and made room on the bench. "The wolves
-  this year are thin and bold, and the road past these elms is no
-  road for a tired boy."
-</p>
 `;
+
+function chapterDetailKey(chapterId: number) {
+  return ["chapter", "detail", chapterId] as const;
+}
 
 export function ReaderPage() {
   const { chapterId } = readerRoute.useSearch();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const contentRef = useRef<ReaderContentHandle | null>(null);
+  const openedChapterRef = useRef<number | null>(null);
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const incognitoMode = useLibraryStore((state) => state.incognitoMode);
+  const general = useReaderStore((state) => state.general);
+  const appearance = useReaderStore((state) => state.appearance);
+  const setGeneral = useReaderStore((state) => state.setGeneral);
+  const setAppearance = useReaderStore((state) => state.setAppearance);
+  const applyTheme = useReaderStore((state) => state.applyTheme);
+  const saveCustomTheme = useReaderStore((state) => state.saveCustomTheme);
+  const setLastReadChapter = useReaderStore(
+    (state) => state.setLastReadChapter,
+  );
+  const setNovelPageIndex = useReaderStore((state) => state.setNovelPageIndex);
+  const resetReaderSettings = useReaderStore(
+    (state) => state.resetReaderSettings,
+  );
+
   const chapterQuery = useQuery({
-    queryKey: ["chapter", "detail", chapterId] as const,
+    queryKey: chapterDetailKey(chapterId),
     queryFn: () => getChapterById(chapterId),
     enabled: chapterId > 0,
   });
 
-  const paged = useReaderStore((s) => s.paged);
-  const fontSize = useReaderStore((s) => s.fontSize);
-  const lineHeight = useReaderStore((s) => s.lineHeight);
-  const theme = useReaderStore((s) => s.theme);
-  const togglePaged = useReaderStore((s) => s.togglePaged);
-  const setFontSize = useReaderStore((s) => s.setFontSize);
-  const setLineHeight = useReaderStore((s) => s.setLineHeight);
-  const setTheme = useReaderStore((s) => s.setTheme);
-  const reset = useReaderStore((s) => s.reset);
-
-  const contentRef = useRef<ReaderContentHandle | null>(null);
-  const [chromeVisible, setChromeVisible] = useState(true);
-
-  const goNext = useCallback(() => {
-    contentRef.current?.scrollByPage(1);
-  }, []);
-  const goPrev = useCallback(() => {
-    contentRef.current?.scrollByPage(-1);
-  }, []);
-
-  const handleClickZone = useCallback(
-    (zone: ClickZone) => {
-      if (zone === "top") {
-        goPrev();
-      } else if (zone === "bottom") {
-        goNext();
-      } else {
-        setChromeVisible((open) => !open);
+  const progressMutation = useMutation({
+    mutationFn: (progress: number) =>
+      updateChapterProgress(chapterId, progress, {
+        recordHistory: !incognitoMode,
+    }),
+    onMutate: (progress) => {
+      queryClient.setQueryData<Awaited<ReturnType<typeof getChapterById>>>(
+        chapterDetailKey(chapterId),
+        (chapter) =>
+          chapter
+            ? {
+                ...chapter,
+                progress,
+                unread: progress >= 97 ? false : chapter.unread,
+                readAt: incognitoMode
+                  ? chapter.readAt
+                  : Math.floor(Date.now() / 1000),
+              }
+            : chapter,
+      );
+    },
+    onSuccess: (_result, progress) => {
+      if (!incognitoMode) {
+        void queryClient.invalidateQueries({ queryKey: ["chapter", "history"] });
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+      }
+      if (progress >= 97) {
+        void queryClient.invalidateQueries({ queryKey: ["chapter", "updates"] });
       }
     },
-    [goNext, goPrev],
+  });
+  const progressMutateRef = useRef(progressMutation.mutate);
+
+  useEffect(() => {
+    progressMutateRef.current = progressMutation.mutate;
+  }, [progressMutation.mutate]);
+
+  const bookmarkMutation = useMutation({
+    mutationFn: async () => {
+      const chapter = chapterQuery.data;
+      if (!chapter) return;
+      await setChapterBookmark(chapter.id, !chapter.bookmark);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: chapterDetailKey(chapterId),
+      });
+    },
+  });
+
+  const readerThemes = useMemo(
+    () => [...READER_PRESET_THEMES, ...appearance.customThemes],
+    [appearance.customThemes],
+  );
+
+  const openAdjacent = useCallback(
+    async (direction: 1 | -1) => {
+      const chapter = chapterQuery.data;
+      if (!chapter) return;
+      const adjacent = await getAdjacentChapter(
+        chapter.novelId,
+        chapter.position,
+        direction,
+      );
+      if (adjacent) {
+        openedChapterRef.current = null;
+        void navigate({ to: "/reader", search: { chapterId: adjacent.id } });
+      }
+    },
+    [chapterQuery.data, navigate],
   );
 
   useEffect(() => {
+    const chapter = chapterQuery.data;
+    if (
+      !chapter ||
+      !chapter.isDownloaded ||
+      openedChapterRef.current === chapter.id
+    ) {
+      return;
+    }
+    openedChapterRef.current = chapter.id;
+    setLastReadChapter(chapter.novelId, chapter.id);
+    if (!incognitoMode) {
+      void markChapterOpened(chapter.id).then(() => {
+        void queryClient.invalidateQueries({ queryKey: ["chapter", "history"] });
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+      });
+    }
+  }, [chapterQuery.data, incognitoMode, queryClient, setLastReadChapter]);
+
+  useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      // Ignore when focus is in a form control (Slider, Input, etc).
       const target = event.target as HTMLElement | null;
       if (
         target &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
           target.isContentEditable)
       ) {
         return;
@@ -152,13 +215,13 @@ export function ReaderPage() {
         case " ":
         case "ArrowRight":
           event.preventDefault();
-          goNext();
+          contentRef.current?.scrollByPage(1);
           break;
         case "PageUp":
         case "ArrowUp":
         case "ArrowLeft":
           event.preventDefault();
-          goPrev();
+          contentRef.current?.scrollByPage(-1);
           break;
         case "Home":
           event.preventDefault();
@@ -170,133 +233,394 @@ export function ReaderPage() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [goNext, goPrev]);
+  }, []);
+
+  function handleSaveCustomTheme(): void {
+    const id = `custom-${Date.now()}`;
+    saveCustomTheme({
+      id,
+      label: `Custom ${appearance.customThemes.length + 1}`,
+      backgroundColor: appearance.backgroundColor,
+      textColor: appearance.textColor,
+    });
+    setAppearance({ themeId: id });
+  }
+
+  const chapter = chapterQuery.data;
+  const html = chapter?.content ?? SAMPLE_CHAPTER_HTML;
+  const progress = chapter?.progress ?? 0;
+  const chapterNovelId = chapter?.novelId;
+  const handleProgressChange = useCallback(
+    (nextProgress: number) => {
+      if (chapterId > 0) {
+        progressMutateRef.current(nextProgress);
+      }
+    },
+    [chapterId],
+  );
+  const handlePageIndexChange = useCallback(
+    (pageIndex: number) => {
+      if (chapterNovelId) setNovelPageIndex(chapterNovelId, pageIndex);
+    },
+    [chapterNovelId, setNovelPageIndex],
+  );
 
   return (
-    <Stack gap={0}>
+    <Box style={{ position: "relative" }}>
       {chromeVisible ? (
-        <>
-          <Container size="lg" py="md">
-            <Paper withBorder p="md" radius="md">
-              <Stack gap="sm">
-                <Group justify="space-between" align="baseline">
-                  <Title order={3}>Reader settings</Title>
-                  <Group gap="xs">
-                    <ActionIcon
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => setChromeVisible(false)}
-                      aria-label="Hide chrome"
-                    >
-                      –
-                    </ActionIcon>
-                    <ActionIcon
-                      variant="subtle"
-                      size="sm"
-                      onClick={reset}
-                      aria-label="Reset reader settings"
-                    >
-                      ↺
-                    </ActionIcon>
-                  </Group>
-                </Group>
-
-                <Group justify="space-between" wrap="nowrap">
-                  <Text size="sm">Paged mode</Text>
-                  <Switch checked={paged} onChange={togglePaged} />
-                </Group>
-
-                <Stack gap={2}>
-                  <Group justify="space-between">
-                    <Text size="sm">Font size</Text>
-                    <Text size="sm" c="dimmed">
-                      {fontSize}px
-                    </Text>
-                  </Group>
-                  <Slider
-                    min={12}
-                    max={36}
-                    step={1}
-                    value={fontSize}
-                    onChange={setFontSize}
-                    marks={[
-                      { value: 14, label: "14" },
-                      { value: 20, label: "20" },
-                      { value: 28, label: "28" },
-                    ]}
-                  />
-                </Stack>
-
-                <Stack gap={2}>
-                  <Group justify="space-between">
-                    <Text size="sm">Line height</Text>
-                    <Text size="sm" c="dimmed">
-                      {lineHeight.toFixed(2)}
-                    </Text>
-                  </Group>
-                  <Slider
-                    min={1.0}
-                    max={2.4}
-                    step={0.05}
-                    value={lineHeight}
-                    onChange={setLineHeight}
-                    marks={[
-                      { value: 1.2, label: "1.2" },
-                      { value: 1.6, label: "1.6" },
-                      { value: 2.0, label: "2.0" },
-                    ]}
-                  />
-                </Stack>
-
-                <Group justify="space-between">
-                  <Text size="sm">Theme</Text>
-                  <SegmentedControl
-                    size="xs"
-                    value={theme}
-                    onChange={(value) => setTheme(value as ReaderTheme)}
-                    data={[
-                      { value: "light", label: "Light" },
-                      { value: "sepia", label: "Sepia" },
-                      { value: "dark", label: "Dark" },
-                    ]}
-                  />
-                </Group>
-
-                <Text size="xs" c="dimmed">
-                  Click the top/bottom thirds of the page to navigate.
-                  Click the middle third to hide/show this panel.
-                  Keyboard: PageDown / ArrowDown / Space → next,
-                  PageUp / ArrowUp → previous, Home → start.
-                </Text>
-              </Stack>
-            </Paper>
-          </Container>
-          <Divider />
-        </>
+        <Group
+          gap="xs"
+          style={{
+            position: "fixed",
+            zIndex: 10,
+            top: general.fullScreen ? 8 : 64,
+            left: 12,
+            right: 12,
+            justifyContent: "space-between",
+            pointerEvents: "none",
+          }}
+        >
+          <Group gap="xs" style={{ pointerEvents: "auto" }}>
+            <Button size="xs" variant="default" onClick={() => setSettingsOpen(true)}>
+              Settings
+            </Button>
+            {chapter ? (
+              <Button
+                size="xs"
+                variant={chapter.bookmark ? "light" : "default"}
+                loading={bookmarkMutation.isPending}
+                onClick={() => bookmarkMutation.mutate()}
+              >
+                {chapter.bookmark ? "Bookmarked" : "Bookmark"}
+              </Button>
+            ) : null}
+          </Group>
+          <Group gap="xs" style={{ pointerEvents: "auto" }}>
+            {incognitoMode ? (
+              <Badge variant="light" color="gray">
+                Incognito
+              </Badge>
+            ) : null}
+            {chapter ? (
+              <Badge variant="light">
+                {chapter.name} - {Math.round(progress)}%
+              </Badge>
+            ) : null}
+            <Button size="xs" variant="default" onClick={() => setChromeVisible(false)}>
+              Hide
+            </Button>
+          </Group>
+        </Group>
       ) : null}
 
-      {chapterId > 0 && chapterQuery.data === null ? (
-        <Container size="lg" py="md">
+      {chapterId > 0 && chapterQuery.isLoading ? (
+        <Box p="lg">
+          <Alert color="blue" title="Loading chapter">
+            Loading reader content...
+          </Alert>
+        </Box>
+      ) : chapterId > 0 && chapterQuery.error ? (
+        <Box p="lg">
+          <Alert color="red" title="Failed to load chapter">
+            {chapterQuery.error instanceof Error
+              ? chapterQuery.error.message
+              : String(chapterQuery.error)}
+          </Alert>
+        </Box>
+      ) : chapterId > 0 && chapterQuery.data === null ? (
+        <Box p="lg">
           <Alert color="orange" title="Chapter not found">
             No chapter row with id {chapterId} exists in the local DB.
           </Alert>
-        </Container>
-      ) : chapterId > 0 &&
-        chapterQuery.data &&
-        !chapterQuery.data.isDownloaded ? (
-        <Container size="lg" py="md">
+        </Box>
+      ) : chapterId > 0 && chapter && !chapter.isDownloaded ? (
+        <Box p="lg">
           <Alert color="blue" title="Not downloaded yet">
             Open this chapter from the novel detail screen and tap
             "Download" to fetch its body before reading offline.
           </Alert>
-        </Container>
+        </Box>
       ) : (
         <ReaderContent
           ref={contentRef}
-          html={chapterQuery.data?.content ?? SAMPLE_CHAPTER_HTML}
-          onClickZone={handleClickZone}
+          html={html}
+          initialProgress={progress}
+          onProgressChange={handleProgressChange}
+          onPageIndexChange={handlePageIndexChange}
+          onToggleChrome={() => setChromeVisible((visible) => !visible)}
+          onBoundaryPage={(direction) => {
+            void openAdjacent(direction);
+          }}
         />
       )}
-    </Stack>
+
+      <Drawer
+        opened={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        title="Reader settings"
+        position="right"
+        size="md"
+      >
+        <Tabs defaultValue="display">
+          <Tabs.List>
+            <Tabs.Tab value="display">Display</Tabs.Tab>
+            <Tabs.Tab value="controls">Controls</Tabs.Tab>
+            <Tabs.Tab value="advanced">Advanced</Tabs.Tab>
+          </Tabs.List>
+
+          <Tabs.Panel value="display" pt="md">
+            <Stack gap="md">
+              <Select
+                label="Reader theme"
+                data={readerThemes.map((theme) => ({
+                  value: theme.id,
+                  label: theme.label,
+                }))}
+                value={appearance.themeId}
+                onChange={(themeId) => {
+                  const nextTheme = readerThemes.find(
+                    (theme) => theme.id === themeId,
+                  );
+                  if (nextTheme) applyTheme(nextTheme);
+                }}
+              />
+              <Group grow>
+                <ColorInput
+                  label="Background"
+                  value={appearance.backgroundColor}
+                  onChange={(backgroundColor) =>
+                    setAppearance({ backgroundColor })
+                  }
+                />
+                <ColorInput
+                  label="Text"
+                  value={appearance.textColor}
+                  onChange={(textColor) => setAppearance({ textColor })}
+                />
+              </Group>
+              <Stack gap={4}>
+                <Group justify="space-between">
+                  <Text size="sm">Text size</Text>
+                  <Text size="sm" c="dimmed">
+                    {appearance.textSize}px
+                  </Text>
+                </Group>
+                <Slider
+                  min={12}
+                  max={36}
+                  step={1}
+                  value={appearance.textSize}
+                  onChange={(textSize) => setAppearance({ textSize })}
+                />
+              </Stack>
+              <Stack gap={4}>
+                <Group justify="space-between">
+                  <Text size="sm">Line height</Text>
+                  <Text size="sm" c="dimmed">
+                    {appearance.lineHeight.toFixed(2)}
+                  </Text>
+                </Group>
+                <Slider
+                  min={1}
+                  max={2.6}
+                  step={0.05}
+                  value={appearance.lineHeight}
+                  onChange={(lineHeight) => setAppearance({ lineHeight })}
+                />
+              </Stack>
+              <Stack gap={4}>
+                <Group justify="space-between">
+                  <Text size="sm">Padding</Text>
+                  <Text size="sm" c="dimmed">
+                    {appearance.padding}px
+                  </Text>
+                </Group>
+                <Slider
+                  min={0}
+                  max={64}
+                  step={1}
+                  value={appearance.padding}
+                  onChange={(padding) => setAppearance({ padding })}
+                />
+              </Stack>
+              <Select
+                label="Font"
+                data={READER_FONT_OPTIONS}
+                value={appearance.fontFamily}
+                onChange={(fontFamily) =>
+                  setAppearance({ fontFamily: fontFamily ?? "" })
+                }
+              />
+              <SegmentedControl
+                value={appearance.textAlign}
+                onChange={(textAlign) =>
+                  setAppearance({
+                    textAlign: textAlign as typeof appearance.textAlign,
+                  })
+                }
+                data={[
+                  { value: "left", label: "Left" },
+                  { value: "justify", label: "Justify" },
+                  { value: "center", label: "Center" },
+                  { value: "right", label: "Right" },
+                ]}
+              />
+              <Group>
+                <Button variant="default" onClick={handleSaveCustomTheme}>
+                  Save custom theme
+                </Button>
+                <Button variant="default" onClick={resetReaderSettings}>
+                  Reset
+                </Button>
+              </Group>
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="controls" pt="md">
+            <Stack gap="sm">
+              <Switch
+                label="Fullscreen reader"
+                checked={general.fullScreen}
+                onChange={(event) =>
+                  setGeneral({ fullScreen: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Keep screen on"
+                checked={general.keepScreenOn}
+                onChange={(event) =>
+                  setGeneral({ keepScreenOn: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Paged reader"
+                checked={general.pageReader}
+                onChange={(event) =>
+                  setGeneral({ pageReader: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Swipe gestures"
+                checked={general.swipeGestures}
+                onChange={(event) =>
+                  setGeneral({ swipeGestures: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Tap to scroll"
+                checked={general.tapToScroll}
+                onChange={(event) =>
+                  setGeneral({ tapToScroll: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Seekbar"
+                checked={general.showSeekbar}
+                onChange={(event) =>
+                  setGeneral({ showSeekbar: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Vertical seekbar"
+                checked={general.verticalSeekbar}
+                onChange={(event) =>
+                  setGeneral({ verticalSeekbar: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Scroll percentage"
+                checked={general.showScrollPercentage}
+                onChange={(event) =>
+                  setGeneral({
+                    showScrollPercentage: event.currentTarget.checked,
+                  })
+                }
+              />
+              <Switch
+                label="Battery and time footer"
+                checked={general.showBatteryAndTime}
+                onChange={(event) =>
+                  setGeneral({
+                    showBatteryAndTime: event.currentTarget.checked,
+                  })
+                }
+              />
+              <Switch
+                label="Auto-scroll"
+                checked={general.autoScroll}
+                onChange={(event) =>
+                  setGeneral({ autoScroll: event.currentTarget.checked })
+                }
+              />
+              <Group grow>
+                <NumberInput
+                  label="Auto-scroll interval"
+                  value={general.autoScrollInterval}
+                  min={16}
+                  max={500}
+                  onChange={(value) => {
+                    if (typeof value === "number") {
+                      setGeneral({ autoScrollInterval: value });
+                    }
+                  }}
+                />
+                <NumberInput
+                  label="Auto-scroll offset"
+                  value={general.autoScrollOffset}
+                  min={0.25}
+                  max={12}
+                  step={0.25}
+                  onChange={(value) => {
+                    if (typeof value === "number") {
+                      setGeneral({ autoScrollOffset: value });
+                    }
+                  }}
+                />
+              </Group>
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="advanced" pt="md">
+            <Stack gap="md">
+              <Switch
+                label="Bionic reading"
+                checked={general.bionicReading}
+                onChange={(event) =>
+                  setGeneral({ bionicReading: event.currentTarget.checked })
+                }
+              />
+              <Switch
+                label="Remove extra paragraph spacing"
+                checked={general.removeExtraParagraphSpacing}
+                onChange={(event) =>
+                  setGeneral({
+                    removeExtraParagraphSpacing:
+                      event.currentTarget.checked,
+                  })
+                }
+              />
+              <Textarea
+                label="Custom CSS"
+                value={appearance.customCss}
+                autosize
+                minRows={5}
+                onChange={(event) =>
+                  setAppearance({ customCss: event.currentTarget.value })
+                }
+              />
+              <Textarea
+                label="Custom JS"
+                value={appearance.customJs}
+                autosize
+                minRows={5}
+                onChange={(event) =>
+                  setAppearance({ customJs: event.currentTarget.value })
+                }
+              />
+            </Stack>
+          </Tabs.Panel>
+        </Tabs>
+      </Drawer>
+    </Box>
   );
 }

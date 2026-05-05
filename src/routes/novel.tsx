@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Container,
   Divider,
@@ -23,7 +24,11 @@ import {
   type NovelDetailRecord,
 } from "../db/queries/novel";
 import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
+import { pluginManager } from "../lib/plugins/manager";
 import { novelRoute } from "../router";
+import { useLibraryStore } from "../store/library";
+import { useReaderStore } from "../store/reader";
+import { useSiteBrowserStore } from "../store/site-browser";
 
 const FALLBACK_COVER = "https://placehold.co/200x300?text=No+Cover";
 
@@ -36,8 +41,55 @@ function chaptersKey(id: number) {
 }
 
 function formatDate(epoch: number | null): string {
-  if (!epoch) return "—";
+  if (!epoch) return "Never";
   return new Date(epoch * 1000).toLocaleDateString();
+}
+
+function splitGenres(genres: string | null): string[] {
+  if (!genres) return [];
+  return genres
+    .split(/[|,]/)
+    .map((genre) => genre.trim())
+    .filter(Boolean);
+}
+
+function cssUrl(url: string): string {
+  return `url("${url.replace(/"/g, '\\"')}")`;
+}
+
+function findReadableChapter(
+  chapters: ChapterRow[],
+  lastReadChapterId: number | undefined,
+): ChapterRow | null {
+  return (
+    chapters.find((chapter) => chapter.id === lastReadChapterId) ??
+    chapters.find((chapter) => chapter.progress > 0 && chapter.progress < 100) ??
+    chapters.find((chapter) => chapter.unread) ??
+    chapters[0] ??
+    null
+  );
+}
+
+function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
+  if (novel.isLocal) return null;
+
+  const plugin = pluginManager.getPlugin(novel.pluginId);
+  if (!plugin) return null;
+
+  if (plugin.resolveUrl) {
+    try {
+      const resolved = plugin.resolveUrl(novel.path, true);
+      if (resolved) return resolved;
+    } catch {
+      // Fall back to resolving the path against the plugin site below.
+    }
+  }
+
+  try {
+    return new URL(novel.path, plugin.site).toString();
+  } catch {
+    return plugin.site || null;
+  }
 }
 
 interface ChapterListItemProps {
@@ -105,7 +157,7 @@ function ChapterListItem({
             )}
             {isRunning && (
               <Badge size="xs" color="blue" variant="light">
-                Downloading…
+                Downloading
               </Badge>
             )}
             {failedMessage && (
@@ -146,68 +198,210 @@ function ChapterListItem({
   );
 }
 
-interface NovelHeaderProps {
+interface NovelHeroProps {
   novel: NovelDetailRecord;
+  chapters: ChapterRow[];
+  lastReadChapterId: number | undefined;
+  onBack: () => void;
+  onRead: (chapterId: number) => void;
+  onOpenSource: () => void;
   onToggleLibrary: () => void;
+  sourceUrl: string | null;
   toggleBusy: boolean;
 }
 
-function NovelHeader({ novel, onToggleLibrary, toggleBusy }: NovelHeaderProps) {
+function NovelHero({
+  novel,
+  chapters,
+  lastReadChapterId,
+  onBack,
+  onRead,
+  onOpenSource,
+  onToggleLibrary,
+  sourceUrl,
+  toggleBusy,
+}: NovelHeroProps) {
+  const cover = novel.cover ?? FALLBACK_COVER;
+  const genres = splitGenres(novel.genres);
+  const readableChapter = findReadableChapter(chapters, lastReadChapterId);
+  const readLabel =
+    readableChapter && readableChapter.progress > 0
+      ? "Continue reading"
+      : "Start reading";
+
   return (
-    <Group align="flex-start" gap="lg" wrap="nowrap">
-      <Image
-        src={novel.cover ?? FALLBACK_COVER}
-        fallbackSrc={FALLBACK_COVER}
-        w={180}
-        h={270}
-        alt={novel.name}
-        radius="sm"
+    <Box
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: 8,
+        backgroundColor: "#151515",
+      }}
+    >
+      <Box
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage: cssUrl(cover),
+          backgroundPosition: "center",
+          backgroundSize: "cover",
+          filter: "blur(16px)",
+          opacity: 0.32,
+          transform: "scale(1.08)",
+        }}
       />
-      <Stack gap="xs" style={{ flex: 1, minWidth: 0 }}>
-        <Title order={2}>{novel.name}</Title>
-        {novel.author && <Text size="sm">by {novel.author}</Text>}
-        {novel.artist && novel.artist !== novel.author && (
-          <Text size="sm" c="dimmed">
-            art: {novel.artist}
+      <Box
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(90deg, rgba(10, 10, 10, 0.92), rgba(20, 20, 20, 0.74) 52%, rgba(20, 20, 20, 0.48))",
+        }}
+      />
+
+      <Stack
+        gap="lg"
+        p={{ base: "md", sm: "xl" }}
+        style={{ position: "relative", zIndex: 1 }}
+      >
+        <Group justify="space-between" align="center" gap="sm">
+          <Button variant="light" color="gray" onClick={onBack}>
+            Back
+          </Button>
+          <Text size="sm" c="gray.3" ta="right">
+            Source: {novel.pluginId}
           </Text>
-        )}
-        <Group gap="xs" wrap="wrap">
-          {novel.status && (
-            <Badge variant="light" color="blue">
-              {novel.status}
-            </Badge>
-          )}
-          {novel.isLocal && (
-            <Badge variant="light" color="grape">
-              Local
-            </Badge>
-          )}
-          {novel.genres &&
-            novel.genres
-              .split(",")
-              .map((g) => g.trim())
-              .filter(Boolean)
-              .slice(0, 4)
-              .map((g) => (
-                <Badge key={g} variant="default">
-                  {g}
+        </Group>
+
+        <Group align="flex-end" gap="xl" wrap="wrap">
+          <Image
+            src={cover}
+            fallbackSrc={FALLBACK_COVER}
+            w={176}
+            h={264}
+            alt={novel.name}
+            radius="sm"
+            fit="cover"
+            style={{
+              boxShadow: "0 18px 48px rgba(0, 0, 0, 0.42)",
+              flexShrink: 0,
+            }}
+          />
+
+          <Stack gap="sm" style={{ flex: 1, minWidth: 260 }}>
+            <Stack gap={4}>
+              <Title order={1} c="white" lineClamp={3}>
+                {novel.name}
+              </Title>
+              {novel.author && (
+                <Text c="gray.2" size="sm">
+                  Author: {novel.author}
+                </Text>
+              )}
+              {novel.artist && novel.artist !== novel.author && (
+                <Text c="gray.3" size="sm">
+                  Artist: {novel.artist}
+                </Text>
+              )}
+            </Stack>
+
+            <Group gap="xs" wrap="wrap">
+              {novel.status && (
+                <Badge variant="filled" color="blue">
+                  {novel.status}
+                </Badge>
+              )}
+              {novel.isLocal && (
+                <Badge variant="filled" color="grape">
+                  Local
+                </Badge>
+              )}
+              {novel.inLibrary && (
+                <Badge variant="filled" color="green">
+                  In library
+                </Badge>
+              )}
+              {genres.slice(0, 5).map((genre) => (
+                <Badge key={genre} variant="light" color="gray">
+                  {genre}
                 </Badge>
               ))}
-        </Group>
-        <Text size="xs" c="dimmed">
-          Last read: {formatDate(novel.lastReadAt)}
-        </Text>
-        <Group gap="sm" mt="sm">
-          <Button
-            onClick={onToggleLibrary}
-            loading={toggleBusy}
-            variant={novel.inLibrary ? "default" : "filled"}
-          >
-            {novel.inLibrary ? "Remove from library" : "Add to library"}
-          </Button>
+            </Group>
+
+            <Group gap="md" c="gray.3">
+              <Text size="sm">Last read: {formatDate(novel.lastReadAt)}</Text>
+              <Text size="sm">Updated: {formatDate(novel.updatedAt)}</Text>
+              <Text size="sm">{chapters.length} chapters</Text>
+            </Group>
+
+            <Group gap="sm" mt="xs">
+              <Button
+                onClick={() => readableChapter && onRead(readableChapter.id)}
+                disabled={!readableChapter}
+              >
+                {readLabel}
+              </Button>
+              <Button
+                onClick={onToggleLibrary}
+                loading={toggleBusy}
+                variant={novel.inLibrary ? "default" : "light"}
+                color={novel.inLibrary ? "gray" : "blue"}
+              >
+                {novel.inLibrary ? "Remove from library" : "Add to library"}
+              </Button>
+              <Button
+                onClick={onOpenSource}
+                disabled={!sourceUrl}
+                variant="light"
+                color="gray"
+              >
+                Open source
+              </Button>
+            </Group>
+          </Stack>
         </Group>
       </Stack>
-    </Group>
+    </Box>
+  );
+}
+
+interface NovelSummaryProps {
+  novel: NovelDetailRecord;
+}
+
+function NovelSummary({ novel }: NovelSummaryProps) {
+  const genres = splitGenres(novel.genres);
+
+  if (!novel.summary && genres.length === 0) {
+    return null;
+  }
+
+  return (
+    <Stack gap="md">
+      {novel.summary && (
+        <Stack gap="xs">
+          <Title order={4}>Summary</Title>
+          <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+            {novel.summary}
+          </Text>
+        </Stack>
+      )}
+
+      {genres.length > 0 && (
+        <Stack gap="xs">
+          <Title order={5}>Genres</Title>
+          <Group gap="xs" wrap="wrap">
+            {genres.map((genre) => (
+              <Badge key={genre} variant="default">
+                {genre}
+              </Badge>
+            ))}
+          </Group>
+        </Stack>
+      )}
+    </Stack>
   );
 }
 
@@ -215,6 +409,11 @@ export function NovelDetailPage() {
   const { id } = novelRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const defaultChapterSort = useLibraryStore((s) => s.defaultChapterSort);
+  const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
+  const lastReadChapterId = useReaderStore(
+    (state) => state.lastReadChapterByNovel[id],
+  );
 
   const novelQuery = useQuery({
     queryKey: novelKey(id),
@@ -258,8 +457,22 @@ export function NovelDetailPage() {
     });
   }, [id, queryClient]);
 
+  function goBack() {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    void navigate({ to: "/" });
+  }
+
   function openChapter(chapterId: number) {
     void navigate({ to: "/reader", search: { chapterId } });
+  }
+
+  function openSourceNovel(url: string | null) {
+    if (!url) return;
+    openSiteBrowser(url);
   }
 
   function downloadChapter(chapter: ChapterRow): void {
@@ -276,7 +489,7 @@ export function NovelDetailPage() {
     return (
       <Container py="lg" size="lg">
         <Alert color="yellow" title="Missing id">
-          The novel detail screen needs an `id` query parameter.
+          The novel detail screen needs an id query parameter.
         </Alert>
       </Container>
     );
@@ -287,7 +500,7 @@ export function NovelDetailPage() {
       <Container py="lg" size="lg">
         <Group gap="sm">
           <Loader size="sm" />
-          <Text c="dimmed">Loading novel…</Text>
+          <Text c="dimmed">Loading novel...</Text>
         </Group>
       </Container>
     );
@@ -316,39 +529,54 @@ export function NovelDetailPage() {
     );
   }
 
-  const chapters = chaptersQuery.data ?? [];
+  const rows = chaptersQuery.data ?? [];
+  const chapters =
+    defaultChapterSort === "desc" ? [...rows].reverse() : rows;
+  const sourceUrl = resolveNovelSourceUrl(novel);
+  const downloadedCount = chapters.filter(
+    (chapter) => chapter.isDownloaded,
+  ).length;
+  const unreadCount = chapters.filter((chapter) => chapter.unread).length;
 
   return (
     <Container py="lg" size="lg">
-      <Stack gap="lg">
-        <NovelHeader
+      <Stack gap="xl">
+        <NovelHero
           novel={novel}
+          chapters={chapters}
+          lastReadChapterId={lastReadChapterId}
+          onBack={goBack}
+          onRead={openChapter}
+          onOpenSource={() => openSourceNovel(sourceUrl)}
           onToggleLibrary={() => toggle.mutate()}
+          sourceUrl={sourceUrl}
           toggleBusy={toggle.isPending}
         />
 
-        {novel.summary && (
-          <Stack gap="xs">
-            <Title order={5}>Summary</Title>
-            <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-              {novel.summary}
-            </Text>
-          </Stack>
-        )}
+        <NovelSummary novel={novel} />
 
         <Divider />
 
         <Stack gap="sm">
-          <Group justify="space-between" align="baseline">
+          <Group justify="space-between" align="baseline" gap="sm">
             <Title order={4}>Chapters</Title>
-            <Text size="sm" c="dimmed">
-              {chapters.length} total
-            </Text>
+            <Group gap="xs">
+              <Badge variant="light" color="blue">
+                {chapters.length} total
+              </Badge>
+              <Badge variant="light" color="teal">
+                {downloadedCount} downloaded
+              </Badge>
+              <Badge variant="light" color="gray">
+                {unreadCount} unread
+              </Badge>
+            </Group>
           </Group>
+
           {chaptersQuery.isLoading ? (
             <Group gap="sm">
               <Loader size="sm" />
-              <Text c="dimmed">Loading chapters…</Text>
+              <Text c="dimmed">Loading chapters...</Text>
             </Group>
           ) : chapters.length === 0 ? (
             <Alert color="blue" variant="light">
