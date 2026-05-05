@@ -38,5 +38,18 @@
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "host": "repo",
+          "pathPrefix": ["/add"]
+        }
+      ],
+      "desktop": {
+        "schemes": ["lnreader"]
+      }
+    }
   }
 }

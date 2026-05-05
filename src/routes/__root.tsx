@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Anchor, AppShell, Burger, Group, Title } from "@mantine/core";
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
+import { startDeepLinkListener } from "../lib/deep-link";
+import { useBrowseStore } from "../store/browse";
 import { useLibraryStore } from "../store/library";
 
 export function RootLayout() {
@@ -10,6 +12,27 @@ export function RootLayout() {
   const setSelectedCategoryId = useLibraryStore(
     (s) => s.setSelectedCategoryId,
   );
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    startDeepLinkListener({
+      onRepoAdd: (repoUrl) => {
+        useBrowseStore.getState().setPendingRepoUrl(repoUrl);
+        void navigate({ to: "/browse" });
+      },
+    })
+      .then((cleanup) => {
+        unlisten = cleanup;
+      })
+      .catch(() => {
+        // Plugin not initialized (e.g. running outside Tauri host
+        // for vite-only dev). Listener registration silently no-ops.
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [navigate]);
 
   return (
     <AppShell header={{ height: 56 }} padding={0}>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -19,6 +19,7 @@ import {
   listRepositories,
   removeRepository,
 } from "../db/queries/repository";
+import { useBrowseStore } from "../store/browse";
 
 export function BrowsePage() {
   const queryClient = useQueryClient();
@@ -27,8 +28,22 @@ export function BrowsePage() {
     queryFn: listRepositories,
   });
 
+  const pendingRepoUrl = useBrowseStore((s) => s.pendingRepoUrl);
+  const clearPendingRepoUrl = useBrowseStore(
+    (s) => s.clearPendingRepoUrl,
+  );
+
   const [addOpen, setAddOpen] = useState(false);
   const [url, setUrl] = useState("");
+
+  // Deep-link entry: pre-fill the URL and open the modal.
+  useEffect(() => {
+    if (pendingRepoUrl !== null) {
+      setUrl(pendingRepoUrl);
+      setAddOpen(true);
+      clearPendingRepoUrl();
+    }
+  }, [pendingRepoUrl, clearPendingRepoUrl]);
 
   const addMutation = useMutation({
     mutationFn: async () => {
@@ -69,8 +84,9 @@ export function BrowsePage() {
         </Group>
 
         <Text c="dimmed" size="sm">
-          Plugin repositories. Source listings, search, and Cloudflare
-          bypass land in later Sprint 2 iterations.
+          Plugin repositories. Deep-link <code>lnreader://repo/add?url=…</code>{" "}
+          opens this Add Repository modal pre-filled. Source listings,
+          search, and Cloudflare bypass land in later Sprint 2 iterations.
         </Text>
 
         {repos.isLoading ? (
