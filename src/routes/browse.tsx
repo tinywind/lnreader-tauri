@@ -34,22 +34,35 @@ interface AvailableEntry {
   repoUrl: string;
 }
 
+interface RepoFetchFailure {
+  repoUrl: string;
+  message: string;
+}
+
+interface AvailableResult {
+  entries: AvailableEntry[];
+  failures: RepoFetchFailure[];
+}
+
 async function fetchAllAvailable(
   repos: readonly PluginRepository[],
-): Promise<AvailableEntry[]> {
-  const all: AvailableEntry[] = [];
+): Promise<AvailableResult> {
+  const entries: AvailableEntry[] = [];
+  const failures: RepoFetchFailure[] = [];
   for (const repo of repos) {
     try {
       const items = await pluginManager.fetchRepository(repo.url);
       for (const item of items) {
-        all.push({ item, repoUrl: repo.url });
+        entries.push({ item, repoUrl: repo.url });
       }
-    } catch {
-      // Skip repos that can't be fetched/parsed; surfacing is per-repo
-      // UX (a future iteration) not page-level.
+    } catch (error) {
+      failures.push({
+        repoUrl: repo.url,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
-  return all;
+  return { entries, failures };
 }
 
 export function BrowsePage() {
@@ -182,6 +195,7 @@ export function BrowsePage() {
           }
           onInstall={(item) => installMutation.mutate(item)}
           installing={installMutation.isPending}
+          failures={available.data?.failures ?? []}
         />
 
         <Modal
@@ -349,10 +363,11 @@ function InstalledSection({
 }
 
 interface AvailableSectionProps {
-  query: ReturnType<typeof useQuery<AvailableEntry[]>>;
+  query: ReturnType<typeof useQuery<AvailableResult>>;
   installedIds: ReadonlySet<string>;
   onInstall: (item: PluginItem) => void;
   installing: boolean;
+  failures: readonly RepoFetchFailure[];
 }
 
 function AvailableSection({
@@ -360,10 +375,26 @@ function AvailableSection({
   installedIds,
   onInstall,
   installing,
+  failures,
 }: AvailableSectionProps) {
+  const entries = query.data?.entries ?? [];
   return (
     <Stack gap="xs">
       <Title order={3}>Available plugins</Title>
+      {failures.length > 0 && (
+        <Stack gap={4}>
+          {failures.map((failure) => (
+            <Alert
+              key={failure.repoUrl}
+              color="red"
+              variant="light"
+              title={`Couldn't fetch ${failure.repoUrl}`}
+            >
+              {failure.message}
+            </Alert>
+          ))}
+        </Stack>
+      )}
       {query.isLoading || query.isFetching ? (
         <Group gap="sm">
           <Loader size="sm" />
@@ -375,9 +406,9 @@ function AvailableSection({
             ? query.error.message
             : String(query.error)}
         </Alert>
-      ) : query.data && query.data.length > 0 ? (
+      ) : entries.length > 0 ? (
         <Stack gap={6}>
-          {query.data.map(({ item, repoUrl }) => {
+          {entries.map(({ item, repoUrl }) => {
             const isInstalled = installedIds.has(item.id);
             return (
               <Paper key={`${repoUrl}::${item.id}`} withBorder p="xs" radius="md">
@@ -411,7 +442,9 @@ function AvailableSection({
         <Text c="dimmed" size="sm">
           {!query.data
             ? "Add a repository to populate this list."
-            : "No plugins exposed by the configured repositories."}
+            : failures.length > 0
+              ? "All configured repositories failed — see the error(s) above."
+              : "No plugins exposed by the configured repositories."}
         </Text>
       )}
     </Stack>
