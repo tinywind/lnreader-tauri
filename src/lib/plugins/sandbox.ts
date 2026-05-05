@@ -15,7 +15,13 @@ export class PluginSandboxError extends Error {
   public readonly cause?: unknown;
 
   constructor(message: string, cause?: unknown) {
-    super(message);
+    super(
+      cause === undefined
+        ? message
+        : `${message} (${
+            cause instanceof Error ? cause.message : String(cause)
+          })`,
+    );
     this.name = "PluginSandboxError";
     this.cause = cause;
   }
@@ -24,6 +30,28 @@ export class PluginSandboxError extends Error {
 interface ModuleScope {
   exports: { default?: Plugin } & Record<string, unknown>;
 }
+
+/**
+ * Globals every CommonJS-shaped plugin may expect at module-init
+ * time. `exports` aliases `module.exports` (so `exports.default = …`
+ * works), and `__dirname` / `__filename` are inert defaults so any
+ * defensive `typeof __dirname !== "undefined"` checks don't throw.
+ */
+const SANDBOX_GLOBAL_NAMES = [
+  "require",
+  "module",
+  "exports",
+  "__dirname",
+  "__filename",
+] as const;
+
+type SandboxArgs = readonly [
+  RequireResolver,
+  ModuleScope,
+  ModuleScope["exports"],
+  string,
+  string,
+];
 
 /**
  * Evaluate plugin source code in a sandbox-ish scope and return
@@ -52,11 +80,10 @@ export function loadPlugin(
 
   const moduleScope: ModuleScope = { exports: {} };
 
-  let evaluator: (require: RequireResolver, module: ModuleScope) => void;
+  let evaluator: (...args: SandboxArgs) => void;
   try {
     evaluator = new Function(
-      "require",
-      "module",
+      ...SANDBOX_GLOBAL_NAMES,
       source,
     ) as typeof evaluator;
   } catch (error) {
@@ -67,7 +94,7 @@ export function loadPlugin(
   }
 
   try {
-    evaluator(resolveRequire, moduleScope);
+    evaluator(resolveRequire, moduleScope, moduleScope.exports, "", "");
   } catch (error) {
     throw new PluginSandboxError(
       "Plugin module threw during load.",

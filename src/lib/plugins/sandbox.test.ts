@@ -54,6 +54,26 @@ describe("loadPlugin", () => {
     expect(() => loadPlugin(source)).toThrow(PluginSandboxError);
   });
 
+  it("supports the TS-compiled `exports.default = ...` pattern", () => {
+    const source = `
+      Object.defineProperty(exports, "__esModule", { value: true });
+      exports.default = { id: "ts-plugin", name: "TS", version: "1" };
+    `;
+    const plugin = loadPlugin(source);
+    expect(plugin.id).toBe("ts-plugin");
+  });
+
+  it("includes the underlying cause in the error message", () => {
+    const source = `throw new Error("boom inside plugin");`;
+    try {
+      loadPlugin(source);
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PluginSandboxError);
+      expect((error as Error).message).toContain("boom inside plugin");
+    }
+  });
+
   it("invokes the caller's resolveRequire with the requested id", () => {
     const resolveRequire = vi.fn(() => ({ noop: true }));
     const source = `
