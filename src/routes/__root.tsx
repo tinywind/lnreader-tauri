@@ -88,6 +88,16 @@ export function RootLayout() {
             >
               Reader
             </Anchor>
+            <Anchor
+              component={Link}
+              to="/more"
+              size="sm"
+              underline="hover"
+              fw={500}
+              activeProps={{ style: { textDecoration: "underline" } }}
+            >
+              More
+            </Anchor>
           </Group>
         </Group>
       </AppShell.Header>

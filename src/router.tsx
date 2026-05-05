@@ -7,6 +7,7 @@ import { RootLayout } from "./routes/__root";
 import { BrowsePage } from "./routes/browse";
 import { GlobalSearchPage } from "./routes/global-search";
 import { LibraryPage } from "./routes/library";
+import { MorePage } from "./routes/more";
 import { ReaderPage } from "./routes/reader";
 
 const rootRoute = createRootRoute({
@@ -37,11 +38,18 @@ const readerRoute = createRoute({
   component: ReaderPage,
 });
 
+const moreRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/more",
+  component: MorePage,
+});
+
 const routeTree = rootRoute.addChildren([
   libraryRoute,
   browseRoute,
   globalSearchRoute,
   readerRoute,
+  moreRoute,
 ]);
 
 export const router = createRouter({ routeTree });
