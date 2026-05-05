@@ -27,26 +27,40 @@
 //!   polls a page-local result slot through `eval_with_callback`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+#[cfg(desktop)]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(desktop)]
 use std::sync::{Arc, Mutex};
+#[cfg(desktop)]
 use std::time::{Duration, Instant};
 
+#[cfg(desktop)]
+use std::path::PathBuf;
+
+#[cfg(desktop)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
+#[cfg(desktop)]
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
-    WebviewUrl,
+    LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
 };
+#[cfg(desktop)]
 use tokio::sync::oneshot;
+#[cfg(desktop)]
 use tokio::time::timeout;
 
+#[cfg(desktop)]
 const SCRAPER_LABEL: &str = "scraper";
+#[cfg(not(desktop))]
+const SCRAPER_UNAVAILABLE: &str = "scraper: child webview is not available on this platform";
 /// Local HTML file served by Vite (dev) / bundled in dist/ (prod).
 /// Using `WebviewUrl::App` gives the scraper a stable Tauri-served
 /// origin so any IPC the page does (none today, but future-proof)
 /// passes Tauri's Origin handshake.
+#[cfg(desktop)]
 const SCRAPER_HOMEPAGE_PATH: &str = "scraper.html";
+#[cfg(desktop)]
 static FETCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Polyfill + before-content hook injected at scraper webview creation.
@@ -61,6 +75,7 @@ static FETCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// - `ReactNativeWebView.postMessage(payload)` polyfill: writes the
 ///   payload to `location.hash` as `#__lnr_result__=ENCODED`. The host
 ///   polls `Webview::url()` to pick up the result.
+#[cfg(desktop)]
 const SCRAPER_INIT_SCRIPT: &str = r##"
 (function () {
   window.ReactNativeWebView = window.ReactNativeWebView || {};
@@ -124,6 +139,7 @@ pub struct FetchResult {
 /// race the visible overlay into the wrong page. Most callers only
 /// hit `webview_fetch` (which does not navigate), so this is rarely
 /// contended.
+#[cfg(desktop)]
 #[derive(Default)]
 pub struct ScraperState {
     nav_lock: tokio::sync::Mutex<()>,
@@ -131,8 +147,14 @@ pub struct ScraperState {
     last_navigated: Mutex<Option<String>>,
 }
 
+#[cfg(not(desktop))]
+#[derive(Default)]
+pub struct ScraperState;
+
+#[cfg(desktop)]
 const HIDDEN_SIZE: f64 = 1.0;
 
+#[cfg(desktop)]
 fn scraper_handle(app: &AppHandle) -> Result<Webview<tauri::Wry>, String> {
     app.get_webview(SCRAPER_LABEL)
         .ok_or_else(|| "scraper: child webview not yet attached".to_string())
@@ -140,6 +162,7 @@ fn scraper_handle(app: &AppHandle) -> Result<Webview<tauri::Wry>, String> {
 
 /// Eagerly attach the scraper child Webview to the main window at
 /// app setup. Idempotent; re-running is a no-op once attached.
+#[cfg(desktop)]
 pub fn init_scraper(app: &AppHandle) -> Result<(), String> {
     if app.get_webview(SCRAPER_LABEL).is_some() {
         return Ok(());
@@ -170,13 +193,24 @@ pub fn init_scraper(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(desktop))]
+pub fn init_scraper(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 /// Manually open the scraper webview's devtools.
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, desktop))]
 #[tauri::command]
 pub fn scraper_open_devtools(app: AppHandle) -> Result<(), String> {
     let scraper = scraper_handle(&app)?;
     scraper.open_devtools();
     Ok(())
+}
+
+#[cfg(all(debug_assertions, not(desktop)))]
+#[tauri::command]
+pub fn scraper_open_devtools(_app: AppHandle) -> Result<(), String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
 }
 
 #[cfg(not(debug_assertions))]
@@ -188,6 +222,7 @@ pub fn scraper_open_devtools(_app: AppHandle) -> Result<(), String> {
 /// Reposition + resize the scraper child Webview. React passes the
 /// pixel rect of the placeholder div under its top chrome so the
 /// scraper paints exactly inside that area.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn scraper_set_bounds(
     app: AppHandle,
@@ -208,8 +243,21 @@ pub fn scraper_set_bounds(
     Ok(())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub fn scraper_set_bounds(
+    _app: AppHandle,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+) -> Result<(), String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
 /// Collapse the scraper to its hidden 1x1 footprint when the modal
 /// closes. Cookies survive because the Webview is never destroyed.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
     let scraper = scraper_handle(&app)?;
@@ -222,7 +270,14 @@ pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub fn scraper_hide(_app: AppHandle) -> Result<(), String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
 /// Delete all cookies held by the scraper WebView cookie jar.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn scraper_clear_cookies(app: AppHandle) -> Result<usize, String> {
     let scraper = scraper_handle(&app)?;
@@ -238,9 +293,16 @@ pub async fn scraper_clear_cookies(app: AppHandle) -> Result<usize, String> {
     Ok(count)
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn scraper_clear_cookies(_app: AppHandle) -> Result<usize, String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
 /// Navigate the scraper Webview to `url`. Used by the in-app site
 /// browser overlay so the user can log in / clear CF / interact
 /// before sending plugin scrape requests.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn scraper_navigate(
     app: AppHandle,
@@ -262,6 +324,17 @@ pub async fn scraper_navigate(
     Ok(())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn scraper_navigate(
+    _app: AppHandle,
+    _state: tauri::State<'_, ScraperState>,
+    _url: String,
+) -> Result<(), String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
+#[cfg(desktop)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WebviewFetchScriptResult {
@@ -274,6 +347,7 @@ struct WebviewFetchScriptResult {
     error: Option<String>,
 }
 
+#[cfg(desktop)]
 async fn eval_json<T: DeserializeOwned>(
     scraper: &Webview<tauri::Wry>,
     script: String,
@@ -308,12 +382,14 @@ async fn eval_json<T: DeserializeOwned>(
     }
 }
 
+#[cfg(desktop)]
 fn same_origin(left: &Url, right: &Url) -> bool {
     left.scheme() == right.scheme()
         && left.host_str() == right.host_str()
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
+#[cfg(desktop)]
 fn scraper_is_at_origin(scraper: &Webview<tauri::Wry>, target: &Url) -> bool {
     scraper
         .url()
@@ -321,6 +397,7 @@ fn scraper_is_at_origin(scraper: &Webview<tauri::Wry>, target: &Url) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(desktop)]
 async fn document_is_ready(scraper: &Webview<tauri::Wry>) -> bool {
     let ready = eval_json::<String>(
         scraper,
@@ -331,6 +408,7 @@ async fn document_is_ready(scraper: &Webview<tauri::Wry>) -> bool {
     matches!(ready.as_deref(), Ok("interactive" | "complete"))
 }
 
+#[cfg(desktop)]
 async fn prepare_fetch_context(
     scraper: &Webview<tauri::Wry>,
     context_url: Option<&str>,
@@ -366,6 +444,7 @@ async fn prepare_fetch_context(
     ))
 }
 
+#[cfg(desktop)]
 fn build_webview_fetch_start_script(
     request_id: &str,
     url: &str,
@@ -437,6 +516,7 @@ fn build_webview_fetch_start_script(
     ))
 }
 
+#[cfg(desktop)]
 fn build_webview_fetch_poll_script(request_id: &str) -> Result<String, String> {
     let request_id_json = serde_json::to_string(request_id)
         .map_err(|err| format!("scraper: serialize fetch request id: {err}"))?;
@@ -452,6 +532,7 @@ fn build_webview_fetch_poll_script(request_id: &str) -> Result<String, String> {
     ))
 }
 
+#[cfg(desktop)]
 fn build_webview_fetch_cleanup_script(request_id: &str) -> Result<String, String> {
     let request_id_json = serde_json::to_string(request_id)
         .map_err(|err| format!("scraper: serialize fetch request id: {err}"))?;
@@ -467,6 +548,7 @@ fn build_webview_fetch_cleanup_script(request_id: &str) -> Result<String, String
 
 /// Issue an HTTP request through the scraper WebView's own browser
 /// `fetch()`, preserving Cloudflare/browser-network behavior.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn webview_fetch(
     app: AppHandle,
@@ -532,9 +614,22 @@ pub async fn webview_fetch(
     ))
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn webview_fetch(
+    _app: AppHandle,
+    _state: tauri::State<'_, ScraperState>,
+    _url: String,
+    _init: Option<FetchInit>,
+    _context_url: Option<String>,
+) -> Result<FetchResult, String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
 /// RFC 3986 percent-encode every byte that is not in the unreserved
 /// set. Used to embed an arbitrary script string inside a URL
 /// fragment without breaking parsing.
+#[cfg(desktop)]
 fn percent_encode_uri_component(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.as_bytes() {
@@ -550,6 +645,7 @@ fn percent_encode_uri_component(input: &str) -> String {
 
 /// Inverse of `encodeURIComponent`. Strict on malformed escapes so the
 /// caller can surface the failure rather than silently dropping data.
+#[cfg(desktop)]
 fn decode_uri_component(input: &str) -> Result<String, String> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -589,6 +685,7 @@ fn decode_uri_component(input: &str) -> Result<String, String> {
 ///
 /// Concurrency: serialized via `nav_lock` so chapter downloads do not
 /// race the visible site browser overlay.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn webview_extract(
     app: AppHandle,
@@ -657,4 +754,16 @@ pub async fn webview_extract(
         "webview_extract: timeout after {}ms",
         timeout.as_millis(),
     ))
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn webview_extract(
+    _app: AppHandle,
+    _state: tauri::State<'_, ScraperState>,
+    _url: String,
+    _before_script: Option<String>,
+    _timeout_ms: Option<u64>,
+) -> Result<String, String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
 }
