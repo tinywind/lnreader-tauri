@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -12,6 +13,7 @@ import {
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { LibraryGrid } from "../components/LibraryGrid";
+import { LibrarySelectionToolbar } from "../components/LibrarySelectionToolbar";
 import { insertNovel, listLibraryNovels } from "../db/queries/novel";
 import { useLibraryStore } from "../store/library";
 
@@ -51,6 +53,43 @@ export function LibraryPage() {
       queryClient.invalidateQueries({ queryKey: ["novel"] }),
   });
 
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
+
+  const toggleSelected = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleActivate = useCallback(
+    (id: number) => {
+      if (selectedIds.size > 0) {
+        toggleSelected(id);
+      }
+      // TODO: Sprint 6 — navigate to /novel/${id}.
+    },
+    [selectedIds, toggleSelected],
+  );
+
+  const handleLongPress = useCallback(
+    (id: number) => {
+      toggleSelected(id);
+    },
+    [toggleSelected],
+  );
+
   const filterActive =
     debouncedSearch.trim() !== "" || selectedCategoryId !== null;
 
@@ -74,6 +113,13 @@ export function LibraryPage() {
           </Group>
         </Group>
 
+        {selectedIds.size > 0 ? (
+          <LibrarySelectionToolbar
+            count={selectedIds.size}
+            onClear={clearSelection}
+          />
+        ) : null}
+
         {novels.isLoading ? (
           <Group gap="sm">
             <Loader size="sm" />
@@ -86,7 +132,12 @@ export function LibraryPage() {
               : String(novels.error)}
           </Alert>
         ) : novels.data && novels.data.length > 0 ? (
-          <LibraryGrid novels={novels.data} />
+          <LibraryGrid
+            novels={novels.data}
+            selectedIds={selectedIds}
+            onActivate={handleActivate}
+            onLongPress={handleLongPress}
+          />
         ) : filterActive ? (
           <Alert color="yellow" title="No matches">
             No novels match the current filter. Clear the search or pick
