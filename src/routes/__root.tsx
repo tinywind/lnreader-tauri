@@ -80,6 +80,16 @@ export function RootLayout() {
             </Anchor>
             <Anchor
               component={Link}
+              to="/history"
+              size="sm"
+              underline="hover"
+              fw={500}
+              activeProps={{ style: { textDecoration: "underline" } }}
+            >
+              History
+            </Anchor>
+            <Anchor
+              component={Link}
               to="/reader"
               size="sm"
               underline="hover"

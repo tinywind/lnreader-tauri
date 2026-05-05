@@ -165,6 +165,47 @@ export async function clearChapterContent(
   );
 }
 
+/** One chapter recently read, joined with its parent novel for display. */
+export interface RecentlyReadEntry {
+  chapterId: number;
+  novelId: number;
+  chapterName: string;
+  position: number;
+  readAt: number;
+  progress: number;
+  novelName: string;
+  novelCover: string | null;
+}
+
+const DEFAULT_HISTORY_LIMIT = 100;
+
+/**
+ * Recently read chapters across the whole library, sorted by read
+ * timestamp descending. Excludes never-read chapters.
+ */
+export async function listRecentlyRead(
+  limit: number = DEFAULT_HISTORY_LIMIT,
+): Promise<RecentlyReadEntry[]> {
+  const db = await getDb();
+  return db.select<RecentlyReadEntry[]>(
+    `SELECT
+       c.id              AS chapterId,
+       c.novel_id        AS novelId,
+       c.name            AS chapterName,
+       c.position,
+       c.read_at         AS readAt,
+       c.progress,
+       n.name            AS novelName,
+       n.cover           AS novelCover
+     FROM chapter c
+     JOIN novel n ON n.id = c.novel_id
+     WHERE c.read_at IS NOT NULL
+     ORDER BY c.read_at DESC
+     LIMIT $1`,
+    [Math.max(1, Math.floor(limit))],
+  );
+}
+
 export async function getAdjacentChapter(
   novelId: number,
   position: number,

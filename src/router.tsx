@@ -6,6 +6,7 @@ import {
 import { RootLayout } from "./routes/__root";
 import { BrowsePage } from "./routes/browse";
 import { GlobalSearchPage } from "./routes/global-search";
+import { HistoryPage } from "./routes/history";
 import { LibraryPage } from "./routes/library";
 import { MorePage } from "./routes/more";
 import { NovelDetailPage } from "./routes/novel";
@@ -62,6 +63,12 @@ const moreRoute = createRoute({
   component: MorePage,
 });
 
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history",
+  component: HistoryPage,
+});
+
 const routeTree = rootRoute.addChildren([
   libraryRoute,
   browseRoute,
@@ -69,6 +76,7 @@ const routeTree = rootRoute.addChildren([
   readerRoute,
   moreRoute,
   novelRoute,
+  historyRoute,
 ]);
 
 export const router = createRouter({ routeTree });

@@ -12,6 +12,7 @@ import {
   getChapterContent,
   insertChapter,
   listChaptersByNovel,
+  listRecentlyRead,
   saveChapterContent,
   setChapterBookmark,
   updateChapterProgress,
@@ -203,5 +204,39 @@ describe("getAdjacentChapter", () => {
   it("returns null on no adjacent row", async () => {
     mockSelect.mockResolvedValueOnce([]);
     expect(await getAdjacentChapter(1, 5, 1)).toBeNull();
+  });
+});
+
+describe("listRecentlyRead", () => {
+  it("joins chapter with novel and orders by read_at DESC", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+
+    await listRecentlyRead();
+
+    const [sql, params] = mockSelect.mock.calls[0]!;
+    expect(sql).toContain("FROM chapter c");
+    expect(sql).toContain("JOIN novel n");
+    expect(sql).toContain("c.read_at IS NOT NULL");
+    expect(sql).toContain("ORDER BY c.read_at DESC");
+    expect(sql).toContain("LIMIT $1");
+    expect(params).toEqual([100]);
+  });
+
+  it("clamps limit to a minimum of 1 and floors fractional input", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+
+    await listRecentlyRead(0.4);
+
+    const [, params] = mockSelect.mock.calls[0]!;
+    expect(params).toEqual([1]);
+  });
+
+  it("forwards a custom positive limit", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+
+    await listRecentlyRead(25);
+
+    const [, params] = mockSelect.mock.calls[0]!;
+    expect(params).toEqual([25]);
   });
 });
