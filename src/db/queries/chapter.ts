@@ -255,6 +255,7 @@ export async function clearChapterContent(
  */
 export interface LibraryUpdateEntry {
   chapterId: number;
+  chapterPath: string;
   novelId: number;
   pluginId: string;
   chapterName: string;
@@ -269,25 +270,39 @@ interface RawLibraryUpdate extends Omit<LibraryUpdateEntry, "isDownloaded"> {
   isDownloaded: number;
 }
 
-const DEFAULT_UPDATES_LIMIT = 200;
+const DEFAULT_UPDATES_LIMIT = 100;
+
+export interface LibraryUpdatesPage {
+  hasMore: boolean;
+  nextOffset: number;
+  updates: LibraryUpdateEntry[];
+}
 
 /**
- * Unread chapters first discovered after the novel entered the
- * library. The Updates tab calls a user-triggered source refresh;
- * this query only reads the resulting local index.
+ * Unread chapters currently indexed for novels in the library.
+ * The Updates tab calls a user-triggered source refresh; this query
+ * only reads the resulting local index.
  */
 export async function listLibraryUpdates(
   limit: number = DEFAULT_UPDATES_LIMIT,
+  offset: number = 0,
 ): Promise<LibraryUpdateEntry[]> {
   const db = await getDb();
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  const normalizedOffset = Math.max(0, Math.floor(offset));
   const rows = await db.select<RawLibraryUpdate[]>(
     `SELECT
        c.id              AS chapterId,
+       c.path            AS chapterPath,
        c.novel_id        AS novelId,
        n.plugin_id       AS pluginId,
        c.name            AS chapterName,
        c.position,
-       COALESCE(c.created_at, c.updated_at) AS foundAt,
+       MAX(
+         COALESCE(c.created_at, 0),
+         COALESCE(c.updated_at, 0),
+         COALESCE(n.library_added_at, n.updated_at, n.created_at, 0)
+       ) AS foundAt,
        c.is_downloaded   AS isDownloaded,
        n.name            AS novelName,
        n.cover           AS novelCover
@@ -296,16 +311,32 @@ export async function listLibraryUpdates(
      WHERE
        n.in_library = 1
        AND c.unread = 1
-       AND COALESCE(c.created_at, c.updated_at) >=
-         COALESCE(n.library_added_at, n.updated_at, n.created_at)
-     ORDER BY COALESCE(c.created_at, c.updated_at) DESC
-     LIMIT $1`,
-    [Math.max(1, Math.floor(limit))],
+      ORDER BY foundAt DESC, c.position DESC, c.id DESC
+      LIMIT $1 OFFSET $2`,
+    [normalizedLimit, normalizedOffset],
   );
   return rows.map((row) => ({
     ...row,
     isDownloaded: !!row.isDownloaded,
   }));
+}
+
+export async function listLibraryUpdatesPage(
+  limit: number = DEFAULT_UPDATES_LIMIT,
+  offset: number = 0,
+): Promise<LibraryUpdatesPage> {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  const normalizedOffset = Math.max(0, Math.floor(offset));
+  const rows = await listLibraryUpdates(
+    normalizedLimit + 1,
+    normalizedOffset,
+  );
+  const updates = rows.slice(0, normalizedLimit);
+  return {
+    hasMore: rows.length > normalizedLimit,
+    nextOffset: normalizedOffset + updates.length,
+    updates,
+  };
 }
 
 /** One chapter recently read, joined with its parent novel for display. */

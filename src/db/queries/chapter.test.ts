@@ -14,6 +14,7 @@ import {
   insertChapter,
   listChaptersByNovel,
   listLibraryUpdates,
+  listLibraryUpdatesPage,
   listRecentlyRead,
   markChapterOpened,
   saveChapterContent,
@@ -292,7 +293,7 @@ describe("getAdjacentChapter", () => {
 });
 
 describe("listLibraryUpdates", () => {
-  it("filters in-library + unread chapters discovered after library registration", async () => {
+  it("filters in-library + unread chapters and supports paging", async () => {
     mockSelect.mockResolvedValueOnce([]);
 
     await listLibraryUpdates();
@@ -300,15 +301,19 @@ describe("listLibraryUpdates", () => {
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("n.in_library = 1");
     expect(sql).toContain("c.unread = 1");
+    expect(sql).toContain("c.path");
+    expect(sql).toContain("MAX(");
     expect(sql).toContain("n.library_added_at");
-    expect(sql).toContain("COALESCE(c.created_at, c.updated_at)");
-    expect(params).toEqual([200]);
+    expect(sql).toContain("ORDER BY foundAt DESC");
+    expect(sql).toContain("OFFSET $2");
+    expect(params).toEqual([100, 0]);
   });
 
   it("coerces is_downloaded to a strict boolean", async () => {
     mockSelect.mockResolvedValueOnce([
       {
         chapterId: 1,
+        chapterPath: "/c/1",
         novelId: 1,
         pluginId: "source-a",
         chapterName: "Ch1",
@@ -328,7 +333,39 @@ describe("listLibraryUpdates", () => {
     mockSelect.mockResolvedValueOnce([]);
     await listLibraryUpdates(0);
     const [, params] = mockSelect.mock.calls[0]!;
-    expect(params).toEqual([1]);
+    expect(params).toEqual([1, 0]);
+  });
+
+  it("forwards a sanitized offset", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+    await listLibraryUpdates(25, 50.8);
+    const [, params] = mockSelect.mock.calls[0]!;
+    expect(params).toEqual([25, 50]);
+  });
+
+  it("loads one extra row to report whether another page exists", async () => {
+    mockSelect.mockResolvedValueOnce(
+      Array.from({ length: 101 }, (_, index) => ({
+        chapterId: index + 1,
+        chapterPath: `/c/${index + 1}`,
+        novelId: 1,
+        pluginId: "source-a",
+        chapterName: `Ch${index + 1}`,
+        position: index + 1,
+        foundAt: 1_700_000_000 - index,
+        isDownloaded: 0,
+        novelName: "Sample",
+        novelCover: null,
+      })),
+    );
+
+    const page = await listLibraryUpdatesPage(100, 200);
+
+    const [, params] = mockSelect.mock.calls[0]!;
+    expect(params).toEqual([101, 200]);
+    expect(page.updates).toHaveLength(100);
+    expect(page.hasMore).toBe(true);
+    expect(page.nextOffset).toBe(300);
   });
 });
 

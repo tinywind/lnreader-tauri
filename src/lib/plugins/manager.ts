@@ -60,6 +60,7 @@ function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
  */
 export class PluginManager {
   private readonly installed = new Map<string, Plugin>();
+  private installedLoadPromise: Promise<void> | null = null;
 
   /**
    * Fetch a repository index URL and return the PluginItem[] list.
@@ -132,6 +133,18 @@ export class PluginManager {
    * load so a single broken plugin never blocks startup.
    */
   async loadInstalledFromDb(): Promise<void> {
+    if (this.installedLoadPromise) {
+      return this.installedLoadPromise;
+    }
+    const load = this.loadInstalledFromDbOnce().catch((error) => {
+      this.installedLoadPromise = null;
+      throw error;
+    });
+    this.installedLoadPromise = load;
+    return load;
+  }
+
+  private async loadInstalledFromDbOnce(): Promise<void> {
     const rows = await listInstalledPlugins();
     for (const row of rows) {
       try {

@@ -35,6 +35,7 @@ interface LibraryState {
   showUnreadBadges: boolean;
   showNumberBadges: boolean;
   downloadedOnlyMode: boolean;
+  unreadOnlyMode: boolean;
   incognitoMode: boolean;
   defaultChapterSort: DefaultChapterSort;
   setSelectedCategoryId: (id: number | null) => void;
@@ -46,6 +47,7 @@ interface LibraryState {
   setShowUnreadBadges: (showUnreadBadges: boolean) => void;
   setShowNumberBadges: (showNumberBadges: boolean) => void;
   setDownloadedOnlyMode: (downloadedOnlyMode: boolean) => void;
+  setUnreadOnlyMode: (unreadOnlyMode: boolean) => void;
   setIncognitoMode: (incognitoMode: boolean) => void;
   setDefaultChapterSort: (defaultChapterSort: DefaultChapterSort) => void;
 }
@@ -62,6 +64,7 @@ export const useLibraryStore = create<LibraryState>()(
       showUnreadBadges: true,
       showNumberBadges: false,
       downloadedOnlyMode: false,
+      unreadOnlyMode: false,
       incognitoMode: false,
       defaultChapterSort: "asc",
       setSelectedCategoryId: (selectedCategoryId) =>
@@ -79,6 +82,7 @@ export const useLibraryStore = create<LibraryState>()(
         set({ showNumberBadges }),
       setDownloadedOnlyMode: (downloadedOnlyMode) =>
         set({ downloadedOnlyMode }),
+      setUnreadOnlyMode: (unreadOnlyMode) => set({ unreadOnlyMode }),
       setIncognitoMode: (incognitoMode) => set({ incognitoMode }),
       setDefaultChapterSort: (defaultChapterSort) =>
         set({ defaultChapterSort }),
@@ -93,6 +97,7 @@ export const useLibraryStore = create<LibraryState>()(
         showUnreadBadges: state.showUnreadBadges,
         showNumberBadges: state.showNumberBadges,
         downloadedOnlyMode: state.downloadedOnlyMode,
+        unreadOnlyMode: state.unreadOnlyMode,
         incognitoMode: state.incognitoMode,
         defaultChapterSort: state.defaultChapterSort,
       }),

@@ -186,8 +186,18 @@
 }
 
 .lnr-settings-mobile-back {
+  border: 1px solid var(--lnr-design-rule-strong);
+  border-radius: 4px;
+  color: var(--lnr-design-ink-subtle);
   display: none;
+  height: 28px;
   margin-top: 8px;
+  width: 30px;
+}
+
+.lnr-settings-mobile-back:hover {
+  background: var(--lnr-design-panel);
+  color: var(--lnr-design-ink);
 }
 
 .lnr-settings-detail-body {

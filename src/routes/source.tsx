@@ -31,6 +31,7 @@ import { SearchBar } from "../components/SearchBar";
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { pluginManager } from "../lib/plugins/manager";
 import type { NovelItem } from "../lib/plugins/types";
+import { useTranslation } from "../i18n";
 import { sourceRoute } from "../router";
 import { useSiteBrowserStore } from "../store/site-browser";
 import "../styles/browse.css";
@@ -87,6 +88,7 @@ function SourceNovelButton({
 }
 
 export function SourcePage() {
+  const { t } = useTranslation();
   const { pluginId, query } = sourceRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -161,7 +163,7 @@ export function SourcePage() {
 
   const open = useMutation({
     mutationFn: async (item: NovelItem) => {
-      if (!plugin) throw new Error("plugin not loaded");
+      if (!plugin) throw new Error(t("source.pluginNotLoaded"));
       return importNovelFromSource(plugin, item);
     },
     onSuccess: (novelId) => {
@@ -175,13 +177,8 @@ export function SourcePage() {
       <PageFrame>
         <StateView
           color="orange"
-          title="Plugin not loaded"
-          message={
-            <>
-              No plugin matches id <code>{pluginId}</code>. Install it from
-              the Browse tab and try again.
-            </>
-          }
+          title={t("source.pluginNotLoaded")}
+          message={t("source.pluginNotLoadedMessage", { id: pluginId })}
         />
       </PageFrame>
     );
@@ -198,6 +195,7 @@ export function SourcePage() {
     : listing.isFetching
       ? "active"
       : "done";
+  const modeLabel = mode === "popular" ? t("source.popular") : t("source.latest");
 
   return (
     <PageFrame size="wide" className="lnr-source-page">
@@ -227,14 +225,14 @@ export function SourcePage() {
 
       <div className="lnr-source-workbench">
         <aside className="lnr-source-tools">
-          <ConsolePanel title="Source controls">
+          <ConsolePanel title={t("source.controls")}>
             <Stack gap="sm" p="sm">
               <SegmentedControl
                 value={mode}
                 onChange={(value) => setMode(value as ListingMode)}
                 data={[
-                  { value: "popular", label: "Popular" },
-                  { value: "latest", label: "Latest" },
+                  { value: "popular", label: t("source.popular") },
+                  { value: "latest", label: t("source.latest") },
                 ]}
                 disabled={isSearchMode}
                 size="xs"
@@ -245,7 +243,9 @@ export function SourcePage() {
                 value={search}
                 onChange={setSearch}
                 onSubmit={() => setSubmittedSearch(search)}
-                placeholder={`Search ${plugin.name}...`}
+                placeholder={t("source.searchPlaceholder", {
+                  name: plugin.name,
+                })}
               />
 
               <Group gap="xs" wrap="wrap">
@@ -259,7 +259,10 @@ export function SourcePage() {
                     }}
                     disabled={isSearchMode}
                   >
-                    Filters ({activeFilterCount}/{filterCount})
+                    {t("source.filtersButton", {
+                      active: activeFilterCount,
+                      total: filterCount,
+                    })}
                   </Button>
                 )}
                 <Button
@@ -267,35 +270,37 @@ export function SourcePage() {
                   size="xs"
                   onClick={() => openSiteBrowser(plugin.site)}
                 >
-                  Open WebView
+                  {t("common.openWebView")}
                 </Button>
               </Group>
             </Stack>
           </ConsolePanel>
 
-          <ConsolePanel title="Source state">
+          <ConsolePanel title={t("source.state")}>
             <Stack gap="sm" p="sm">
               <Group gap={6} wrap="wrap">
                 <ConsoleStatusDot
                   status={sourceStatus}
                   label={
                     listing.error
-                      ? "Source error"
+                      ? t("source.error")
                       : listing.isFetching
-                        ? "Fetching"
-                        : "Ready"
+                        ? t("common.fetching")
+                        : t("common.ready")
                   }
                 />
                 <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>
                 <ConsoleChip>v{plugin.version}</ConsoleChip>
                 {isSearchMode ? (
-                  <ConsoleChip active>Search mode</ConsoleChip>
+                  <ConsoleChip active>{t("source.searchMode")}</ConsoleChip>
                 ) : (
-                  <ConsoleChip active>{mode}</ConsoleChip>
+                  <ConsoleChip active>{modeLabel}</ConsoleChip>
                 )}
               </Group>
               <Box style={{ minWidth: 0 }}>
-                <Text className="lnr-console-kicker">Prepared origin</Text>
+                <Text className="lnr-console-kicker">
+                  {t("source.preparedOrigin")}
+                </Text>
                 <Anchor
                   size="sm"
                   truncate
@@ -313,9 +318,13 @@ export function SourcePage() {
 
         <section className="lnr-source-results-panel">
           <ConsoleSectionHeader
-            eyebrow={isSearchMode ? "Source search" : "Source catalog"}
-            title={isSearchMode ? `"${trimmedSearch}"` : mode}
-            count={`${accumulated.length} loaded`}
+            eyebrow={
+              isSearchMode
+                ? t("source.searchEyebrow")
+                : t("source.catalogEyebrow")
+            }
+            title={isSearchMode ? `"${trimmedSearch}"` : modeLabel}
+            count={t("source.loadedCount", { count: accumulated.length })}
             actions={
               <Button
                 variant="default"
@@ -324,7 +333,7 @@ export function SourcePage() {
                 loading={listing.isFetching && page > 1}
                 disabled={!hasNextPage}
               >
-                Load more
+                {t("common.loadMore")}
               </Button>
             }
           />
@@ -335,15 +344,18 @@ export function SourcePage() {
                 <Group gap="sm">
                   <Loader size="sm" />
                   {isSearchMode
-                    ? `Searching ${plugin.name} for "${trimmedSearch}"...`
-                    : `Loading ${mode}...`}
+                    ? t("source.searching", {
+                        name: plugin.name,
+                        query: trimmedSearch,
+                      })
+                    : t("source.loadingMode", { mode: modeLabel })}
                 </Group>
               }
             />
           ) : listing.error ? (
             <StateView
               color="red"
-              title="Source error"
+              title={t("source.error")}
               message={
                 listing.error instanceof Error
                   ? listing.error.message
@@ -353,11 +365,17 @@ export function SourcePage() {
           ) : accumulated.length === 0 ? (
             <StateView
               color="blue"
-              title="No results"
+              title={t("source.noResults")}
               message={
                 isSearchMode
-                  ? `${plugin.name} returned no matches for "${trimmedSearch}".`
-                  : `${plugin.name} returned no novels for ${mode}.`
+                  ? t("source.noSearchResults", {
+                      name: plugin.name,
+                      query: trimmedSearch,
+                    })
+                  : t("source.noCatalogResults", {
+                      name: plugin.name,
+                      mode: modeLabel,
+                    })
               }
             />
           ) : (
@@ -378,7 +396,7 @@ export function SourcePage() {
           {open.error ? (
             <StateView
               color="red"
-              title="Open failed"
+              title={t("common.openFailed")}
               message={
                 open.error instanceof Error
                   ? open.error.message
@@ -391,17 +409,21 @@ export function SourcePage() {
 
       <ConsoleStatusStrip>
         <span>{plugin.name}</span>
-        <span>{isSearchMode ? `search: ${trimmedSearch}` : `mode: ${mode}`}</span>
-        <span>page {page}</span>
-        <span>{accumulated.length} novels loaded</span>
-        <span>{activeFilterCount} active filters</span>
+        <span>
+          {isSearchMode
+            ? t("source.status.search", { query: trimmedSearch })
+            : t("source.status.mode", { mode: modeLabel })}
+        </span>
+        <span>{t("source.status.page", { page })}</span>
+        <span>{t("source.status.loadedNovels", { count: accumulated.length })}</span>
+        <span>{t("source.status.activeFilters", { count: activeFilterCount })}</span>
       </ConsoleStatusStrip>
 
       {plugin.filters && (
         <Drawer
           opened={filterDrawerOpen}
           onClose={() => setFilterDrawerOpen(false)}
-          title={`${plugin.name} filters`}
+          title={t("source.drawerTitle", { name: plugin.name })}
           position="right"
           size="md"
         >
@@ -418,14 +440,14 @@ export function SourcePage() {
                   setPendingFilters(initialFilters);
                 }}
               >
-                Reset
+                {t("common.reset")}
               </Button>
               <Group gap="xs">
                 <Button
                   variant="default"
                   onClick={() => setFilterDrawerOpen(false)}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button
                   onClick={() => {
@@ -433,7 +455,7 @@ export function SourcePage() {
                     setFilterDrawerOpen(false);
                   }}
                 >
-                  Apply
+                  {t("common.apply")}
                 </Button>
               </Group>
             </Group>

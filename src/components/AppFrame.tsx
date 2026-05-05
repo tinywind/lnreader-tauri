@@ -54,7 +54,10 @@ export function PageHeader({
   title,
 }: PageHeaderProps) {
   return (
-    <header className="lnr-page-header">
+    <header
+      className="lnr-page-header"
+      data-has-actions={actions ? "true" : "false"}
+    >
       <Box className="lnr-page-header-copy">
         {eyebrow ? <Text className="lnr-page-kicker">{eyebrow}</Text> : null}
         <Title className="lnr-page-title" order={1}>
@@ -104,6 +107,8 @@ export function PageSection({
 
 interface StateViewProps {
   action?: {
+    icon?: ReactNode;
+    iconOnly?: boolean;
     label: string;
     onClick: () => void;
   };
@@ -122,8 +127,16 @@ export function StateView({
     <Alert className="lnr-surface" color={color} radius="sm" title={title}>
       {message ? <Text size="sm">{message}</Text> : null}
       {action ? (
-        <Button mt="md" size="xs" variant="light" onClick={action.onClick}>
-          {action.label}
+        <Button
+          aria-label={action.iconOnly ? action.label : undefined}
+          className={action.iconOnly ? "lnr-state-action-icon" : undefined}
+          mt="md"
+          size="xs"
+          title={action.iconOnly ? action.label : undefined}
+          variant="light"
+          onClick={action.onClick}
+        >
+          {action.iconOnly && action.icon ? action.icon : action.label}
         </Button>
       ) : null}
     </Alert>

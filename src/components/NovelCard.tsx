@@ -4,14 +4,14 @@ import {
   Box,
   Card,
   Group,
-  Image,
   Stack,
   Text,
   useMantineTheme,
 } from "@mantine/core";
+import { ConsoleCover } from "./ConsolePrimitives";
+import { useTranslation } from "../i18n";
 import type { LibraryDisplayMode } from "../store/library";
 
-const FALLBACK_COVER = "https://placehold.co/140x210?text=No+Cover";
 const LONG_PRESS_MS = 500;
 
 interface NovelCardProps {
@@ -49,6 +49,7 @@ export function NovelCard({
   onActivate,
   onLongPress,
 }: NovelCardProps) {
+  const { t } = useTranslation();
   const theme = useMantineTheme();
   const longPressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
@@ -117,13 +118,11 @@ export function NovelCard({
   const coverImage = (
     <Box pos="relative">
       {badges}
-      <Image
-        src={cover ?? FALLBACK_COVER}
-        fallbackSrc={FALLBACK_COVER}
-        h={displayMode === "list" ? 92 : 210}
-        w={displayMode === "list" ? 62 : undefined}
+      <ConsoleCover
         alt={name}
-        draggable={false}
+        height={displayMode === "list" ? 92 : 210}
+        src={cover}
+        width={displayMode === "list" ? 62 : "100%"}
       />
       {displayMode === "compact" ? (
         <Box
@@ -178,7 +177,7 @@ export function NovelCard({
               {name}
             </Text>
             <Text size="xs" c="dimmed">
-              {totalChapters} chapters
+              {t("novel.chaptersCount", { count: totalChapters })}
             </Text>
           </Stack>
         </Group>

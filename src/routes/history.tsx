@@ -7,9 +7,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import {
   Box,
-  Button,
   Group,
-  Image,
   Loader,
   Paper,
   SegmentedControl,
@@ -18,40 +16,57 @@ import {
   Text,
   TextInput,
   Title,
+  Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   PageFrame,
   PageHeader,
-  StateView,
 } from "../components/AppFrame";
+import { ConsoleCover } from "../components/ConsolePrimitives";
 import {
   clearNovelHistory,
   getAdjacentChapter,
   listRecentlyRead,
   type RecentlyReadEntry,
 } from "../db/queries/chapter";
+import {
+  formatTimeForLocale,
+  useTranslation,
+  type AppLocale,
+  type TranslationKey,
+} from "../i18n";
 
 const HISTORY_LIMIT = 100;
 const FINISHED_PROGRESS = 100;
 
 type ProgressFilter = "all" | "inProgress" | "finished";
-type DateBucket = "Today" | "This week" | "Older";
+type DateBucket = "today" | "thisWeek" | "older";
 
 interface HistoryDateSection {
   label: DateBucket;
   entries: RecentlyReadEntry[];
 }
 
-const DATE_BUCKETS: DateBucket[] = ["Today", "This week", "Older"];
+const DATE_BUCKETS: DateBucket[] = ["today", "thisWeek", "older"];
+const DATE_BUCKET_LABEL_KEYS: Record<DateBucket, TranslationKey> = {
+  today: "history.bucket.today",
+  thisWeek: "history.bucket.thisWeek",
+  older: "history.bucket.older",
+};
 
-function formatClock(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+function getDateBucketLabel(
+  bucket: DateBucket,
+  t: (key: TranslationKey) => string,
+): string {
+  return t(DATE_BUCKET_LABEL_KEYS[bucket]);
 }
 
-function formatHistoryTimestamp(epochSeconds: number): string {
+function formatHistoryTimestamp(
+  epochSeconds: number,
+  locale: AppLocale,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
   const now = new Date();
   const date = new Date(epochSeconds * 1000);
   const todayStart = new Date(
@@ -68,14 +83,18 @@ function formatHistoryTimestamp(epochSeconds: number): string {
     (todayStart - dateStart) / (24 * 60 * 60 * 1000),
   );
 
-  if (dayDelta === 0) return `Today - ${formatClock(date)}`;
-  if (dayDelta === 1) return `Yesterday - ${formatClock(date)}`;
-  if (dayDelta < 7) {
-    return `${new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-    }).format(date)} - ${formatClock(date)}`;
+  if (dayDelta === 0) {
+    return `${t("time.today")} - ${formatTimeForLocale(locale, date)}`;
   }
-  return new Intl.DateTimeFormat(undefined, {
+  if (dayDelta === 1) {
+    return `${t("time.yesterday")} - ${formatTimeForLocale(locale, date)}`;
+  }
+  if (dayDelta < 7) {
+    return `${new Intl.DateTimeFormat(locale, {
+      weekday: "short",
+    }).format(date)} - ${formatTimeForLocale(locale, date)}`;
+  }
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -97,11 +116,11 @@ function formatDateBucket(epochSeconds: number): DateBucket {
     date.getDate(),
   ).getTime();
 
-  if (dateStart === todayStart) return "Today";
+  if (dateStart === todayStart) return "today";
   if (todayStart - dateStart < 7 * 24 * 60 * 60 * 1000) {
-    return "This week";
+    return "thisWeek";
   }
-  return "Older";
+  return "older";
 }
 
 function getProgressStatus(entry: RecentlyReadEntry): "finished" | "active" {
@@ -152,27 +171,13 @@ function HistoryCover({
         ? { w: 44, h: 66 }
         : { w: 46, h: 68 };
 
-  if (entry.novelCover) {
-    return (
-      <Image
-        src={entry.novelCover}
-        fallbackSrc={undefined}
-        w={dimensions.w}
-        h={dimensions.h}
-        alt={entry.novelName}
-        radius={3}
-      />
-    );
-  }
-
   return (
-    <Box
-      aria-label={`${entry.novelName} cover placeholder`}
-      className="lnr-history-cover-placeholder"
-      style={dimensions}
-    >
-      <span>{entry.novelName.slice(0, 28)}</span>
-    </Box>
+    <ConsoleCover
+      alt={entry.novelName}
+      height={dimensions.h}
+      src={entry.novelCover}
+      width={dimensions.w}
+    />
   );
 }
 
@@ -197,33 +202,191 @@ function HistoryProgress({ value }: { value: number }) {
   );
 }
 
-function StatusDot({ entry }: { entry: RecentlyReadEntry }) {
+function StatusFlag({ entry }: { entry: RecentlyReadEntry }) {
+  const { t } = useTranslation();
   const status = getProgressStatus(entry);
-  const label = status === "finished" ? "Finished" : "In progress";
+  const label =
+    status === "finished" ? t("common.finished") : t("common.inProgress");
 
   return (
-    <span
-      aria-label={label}
-      className="lnr-history-status"
-      data-status={status}
+    <HistoryIconFlag
+      className="lnr-history-status-flag"
+      label={label}
+      tone={status === "finished" ? "done" : "accent"}
     >
-      <span aria-hidden className="lnr-history-status-dot" />
-      {label}
-    </span>
+      {status === "finished" ? <CheckIcon /> : <ClockIcon />}
+    </HistoryIconFlag>
   );
 }
 
-function HistoryChip({
-  active,
-  children,
-}: {
-  active?: boolean;
+interface HistoryIconButtonProps {
   children: ReactNode;
-}) {
+  className?: string;
+  disabled?: boolean;
+  label: string;
+  onClick: () => void;
+  tone?: "default" | "accent" | "danger";
+}
+
+function HistoryIconButton({
+  children,
+  className,
+  disabled = false,
+  label,
+  onClick,
+  tone = "default",
+}: HistoryIconButtonProps) {
+  const classNames = `lnr-history-icon-button${
+    className ? ` ${className}` : ""
+  }`;
+
   return (
-    <span className="lnr-history-chip" data-active={active ? "true" : "false"}>
-      {children}
-    </span>
+    <Tooltip label={label} openDelay={350} withArrow>
+      <UnstyledButton
+        aria-label={label}
+        className={classNames}
+        data-tone={tone}
+        disabled={disabled}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
+        title={label}
+        type="button"
+      >
+        {children}
+      </UnstyledButton>
+    </Tooltip>
+  );
+}
+
+interface HistoryIconFlagProps {
+  children: ReactNode;
+  className?: string;
+  count?: number;
+  label: string;
+  tone?: "accent" | "default" | "done" | "danger";
+}
+
+function HistoryIconFlag({
+  children,
+  className,
+  count,
+  label,
+  tone = "default",
+}: HistoryIconFlagProps) {
+  const hasCount = count != null;
+  const classNames = `lnr-history-icon-flag${
+    className ? ` ${className}` : ""
+  }`;
+
+  return (
+    <Tooltip label={label} openDelay={350} withArrow>
+      <span
+        aria-label={label}
+        className={classNames}
+        data-count={hasCount ? "true" : undefined}
+        data-tone={tone}
+        role="img"
+        title={label}
+      >
+        {children}
+        {hasCount ? (
+          <span className="lnr-history-icon-count">{count}</span>
+        ) : null}
+      </span>
+    </Tooltip>
+  );
+}
+
+function ReadForwardIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
+      <path d="M9 9h5" />
+      <path d="M9 13h4" />
+    </svg>
+  );
+}
+
+function DetailsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 7h16" />
+      <path d="M9 7V4h6v3" />
+      <path d="M7 7l1 13h8l1-13" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 12l5 5L20 6" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v5l3 2" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5h14v15H5z" />
+      <path d="M8 3v4" />
+      <path d="M16 3v4" />
+      <path d="M5 9h14" />
+      <path d="M8 13h3" />
+      <path d="M8 16h5" />
+    </svg>
+  );
+}
+
+function HistoryArchiveIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 5h16v4H4z" />
+      <path d="M6 9v10h12V9" />
+      <path d="M9 13h6" />
+    </svg>
+  );
+}
+
+function LibraryIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 4h4v16H4z" />
+      <path d="M10 4h4v16h-4z" />
+      <path d="m16 6 4-1 3 15-4 1z" />
+    </svg>
+  );
+}
+
+function RetryIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+      <path d="M20 4v6h-6" />
+    </svg>
   );
 }
 
@@ -242,11 +405,19 @@ function HistoryRow({
   onOpenNovel,
   onRemoveNovel,
 }: HistoryRowProps) {
+  const { locale, t } = useTranslation();
   const removing = removingNovelId === entry.novelId;
+  const continueLabel = `${t("novel.continueReading")} - ${entry.novelName}`;
+  const detailsLabel = `${t("common.details")} - ${entry.novelName}`;
+  const removeLabel = `${t("common.remove")} - ${entry.novelName}`;
 
   return (
     <Paper
-      aria-label={`${entry.novelName}, ${entry.progress}% progress, last read chapter ${entry.position}`}
+      aria-label={t("history.row.aria", {
+        novel: entry.novelName,
+        progress: entry.progress,
+        position: entry.position,
+      })}
       className="lnr-history-row"
       component="article"
       data-removing={removing ? "true" : "false"}
@@ -272,7 +443,7 @@ function HistoryRow({
           >
             {entry.novelName}
           </Text>
-          <StatusDot entry={entry} />
+          <StatusFlag entry={entry} />
         </Group>
         <Text
           className="lnr-history-row-chapter"
@@ -280,14 +451,19 @@ function HistoryRow({
           lineClamp={1}
           title={entry.chapterName}
         >
-          <span>Ch.{entry.position}</span> - <em>{entry.chapterName}</em>
+          <span>
+            {t("history.chapterPrefix")}
+            {entry.position}
+          </span>{" "}
+          - <em>{entry.chapterName}</em>
         </Text>
         <Group className="lnr-history-row-meta" gap="xs" wrap="nowrap">
           <Box className="lnr-history-row-progress">
             <HistoryProgress value={entry.progress} />
           </Box>
           <Text component="span">
-            {entry.progress}% - {formatHistoryTimestamp(entry.readAt)}
+            {entry.progress}% -{" "}
+            {formatHistoryTimestamp(entry.readAt, locale, t)}
           </Text>
         </Group>
       </Box>
@@ -301,37 +477,30 @@ function HistoryRow({
         {removing ? (
           <span className="lnr-history-removing">
             <Loader size={10} />
-            removing
+            {t("history.removing")}
           </span>
         ) : (
           <>
-            <Button
-              aria-label={`Continue reading ${entry.novelName}`}
-              className="lnr-history-button lnr-history-button--primary"
+            <HistoryIconButton
+              label={continueLabel}
               onClick={onContinueReading}
-              size="xs"
-              variant="default"
+              tone="accent"
             >
-              Continue
-            </Button>
-            <Button
-              aria-label={`Open details for ${entry.novelName}`}
-              className="lnr-history-button"
+              <ReadForwardIcon />
+            </HistoryIconButton>
+            <HistoryIconButton
+              label={detailsLabel}
               onClick={onOpenNovel}
-              size="xs"
-              variant="default"
             >
-              Details
-            </Button>
-            <Button
-              aria-label={`Remove ${entry.novelName} from history`}
-              className="lnr-history-button lnr-history-button--danger"
+              <DetailsIcon />
+            </HistoryIconButton>
+            <HistoryIconButton
+              label={removeLabel}
               onClick={onRemoveNovel}
-              size="xs"
-              variant="default"
+              tone="danger"
             >
-              Remove
-            </Button>
+              <TrashIcon />
+            </HistoryIconButton>
           </>
         )}
       </Group>
@@ -356,28 +525,35 @@ function ResumePanel({
   onContinueReading,
   onOpenNovel,
 }: ResumePanelProps) {
+  const { t } = useTranslation();
+  const continueLabel = `${t("novel.continueReading")} - ${entry.novelName}`;
+  const detailsLabel = `${t("common.details")} - ${entry.novelName}`;
   const nextLabel =
     entry.progress < FINISHED_PROGRESS
-      ? `Current - Ch.${entry.position} ${entry.chapterName}`
+      ? `${t("history.currentChapter")} - ${t("history.chapterPrefix")}${entry.position} ${entry.chapterName}`
       : checkingNextChapter
-        ? "Checking next chapter..."
+        ? t("history.checkingNextChapter")
         : nextChapterName
-          ? `Next - Ch.${nextChapterPosition} ${nextChapterName}`
-          : "Next chapter is not indexed.";
+          ? `${t("history.nextChapter")} - ${t("history.chapterPrefix")}${nextChapterPosition} ${nextChapterName}`
+          : t("history.nextChapterMissing");
 
   return (
     <Paper className="lnr-history-resume" withBorder>
       <HistoryCover entry={entry} size="resume" />
       <Box className="lnr-history-resume-main">
-        <Text className="lnr-history-kicker">Resume</Text>
+        <Text className="lnr-history-kicker">{t("history.resume")}</Text>
         <Title className="lnr-history-resume-title" order={2} lineClamp={1}>
           {entry.novelName}
         </Title>
         <Text className="lnr-history-resume-last" lineClamp={1}>
-          Last read - <span>Ch.{entry.position}</span>{" "}
+          {t("history.lastRead")} -{" "}
+          <span>
+            {t("history.chapterPrefix")}
+            {entry.position}
+          </span>{" "}
           <em>{entry.chapterName}</em>
         </Text>
-        <Group gap="xs" mt={8} wrap="nowrap">
+        <Group className="lnr-history-resume-meta" gap="xs" mt={8} wrap="nowrap">
           <Box style={{ flex: 1 }}>
             <HistoryProgress value={entry.progress} />
           </Box>
@@ -386,23 +562,20 @@ function ResumePanel({
         <Text className="lnr-history-next" lineClamp={1}>
           {nextLabel}
         </Text>
-        <Group gap="xs" mt="auto">
-          <Button
-            className="lnr-history-button lnr-history-button--primary"
+        <Group className="lnr-history-resume-actions" gap="xs" mt="auto">
+          <HistoryIconButton
+            label={continueLabel}
             onClick={onContinueReading}
-            size="xs"
-            variant="default"
+            tone="accent"
           >
-            Continue
-          </Button>
-          <Button
-            className="lnr-history-button"
+            <ReadForwardIcon />
+          </HistoryIconButton>
+          <HistoryIconButton
+            label={detailsLabel}
             onClick={onOpenNovel}
-            size="xs"
-            variant="default"
           >
-            Details
-          </Button>
+            <DetailsIcon />
+          </HistoryIconButton>
         </Group>
       </Box>
     </Paper>
@@ -416,8 +589,9 @@ function HistorySummaryPanel({
   entries: RecentlyReadEntry[];
   sections: HistoryDateSection[];
 }) {
+  const { t } = useTranslation();
   const thisWeekCount = entries.filter(
-    (entry) => formatDateBucket(entry.readAt) !== "Older",
+    (entry) => formatDateBucket(entry.readAt) !== "older",
   ).length;
   const finishedCount = entries.filter(
     (entry) => entry.progress >= FINISHED_PROGRESS,
@@ -431,25 +605,44 @@ function HistorySummaryPanel({
         );
   const countFor = (label: DateBucket) =>
     sections.find((section) => section.label === label)?.entries.length ?? 0;
+  const todayCount = countFor("today");
+  const weekCount = countFor("thisWeek");
+  const olderCount = countFor("older");
 
   return (
     <Paper className="lnr-history-summary" withBorder>
       <Box>
-        <Text className="lnr-history-kicker">This week</Text>
+        <Text className="lnr-history-kicker">{t("history.summary.week")}</Text>
         <Title className="lnr-history-summary-title" order={2}>
-          {thisWeekCount} novel{thisWeekCount === 1 ? "" : "s"} -{" "}
-          {finishedCount} finished
+          {t("history.summary.title", {
+            novels: thisWeekCount,
+            finished: finishedCount,
+          })}
         </Title>
         <Text className="lnr-history-summary-copy">
-          Average progress {averageProgress}% across the visible history.
+          {t("history.summary.copy", { progress: averageProgress })}
         </Text>
       </Box>
       <Group gap="xs" wrap="wrap">
-        <HistoryChip active>
-          Today - {countFor("Today")}
-        </HistoryChip>
-        <HistoryChip>This week - {countFor("This week")}</HistoryChip>
-        <HistoryChip>Older - {countFor("Older")}</HistoryChip>
+        <HistoryIconFlag
+          count={todayCount}
+          label={`${getDateBucketLabel("today", t)} - ${todayCount}`}
+          tone="accent"
+        >
+          <ClockIcon />
+        </HistoryIconFlag>
+        <HistoryIconFlag
+          count={weekCount}
+          label={`${getDateBucketLabel("thisWeek", t)} - ${weekCount}`}
+        >
+          <CalendarIcon />
+        </HistoryIconFlag>
+        <HistoryIconFlag
+          count={olderCount}
+          label={`${getDateBucketLabel("older", t)} - ${olderCount}`}
+        >
+          <HistoryArchiveIcon />
+        </HistoryIconFlag>
       </Group>
     </Paper>
   );
@@ -466,21 +659,23 @@ function FilterBar({
   onProgressFilterChange: (filter: ProgressFilter) => void;
   onSearchChange: (search: string) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Group className="lnr-history-filter" gap="xs" wrap="wrap">
       <TextInput
-        aria-label="Search history by novel name, chapter title, or chapter number"
+        aria-label={t("history.filter.searchAria")}
         className="lnr-history-search"
-        placeholder="Search by novel - chapter - #"
+        placeholder={t("history.filter.placeholder")}
         value={search}
         onChange={(event) => onSearchChange(event.currentTarget.value)}
       />
       <SegmentedControl
         className="lnr-history-segments"
         data={[
-          { value: "all", label: "All" },
-          { value: "inProgress", label: "In progress" },
-          { value: "finished", label: "Finished" },
+          { value: "all", label: t("history.filter.all") },
+          { value: "inProgress", label: t("common.inProgress") },
+          { value: "finished", label: t("common.finished") },
         ]}
         onChange={(value) => onProgressFilterChange(value as ProgressFilter)}
         value={progressFilter}
@@ -498,11 +693,13 @@ function HistorySection({
   count: number;
   title: DateBucket;
 }) {
+  const { t } = useTranslation();
+
   return (
     <section className="lnr-history-section">
       <Group align="baseline" gap="xs" mb={8}>
         <Title className="lnr-history-section-title" order={3}>
-          {title}
+          {getDateBucketLabel(title, t)}
         </Title>
         <Text className="lnr-history-section-count">- {count}</Text>
       </Group>
@@ -512,6 +709,8 @@ function HistorySection({
 }
 
 function HistoryLoadingState() {
+  const { t } = useTranslation();
+
   return (
     <Stack className="lnr-history-loading" gap={6}>
       {[0, 1, 2].map((item) => (
@@ -524,7 +723,7 @@ function HistoryLoadingState() {
           </Box>
         </Paper>
       ))}
-      <Text className="lnr-history-loading-label">Loading reading history...</Text>
+      <Text className="lnr-history-loading-label">{t("history.loading")}</Text>
     </Stack>
   );
 }
@@ -536,30 +735,63 @@ function HistoryEmptyState({
   hasSearch: boolean;
   onOpenLibrary: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Paper className="lnr-history-empty" withBorder>
-      <Title order={3}>{hasSearch ? "No matches" : "No reading history yet"}</Title>
+      <Title order={3}>
+        {hasSearch ? t("common.noMatches") : t("history.empty.noHistory.title")}
+      </Title>
       <Text>
         {hasSearch
-          ? "Try a different novel name, chapter title, or chapter number."
-          : "When you start reading from your Library, the latest read entry per novel will appear here."}
+          ? t("history.empty.noMatches.message")
+          : t("history.empty.noHistory.message")}
       </Text>
       {!hasSearch ? (
-        <Button
-          className="lnr-history-button lnr-history-button--primary"
-          mt="md"
-          onClick={onOpenLibrary}
-          size="xs"
-          variant="default"
-        >
-          Open Library
-        </Button>
+        <Group justify="center" mt="md">
+          <HistoryIconButton
+            label={t("history.empty.openLibrary")}
+            onClick={onOpenLibrary}
+            tone="accent"
+          >
+            <LibraryIcon />
+          </HistoryIconButton>
+        </Group>
       ) : null}
     </Paper>
   );
 }
 
+function HistoryErrorState({
+  error,
+  onRetry,
+}: {
+  error: unknown;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <Paper className="lnr-history-empty" withBorder>
+      <Title order={3}>{t("history.loadError")}</Title>
+      <Text>
+        {error instanceof Error ? error.message : String(error)}
+      </Text>
+      <Group justify="center" mt="md">
+        <HistoryIconButton
+          label={t("common.retry")}
+          onClick={onRetry}
+          tone="accent"
+        >
+          <RetryIcon />
+        </HistoryIconButton>
+      </Group>
+    </Paper>
+  );
+}
+
 export function HistoryPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -628,8 +860,8 @@ export function HistoryPage() {
     <PageFrame className="lnr-history-page" size="wide">
       <PageHeader
         eyebrow="/history"
-        title="Reading history"
-        description="One latest read entry per novel - sorted by most recent."
+        title={t("history.title")}
+        description={t("history.description")}
       />
 
       {latestEntry ? (
@@ -665,20 +897,11 @@ export function HistoryPage() {
       {query.isLoading ? (
         <HistoryLoadingState />
       ) : query.error ? (
-        <StateView
-          action={{
-            label: "Retry",
-            onClick: () => {
-              void query.refetch();
-            },
+        <HistoryErrorState
+          error={query.error}
+          onRetry={() => {
+            void query.refetch();
           }}
-          color="red"
-          title="Could not load history"
-          message={
-            query.error instanceof Error
-              ? query.error.message
-              : String(query.error)
-          }
         />
       ) : sections.length > 0 ? (
         <Stack gap="lg">

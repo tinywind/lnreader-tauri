@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Box } from "@mantine/core";
@@ -7,7 +7,7 @@ import {
   ReaderContent,
   type ReaderContentHandle,
 } from "../components/ReaderContent";
-import { ReaderQuickMenu } from "../components/ReaderQuickMenu";
+import { BackIconButton } from "../components/BackIconButton";
 import {
   getAdjacentChapter,
   getChapterById,
@@ -20,6 +20,7 @@ import {
 import { readerRoute } from "../router";
 import { useLibraryStore } from "../store/library";
 import { useReaderStore } from "../store/reader";
+import { useTranslation, type TranslationKey } from "../i18n";
 import "../styles/reader.css";
 
 const FINISHED_PROGRESS = 100;
@@ -62,79 +63,129 @@ function chapterDetailKey(chapterId: number) {
   return ["chapter", "detail", chapterId] as const;
 }
 
-function getChapterLabel(chapter: Pick<ChapterRow, "chapterNumber" | "position">) {
-  return chapter.chapterNumber ? `Ch. ${chapter.chapterNumber}` : `Ch. ${chapter.position}`;
+function getChapterLabel(
+  chapter: Pick<ChapterRow, "chapterNumber" | "position">,
+  t: (key: TranslationKey) => string,
+) {
+  const prefix = t("history.chapterPrefix");
+  return chapter.chapterNumber
+    ? `${prefix} ${chapter.chapterNumber}`
+    : `${prefix} ${chapter.position}`;
 }
 
-function getReaderTitle(chapter: ChapterRow | null | undefined): string {
-  return chapter?.name ?? "Reader";
+function getReaderTitle(
+  chapter: ChapterRow | null | undefined,
+  t: (key: TranslationKey) => string,
+): string {
+  return chapter?.name ?? t("reader.title");
 }
 
 function getReaderMeta(
   chapter: ChapterRow | null | undefined,
   chapterIndex: number,
   chapterCount: number,
+  t: ReturnType<typeof useTranslation>["t"],
 ): string {
-  if (!chapter) return "Sample content";
+  if (!chapter) return t("reader.sampleContent");
   const indexLabel =
     chapterIndex >= 0 && chapterCount > 0
       ? `${chapterIndex + 1} / ${chapterCount}`
-      : getChapterLabel(chapter);
-  const status = chapter.isDownloaded ? "Offline" : "Not downloaded";
-  return [`Novel ${chapter.novelId}`, indexLabel, status].join(" / ");
+      : getChapterLabel(chapter, t);
+  const status = chapter.isDownloaded
+    ? t("reader.offline")
+    : t("reader.notDownloaded");
+  return [t("reader.novelMeta", { id: chapter.novelId }), indexLabel, status].join(" / ");
 }
 
 function ReaderTopChrome({
   chapter,
   chapterCount,
   chapterIndex,
+  bookmarkDisabled,
+  bookmarkLoading,
   incognitoMode,
   onBack,
-  onToggleMenu,
+  onOpenSettings,
+  onToggleBookmark,
   progress,
 }: {
   chapter: ChapterRow | null | undefined;
   chapterCount: number;
   chapterIndex: number;
+  bookmarkDisabled: boolean;
+  bookmarkLoading: boolean;
   incognitoMode: boolean;
   onBack: () => void;
-  onToggleMenu: () => void;
+  onOpenSettings: () => void;
+  onToggleBookmark: () => void;
   progress: number;
 }) {
+  const { t } = useTranslation();
+
   return (
     <header className="lnr-reader-topbar">
-      <button
-        aria-label="Back to novel"
+      <BackIconButton
         className="lnr-reader-icon-button"
+        label={t("reader.backToNovel")}
         onClick={onBack}
-        type="button"
-      >
-        Back
-      </button>
+      />
       <div className="lnr-reader-topbar-title">
-        <div className="lnr-reader-title" title={getReaderTitle(chapter)}>
-          {getReaderTitle(chapter)}
+        <div className="lnr-reader-title" title={getReaderTitle(chapter, t)}>
+          {getReaderTitle(chapter, t)}
         </div>
         <div className="lnr-reader-meta">
-          {getReaderMeta(chapter, chapterIndex, chapterCount)}
+          {getReaderMeta(chapter, chapterIndex, chapterCount, t)}
         </div>
       </div>
       <div className="lnr-reader-topbar-spacer" />
       {incognitoMode ? (
         <span className="lnr-reader-status" data-status="muted">
-          Incognito
+          {t("reader.incognito")}
         </span>
       ) : null}
       <span className="lnr-reader-status">{Math.round(progress)}%</span>
       <button
-        aria-label="Open reader menu"
+        aria-label={
+          chapter?.bookmark
+            ? t("reader.removeBookmark")
+            : t("reader.bookmarkChapter")
+        }
         className="lnr-reader-icon-button"
-        onClick={onToggleMenu}
+        data-active={chapter?.bookmark}
+        disabled={bookmarkDisabled || bookmarkLoading}
+        onClick={onToggleBookmark}
         type="button"
       >
-        Menu
+        <BookmarkIcon />
+      </button>
+      <button
+        aria-label={t("reader.openSettings")}
+        className="lnr-reader-icon-button"
+        onClick={onOpenSettings}
+        type="button"
+      >
+        <SettingsIcon />
       </button>
     </header>
+  );
+}
+
+function BookmarkIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M6 4h12v16l-6-3.5L6 20V4z" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 7h16" />
+      <path d="M4 17h16" />
+      <path d="M8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+      <path d="M16 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+    </svg>
   );
 }
 
@@ -149,13 +200,17 @@ function ReaderChapterPanel({
   loading: boolean;
   onOpenChapter: (chapterId: number) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
-    <aside className="lnr-reader-chapter-panel" aria-label="Chapters">
-      <div className="lnr-reader-panel-kicker">Chapters</div>
+    <aside className="lnr-reader-chapter-panel" aria-label={t("reader.chapters")}>
+      <div className="lnr-reader-panel-kicker">{t("reader.chapters")}</div>
       {loading ? (
-        <div className="lnr-reader-panel-empty">Loading index...</div>
+        <div className="lnr-reader-panel-empty">{t("reader.loadingIndex")}</div>
       ) : chapters.length === 0 ? (
-        <div className="lnr-reader-panel-empty">No indexed chapters.</div>
+        <div className="lnr-reader-panel-empty">
+          {t("reader.noIndexedChapters")}
+        </div>
       ) : (
         <div className="lnr-reader-chapter-list">
           {chapters.map((item) => {
@@ -178,7 +233,7 @@ function ReaderChapterPanel({
                 type="button"
               >
                 <span className="lnr-reader-chapter-number">
-                  {getChapterLabel(item)}
+                  {getChapterLabel(item, t)}
                 </span>
                 <span className="lnr-reader-chapter-name">{item.name}</span>
                 <span className="lnr-reader-chapter-dot" aria-hidden />
@@ -210,6 +265,7 @@ function ReaderBottomStrip({
   previousLabel: string;
   progress: number;
 }) {
+  const { t } = useTranslation();
   const roundedProgress = Math.round(progress);
 
   return (
@@ -225,7 +281,7 @@ function ReaderBottomStrip({
       <div className="lnr-reader-strip-progress">
         <div className="lnr-reader-strip-current">{currentLabel}</div>
         <div
-          aria-label={`${roundedProgress}% progress`}
+          aria-label={t("reader.progressAria", { progress: roundedProgress })}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={roundedProgress}
@@ -251,12 +307,12 @@ function ReaderBottomStrip({
 }
 
 export function ReaderPage() {
+  const { t } = useTranslation();
   const { chapterId } = readerRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const contentRef = useRef<ReaderContentHandle | null>(null);
   const openedChapterRef = useRef<number | null>(null);
-  const [menuVisible, setMenuVisible] = useState(false);
 
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const setLastReadChapter = useReaderStore(
@@ -357,7 +413,6 @@ export function ReaderPage() {
         if (direction === 1) {
           contentRef.current?.completeIfAtEnd();
         }
-        setMenuVisible(false);
         openedChapterRef.current = null;
         void navigate({ to: "/reader", search: { chapterId: adjacent.id } });
       }
@@ -368,7 +423,6 @@ export function ReaderPage() {
   const openChapter = useCallback(
     (targetChapterId: number) => {
       if (targetChapterId === chapterId) return;
-      setMenuVisible(false);
       openedChapterRef.current = null;
       void navigate({ to: "/reader", search: { chapterId: targetChapterId } });
     },
@@ -377,7 +431,6 @@ export function ReaderPage() {
 
   const handleReaderBack = useCallback(() => {
     const novelId = chapterQuery.data?.novelId;
-    setMenuVisible(false);
     if (novelId) {
       void navigate({ to: "/novel", search: { id: novelId } });
       return;
@@ -422,17 +475,10 @@ export function ReaderPage() {
       ) {
         return;
       }
-      if (menuVisible && event.key !== "Escape") {
-        return;
-      }
       switch (event.key) {
         case "Escape":
           event.preventDefault();
-          if (menuVisible) {
-            setMenuVisible(false);
-          } else {
-            handleReaderBack();
-          }
+          handleReaderBack();
           break;
         case "PageDown":
         case "ArrowDown":
@@ -457,7 +503,7 @@ export function ReaderPage() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [handleReaderBack, menuVisible]);
+  }, [handleReaderBack]);
 
   const chapter = chapterQuery.data;
   const chapters = chapterListQuery.data ?? [];
@@ -493,15 +539,15 @@ export function ReaderPage() {
       <Box className="lnr-reader-state-frame">
         <StateView
           color="blue"
-          title="Loading chapter"
-          message="Loading reader content..."
+          title={t("reader.loadingChapter")}
+          message={t("reader.loadingContent")}
         />
       </Box>
     ) : chapterId > 0 && chapterQuery.error ? (
       <Box className="lnr-reader-state-frame">
         <StateView
           color="red"
-          title="Failed to load chapter"
+          title={t("reader.loadFailed")}
           message={
             chapterQuery.error instanceof Error
               ? chapterQuery.error.message
@@ -513,19 +559,16 @@ export function ReaderPage() {
       <Box className="lnr-reader-state-frame">
         <StateView
           color="orange"
-          title="Chapter not found"
-          message={`No chapter row with id ${chapterId} exists in the local DB.`}
+          title={t("reader.chapterNotFound")}
+          message={t("reader.chapterNotFoundMessage", { id: chapterId })}
         />
       </Box>
     ) : chapterId > 0 && chapter && !chapter.isDownloaded ? (
       <Box className="lnr-reader-state-frame">
         <StateView
           color="blue"
-          title="Not downloaded yet"
-          message={
-            "Open this chapter from the novel detail screen and tap " +
-            "\"Download\" to fetch its body before reading offline."
-          }
+          title={t("reader.notDownloadedYet")}
+          message={t("reader.notDownloadedMessage")}
         />
       </Box>
     ) : (
@@ -535,10 +578,8 @@ export function ReaderPage() {
         bottomOverlayOffset={32}
         html={html}
         initialProgress={progress}
-        interactionBlocked={menuVisible}
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
-        onToggleChrome={() => setMenuVisible((visible) => !visible)}
         onBoundaryPage={(direction) => {
           void openAdjacent(direction);
         }}
@@ -552,9 +593,14 @@ export function ReaderPage() {
         chapter={chapter}
         chapterCount={chapters.length}
         chapterIndex={chapterIndex}
+        bookmarkDisabled={!chapter}
+        bookmarkLoading={bookmarkMutation.isPending}
         incognitoMode={incognitoMode}
         onBack={handleReaderBack}
-        onToggleMenu={() => setMenuVisible((visible) => !visible)}
+        onOpenSettings={() => {
+          void navigate({ to: "/settings" });
+        }}
+        onToggleBookmark={() => bookmarkMutation.mutate()}
         progress={progress}
       />
       <Box className="lnr-reader-body">
@@ -567,10 +613,10 @@ export function ReaderPage() {
         <Box className="lnr-reader-content-frame">{readerContent}</Box>
       </Box>
       <ReaderBottomStrip
-        currentLabel={chapter ? getChapterLabel(chapter) : "Sample"}
+        currentLabel={chapter ? getChapterLabel(chapter, t) : t("reader.sample")}
         hasNextChapter={!!nextChapter}
         hasPreviousChapter={!!previousChapter}
-        nextLabel={nextChapter ? getChapterLabel(nextChapter) : "Next"}
+        nextLabel={nextChapter ? getChapterLabel(nextChapter, t) : t("reader.next")}
         onNextChapter={() => {
           void openAdjacent(1);
         }}
@@ -578,38 +624,11 @@ export function ReaderPage() {
           void openAdjacent(-1);
         }}
         previousLabel={
-          previousChapter ? getChapterLabel(previousChapter) : "Previous"
+          previousChapter ? getChapterLabel(previousChapter, t) : t("common.previous")
         }
         progress={progress}
       />
 
-      <ReaderQuickMenu
-        visible={menuVisible}
-        chapterName={chapter?.name}
-        progress={progress}
-        incognitoMode={incognitoMode}
-        bookmarked={chapter?.bookmark ?? false}
-        bookmarkLoading={bookmarkMutation.isPending}
-        bookmarkDisabled={!chapter}
-        hasNextChapter={!!nextChapter}
-        hasPreviousChapter={!!previousChapter}
-        onBookmark={() => bookmarkMutation.mutate()}
-        onBack={handleReaderBack}
-        onClose={() => setMenuVisible(false)}
-        onOpenSettings={() => {
-          setMenuVisible(false);
-          void navigate({ to: "/settings" });
-        }}
-        onPreviousChapter={() => {
-          void openAdjacent(-1);
-        }}
-        onNextChapter={() => {
-          void openAdjacent(1);
-        }}
-        onScrollToStart={() => {
-          contentRef.current?.scrollToStart();
-        }}
-      />
     </Box>
   );
 }

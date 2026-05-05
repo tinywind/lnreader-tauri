@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActionIcon,
   Alert,
   Box,
   Button,
@@ -18,7 +19,18 @@ import {
   ConsoleStatusDot,
   ConsoleStatusStrip,
 } from "../components/ConsolePrimitives";
+import {
+  ChevronDownGlyph,
+  ChevronUpGlyph,
+  ExternalLinkGlyph,
+  MoreGlyph,
+  PinGlyph,
+  RetryGlyph,
+  SourceGlyph,
+  TrashGlyph,
+} from "../components/ActionGlyphs";
 import { SearchBar } from "../components/SearchBar";
+import { formatPluginLanguageForLocale, useTranslation } from "../i18n";
 import {
   globalSearch,
   type GlobalSearchResult,
@@ -31,8 +43,8 @@ import { useSiteBrowserStore } from "../store/site-browser";
 import "../styles/browse.css";
 
 const PREVIEW_RESULT_COUNT = 5;
-let activeSearchController: AbortController | null = null;
-let activeSearchKey: string | null = null;
+const activeSearchControllers = new Map<string, Set<AbortController>>();
+const activeSearchPluginIds = new Map<string, Set<string>>();
 
 type ScopeMode = "all" | "pinned" | "selected";
 type ResultSortMode = "pinned" | "count" | "source";
@@ -67,6 +79,71 @@ function rowResultCount(row: ResultViewRow): number {
   return row.result?.novels.length ?? 0;
 }
 
+function hasSameStringItems(
+  current: readonly string[],
+  next: readonly string[],
+): boolean {
+  if (current.length !== next.length) return false;
+  const nextItems = new Set(next);
+  return current.every((item) => nextItems.has(item));
+}
+
+function getActivePluginIds(searchKey: string): string[] {
+  return [...(activeSearchPluginIds.get(searchKey) ?? new Set<string>())];
+}
+
+function registerActiveSearch(
+  searchKey: string,
+  controller: AbortController,
+  pluginIds: readonly string[],
+): void {
+  const controllers =
+    activeSearchControllers.get(searchKey) ?? new Set<AbortController>();
+  controllers.add(controller);
+  activeSearchControllers.set(searchKey, controllers);
+
+  const activeIds =
+    activeSearchPluginIds.get(searchKey) ?? new Set<string>();
+  for (const pluginId of pluginIds) {
+    activeIds.add(pluginId);
+  }
+  activeSearchPluginIds.set(searchKey, activeIds);
+}
+
+function completeActiveSearch(
+  searchKey: string,
+  controller: AbortController,
+  pluginIds: readonly string[],
+): string[] {
+  const controllers = activeSearchControllers.get(searchKey);
+  controllers?.delete(controller);
+  if (controllers?.size === 0) {
+    activeSearchControllers.delete(searchKey);
+  }
+
+  const activeIds = activeSearchPluginIds.get(searchKey);
+  if (!activeIds) return [];
+  for (const pluginId of pluginIds) {
+    activeIds.delete(pluginId);
+  }
+  if (activeIds.size === 0) {
+    activeSearchPluginIds.delete(searchKey);
+    return [];
+  }
+  return [...activeIds];
+}
+
+function abortSearchesExcept(searchKey: string): void {
+  for (const [activeKey, controllers] of activeSearchControllers) {
+    if (activeKey === searchKey) continue;
+    for (const controller of controllers) {
+      controller.abort();
+    }
+    activeSearchControllers.delete(activeKey);
+    activeSearchPluginIds.delete(activeKey);
+  }
+}
+
 interface ScopePanelProps {
   installedPlugins: readonly Plugin[];
   languageFilter: readonly string[];
@@ -77,6 +154,8 @@ interface ScopePanelProps {
   selectedPluginIds: readonly string[];
   onClearLanguages: () => void;
   onClearSelected: () => void;
+  onOpenSite: (plugin: Plugin) => void;
+  onOpenSource: (plugin: Plugin) => void;
   onScopeModeChange: (mode: ScopeMode) => void;
   onToggleSelectedPlugin: (pluginId: string) => void;
 }
@@ -91,17 +170,21 @@ function ScopePanel({
   selectedPluginIds,
   onClearLanguages,
   onClearSelected,
+  onOpenSite,
+  onOpenSource,
   onScopeModeChange,
   onToggleSelectedPlugin,
 }: ScopePanelProps) {
+  const { locale, t } = useTranslation();
+  const [sourceListOpen, setSourceListOpen] = useState(false);
   const pinnedPlugins = installedPlugins.filter((plugin) =>
     pinnedPluginIds.includes(plugin.id),
   );
   return (
     <aside className="lnr-search-scope">
       <ConsoleSectionHeader
-        eyebrow="Search scope"
-        title="Before fan-out"
+        eyebrow={t("globalSearch.scope.eyebrow")}
+        title={t("globalSearch.scope.title")}
         count={`${scopedCount}/${installedPlugins.length}`}
       />
 
@@ -109,9 +192,24 @@ function ScopePanel({
         value={scopeMode}
         onChange={(value) => onScopeModeChange(value as ScopeMode)}
         data={[
-          { value: "all", label: `All ${installedPlugins.length}` },
-          { value: "pinned", label: `Pinned ${pinnedPlugins.length}` },
-          { value: "selected", label: `Selected ${selectedPluginIds.length}` },
+          {
+            value: "all",
+            label: t("globalSearch.scope.all", {
+              count: installedPlugins.length,
+            }),
+          },
+          {
+            value: "pinned",
+            label: t("globalSearch.scope.pinned", {
+              count: pinnedPlugins.length,
+            }),
+          },
+          {
+            value: "selected",
+            label: t("globalSearch.scope.selected", {
+              count: selectedPluginIds.length,
+            }),
+          },
         ]}
         size="xs"
         fullWidth
@@ -119,20 +217,20 @@ function ScopePanel({
       />
 
       <div className="lnr-search-scope-block">
-        <Text className="lnr-console-kicker">Languages</Text>
+        <Text className="lnr-console-kicker">{t("globalSearch.languages")}</Text>
         <Group gap={6} wrap="wrap">
           {languageFilter.length === 0 ? (
-            <ConsoleChip active>All languages</ConsoleChip>
+            <ConsoleChip active>{t("browse.allLanguages")}</ConsoleChip>
           ) : (
             languageFilter.map((language) => (
               <ConsoleChip key={language} active>
-                {language.toUpperCase()}
+                {formatPluginLanguageForLocale(locale, language)}
               </ConsoleChip>
             ))
           )}
           {languageFilter.length > 0 ? (
             <Button size="compact-xs" variant="subtle" onClick={onClearLanguages}>
-              Clear
+              {t("common.clear")}
             </Button>
           ) : null}
         </Group>
@@ -140,7 +238,7 @@ function ScopePanel({
 
       {lastUsedPlugin ? (
         <div className="lnr-search-scope-block">
-          <Text className="lnr-console-kicker">Recently used</Text>
+          <Text className="lnr-console-kicker">{t("globalSearch.recentlyUsed")}</Text>
           <button
             type="button"
             className="lnr-search-source-chip"
@@ -160,38 +258,107 @@ function ScopePanel({
         </div>
       ) : null}
 
-      <div className="lnr-search-scope-block">
-        <Text className="lnr-console-kicker">Source selection</Text>
-        <div className="lnr-search-source-list">
+      <div className="lnr-search-scope-block lnr-search-scope-source-block">
+        <div className="lnr-search-source-heading">
+          <Text className="lnr-console-kicker">
+            {t("globalSearch.sourceSelection")}
+          </Text>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            className="lnr-search-source-toggle lnr-action-icon"
+            aria-expanded={sourceListOpen}
+            aria-label={
+              sourceListOpen
+                ? t("globalSearch.hideSources")
+                : t("globalSearch.showSources")
+            }
+            aria-controls="lnr-search-source-list"
+            title={
+              sourceListOpen
+                ? t("globalSearch.hideSources")
+                : t("globalSearch.showSources")
+            }
+            onClick={() => setSourceListOpen((open) => !open)}
+          >
+            {sourceListOpen ? <ChevronUpGlyph /> : <ChevronDownGlyph />}
+          </ActionIcon>
+        </div>
+        <div
+          id="lnr-search-source-list"
+          className="lnr-search-source-list"
+          data-open={sourceListOpen ? "true" : "false"}
+        >
           {installedPlugins.map((plugin) => {
             const active = selectedPluginIds.includes(plugin.id);
             return (
-              <button
+              <div
                 key={plugin.id}
-                type="button"
-                className="lnr-search-source-chip"
+                className="lnr-search-source-chip lnr-search-source-chip--with-actions"
                 data-active={active}
-                aria-pressed={active}
-                onClick={() => onToggleSelectedPlugin(plugin.id)}
               >
-                <span className="lnr-search-source-icon">
-                  {pluginInitial(plugin)}
+                <button
+                  type="button"
+                  className="lnr-search-source-select"
+                  aria-pressed={active}
+                  onClick={() => onToggleSelectedPlugin(plugin.id)}
+                >
+                  <span className="lnr-search-source-icon">
+                    {pluginInitial(plugin)}
+                  </span>
+                  <span className="lnr-search-source-name">{plugin.name}</span>
+                </button>
+                <span className="lnr-search-source-actions">
+                  {pinnedPluginIds.includes(plugin.id) ? (
+                    <span
+                      className="lnr-icon-state"
+                      data-active="true"
+                      role="img"
+                      aria-label={t("common.pinned")}
+                      title={t("common.pinned")}
+                    >
+                      <PinGlyph />
+                    </span>
+                  ) : null}
+                  <ActionIcon
+                    className="lnr-action-icon"
+                    size="sm"
+                    variant="subtle"
+                    aria-label={`${t("common.source")}: ${plugin.name}`}
+                    title={t("common.source")}
+                    onClick={() => onOpenSource(plugin)}
+                  >
+                    <SourceGlyph />
+                  </ActionIcon>
+                  <ActionIcon
+                    className="lnr-action-icon"
+                    size="sm"
+                    variant="subtle"
+                    aria-label={`${t("common.openSite")}: ${plugin.name}`}
+                    title={t("common.openSite")}
+                    onClick={() => onOpenSite(plugin)}
+                  >
+                    <ExternalLinkGlyph />
+                  </ActionIcon>
                 </span>
-                <span>{plugin.name}</span>
-                {pinnedPluginIds.includes(plugin.id) ? (
-                  <span className="lnr-search-source-meta">Pinned</span>
-                ) : null}
-              </button>
+              </div>
             );
           })}
         </div>
       </div>
 
       <ConsoleStatusStrip className="lnr-search-scope-strip">
-        <span>{selectedPluginIds.length} selected</span>
-        <Button size="compact-xs" variant="subtle" onClick={onClearSelected}>
-          Clear selected
-        </Button>
+        <span>{t("globalSearch.selectedCount", { count: selectedPluginIds.length })}</span>
+        <ActionIcon
+          className="lnr-action-icon"
+          size="sm"
+          variant="subtle"
+          aria-label={t("globalSearch.clearSelected")}
+          title={t("globalSearch.clearSelected")}
+          onClick={onClearSelected}
+        >
+          <TrashGlyph />
+        </ActionIcon>
       </ConsoleStatusStrip>
     </aside>
   );
@@ -214,25 +381,43 @@ function ActiveScopeRow({
   selectedCount,
   showFailures,
 }: ActiveScopeRowProps) {
+  const { locale, t } = useTranslation();
+  const scopeLabel =
+    scopeMode === "all"
+      ? t("common.all")
+      : scopeMode === "pinned"
+        ? t("common.pinned")
+        : t("common.selected");
+
   return (
     <Group className="lnr-search-active-row" gap={6} wrap="wrap">
-      <Text className="lnr-console-kicker">Active</Text>
-      <ConsoleChip active>{scopeMode}</ConsoleChip>
-      <ConsoleChip active>{scopedCount} sources</ConsoleChip>
+      <Text className="lnr-console-kicker">{t("globalSearch.active")}</Text>
+      <ConsoleChip active>{scopeLabel}</ConsoleChip>
+      <ConsoleChip active>
+        {t("globalSearch.sourcesCount", { count: scopedCount })}
+      </ConsoleChip>
       {scopeMode === "selected" ? (
-        <ConsoleChip active>{selectedCount} selected</ConsoleChip>
+        <ConsoleChip active>
+          {t("globalSearch.selectedCount", { count: selectedCount })}
+        </ConsoleChip>
       ) : null}
       {languageFilter.length === 0 ? (
-        <ConsoleChip>All languages</ConsoleChip>
+        <ConsoleChip>{t("browse.allLanguages")}</ConsoleChip>
       ) : (
         languageFilter.map((language) => (
           <ConsoleChip key={language} active>
-            {language.toUpperCase()}
+            {formatPluginLanguageForLocale(locale, language)}
           </ConsoleChip>
         ))
       )}
-      {hideEmpty ? <ConsoleChip active>Hide empty</ConsoleChip> : null}
-      {showFailures ? <ConsoleChip tone="error">Failures visible</ConsoleChip> : null}
+      {hideEmpty ? (
+        <ConsoleChip active>{t("globalSearch.hideEmpty")}</ConsoleChip>
+      ) : null}
+      {showFailures ? (
+        <ConsoleChip tone="error">
+          {t("globalSearch.failuresVisible")}
+        </ConsoleChip>
+      ) : null}
     </Group>
   );
 }
@@ -258,6 +443,8 @@ function ResultFilters({
   showFailures,
   sortMode,
 }: ResultFiltersProps) {
+  const { t } = useTranslation();
+
   return (
     <Group className="lnr-search-result-filters" gap={6} wrap="wrap">
       <Button
@@ -265,7 +452,7 @@ function ResultFilters({
         variant={hideEmpty ? "light" : "default"}
         onClick={() => onHideEmptyChange(!hideEmpty)}
       >
-        Hide empty
+        {t("globalSearch.hideEmpty")}
       </Button>
       <Button
         size="compact-xs"
@@ -273,22 +460,22 @@ function ResultFilters({
         variant={showFailures ? "light" : "default"}
         onClick={() => onShowFailuresChange(!showFailures)}
       >
-        Failures {failedCount}
+        {t("globalSearch.failuresCount", { count: failedCount })}
       </Button>
       <SegmentedControl
         value={sortMode}
         onChange={(value) => onSortModeChange(value as ResultSortMode)}
         data={[
-          { value: "pinned", label: "Pinned" },
-          { value: "count", label: "Count" },
-          { value: "source", label: "Source" },
+          { value: "pinned", label: t("common.pinned") },
+          { value: "count", label: t("globalSearch.sort.count") },
+          { value: "source", label: t("common.source") },
         ]}
         size="xs"
         className="lnr-console-segmented lnr-search-sort"
       />
       {failedCount > 0 ? (
         <Button size="compact-xs" color="red" variant="subtle" onClick={onRetryFailed}>
-          Retry failed
+          {t("globalSearch.retryFailed")}
         </Button>
       ) : null}
     </Group>
@@ -314,18 +501,27 @@ function SearchSummary({
   totalPluginCount,
   withResultsCount,
 }: SearchSummaryProps) {
+  const { t } = useTranslation();
+
   return (
     <ConsoleStatusStrip className="lnr-search-summary">
       <span className="lnr-search-summary-query">"{query}"</span>
       <span>
-        searched {searchedCount}/{totalPluginCount}
+        {t("globalSearch.summary.searched", {
+          searched: searchedCount,
+          total: totalPluginCount,
+        })}
       </span>
-      <span>{withResultsCount} with results</span>
-      <span>{emptyCount} empty</span>
+      <span>
+        {t("globalSearch.summary.withResults", { count: withResultsCount })}
+      </span>
+      <span>{t("globalSearch.summary.empty", { count: emptyCount })}</span>
       <span data-tone={failedCount > 0 ? "error" : undefined}>
-        {failedCount} failed
+        {t("globalSearch.summary.failed", { count: failedCount })}
       </span>
-      {pendingCount > 0 ? <span>{pendingCount} pending</span> : null}
+      {pendingCount > 0 ? (
+        <span>{t("globalSearch.summary.pending", { count: pendingCount })}</span>
+      ) : null}
     </ConsoleStatusStrip>
   );
 }
@@ -349,6 +545,7 @@ function SearchResultSection({
   onOpenWebView,
   onRetry,
 }: SearchResultSectionProps) {
+  const { t } = useTranslation();
   const { plugin, result } = row;
   const previewNovels = result?.novels.slice(0, PREVIEW_RESULT_COUNT) ?? [];
   const error = result?.error;
@@ -363,12 +560,14 @@ function SearchResultSection({
         ? "done"
         : "idle";
   const statusLabel = row.pending
-    ? "Searching"
+    ? t("common.searching")
     : error
       ? cloudflare
-        ? "WebView needed"
-        : "Failed"
-      : `${result?.novels.length ?? 0} results`;
+        ? t("globalSearch.status.webviewNeeded")
+        : t("common.failed")
+      : t("globalSearch.status.results", {
+          count: result?.novels.length ?? 0,
+        });
 
   return (
     <section className="lnr-search-result-row">
@@ -379,7 +578,17 @@ function SearchResultSection({
             <Text size="sm" fw={700} truncate>
               {plugin.name}
             </Text>
-            {pinned ? <ConsoleChip active>Pinned</ConsoleChip> : null}
+            {pinned ? (
+              <span
+                className="lnr-icon-state"
+                data-active="true"
+                role="img"
+                aria-label={t("common.pinned")}
+                title={t("common.pinned")}
+              >
+                <PinGlyph />
+              </span>
+            ) : null}
             <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>
           </Group>
           <Text size="xs" c="dimmed" truncate>
@@ -390,21 +599,38 @@ function SearchResultSection({
         <Group gap={6} wrap="nowrap">
           {error ? (
             <>
-              <Button size="compact-xs" variant="subtle" onClick={onRetry}>
-                Retry
-              </Button>
-              <Button
-                size="compact-xs"
+              <ActionIcon
+                className="lnr-action-icon"
+                size="sm"
+                variant="subtle"
+                aria-label={t("common.retry")}
+                title={t("common.retry")}
+                onClick={onRetry}
+              >
+                <RetryGlyph />
+              </ActionIcon>
+              <ActionIcon
+                className="lnr-action-icon"
+                size="sm"
                 variant="light"
+                aria-label={t("common.openWebView")}
+                title={t("common.openWebView")}
                 onClick={() => onOpenWebView(plugin)}
               >
-                Open WebView
-              </Button>
+                <ExternalLinkGlyph />
+              </ActionIcon>
             </>
           ) : result && result.novels.length > 0 ? (
-            <Button size="compact-xs" variant="light" onClick={() => onMore(result)}>
-              More
-            </Button>
+            <ActionIcon
+              className="lnr-action-icon"
+              size="sm"
+              variant="light"
+              aria-label={t("common.more")}
+              title={t("common.more")}
+              onClick={() => onMore(result)}
+            >
+              <MoreGlyph />
+            </ActionIcon>
           ) : null}
         </Group>
       </Group>
@@ -444,12 +670,12 @@ function SearchResultSection({
         <Group gap="sm" className="lnr-search-pending">
           <Loader size="xs" />
           <Text size="xs" c="dimmed">
-            Waiting for this source to finish.
+            {t("globalSearch.waiting")}
           </Text>
         </Group>
       ) : (
         <Text className="lnr-search-empty-row" size="sm" c="dimmed">
-          No results from this source.
+          {t("globalSearch.noResultsFromSource")}
         </Text>
       )}
     </section>
@@ -467,6 +693,7 @@ export function PluginSearchSection({
   query,
   onSearch,
 }: PluginSearchSectionProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
@@ -496,7 +723,8 @@ export function PluginSearchSection({
   const [hideEmpty, setHideEmpty] = useState(true);
   const [showFailures, setShowFailures] = useState(true);
   const [sortMode, setSortMode] = useState<ResultSortMode>("pinned");
-  const [retryToken, setRetryToken] = useState(0);
+  const [retryPluginIds, setRetryPluginIds] = useState<string[]>([]);
+  const [activePluginIds, setActivePluginIds] = useState<string[]>([]);
   const trimmedQuery = query.trim();
   const installedPlugins = useMemo(
     () => sortPluginsByName(installedPluginSnapshot ?? pluginManager.list()),
@@ -526,30 +754,31 @@ export function PluginSearchSection({
   }, [pinnedPluginIds, scopeMode, searchablePlugins, selectedPluginIds]);
   const lastUsedPlugin =
     installedPlugins.find((plugin) => plugin.id === lastUsedPluginId) ?? null;
-  const searchKey = useMemo(
-    () =>
-      [
-        trimmedQuery,
-        globalSearchConcurrency,
-        scopeMode,
-        retryToken,
-        ...scopedPlugins.map((plugin) => plugin.id),
-      ].join("\u0000"),
-    [
-      globalSearchConcurrency,
-      retryToken,
-      scopeMode,
-      scopedPlugins,
-      trimmedQuery,
-    ],
-  );
+  const searchKey = trimmedQuery;
   const isCurrentSearch =
     trimmedQuery !== "" && globalSearchState.searchKey === searchKey;
   const results = isCurrentSearch ? globalSearchState.results : [];
-  const searching = isCurrentSearch && globalSearchState.searching;
+  const activePluginIdSet = useMemo(
+    () => new Set(isCurrentSearch ? activePluginIds : []),
+    [activePluginIds, isCurrentSearch],
+  );
+  const retryPluginIdSet = useMemo(
+    () => new Set(isCurrentSearch ? retryPluginIds : []),
+    [isCurrentSearch, retryPluginIds],
+  );
+  const searching = isCurrentSearch && activePluginIds.length > 0;
   const resultMap = useMemo(
     () => new Map(results.map((row) => [row.pluginId, row])),
     [results],
+  );
+  const resultPluginIds = useMemo(
+    () =>
+      new Set(
+        results
+          .filter((row) => !retryPluginIdSet.has(row.pluginId))
+          .map((row) => row.pluginId),
+      ),
+    [results, retryPluginIdSet],
   );
   const rows = useMemo<ResultViewRow[]>(
     () =>
@@ -560,10 +789,10 @@ export function PluginSearchSection({
             return {
               plugin,
               result,
-              pending: searching && result === null,
+              pending: activePluginIdSet.has(plugin.id),
             };
           }),
-    [resultMap, scopedPlugins, searching, trimmedQuery],
+    [activePluginIdSet, resultMap, scopedPlugins, trimmedQuery],
   );
   const filteredRows = useMemo(() => {
     const next = rows.filter((row) => {
@@ -588,22 +817,48 @@ export function PluginSearchSection({
     });
   }, [hideEmpty, pinnedPluginIds, rows, showFailures, sortMode]);
   const installedCount = searchablePlugins.length;
-  const totalPluginCount = isCurrentSearch
-    ? globalSearchState.totalPluginCount
-    : scopedPlugins.length;
   const hasSearchTerm = trimmedQuery !== "";
-  const searchedCount = results.length;
-  const failedCount = results.filter((row) => row.error).length;
-  const withResultsCount = results.filter((row) => row.novels.length > 0).length;
-  const emptyCount = results.filter(
+  const scopedPluginIdSet = useMemo(
+    () => new Set(scopedPlugins.map((plugin) => plugin.id)),
+    [scopedPlugins],
+  );
+  const scopedResults = useMemo(
+    () => results.filter((row) => scopedPluginIdSet.has(row.pluginId)),
+    [results, scopedPluginIdSet],
+  );
+  const failedPluginIds = useMemo(
+    () => scopedResults.filter((row) => row.error).map((row) => row.pluginId),
+    [scopedResults],
+  );
+  const searchedCount = scopedResults.length;
+  const failedCount = scopedResults.filter((row) => row.error).length;
+  const withResultsCount = scopedResults.filter(
+    (row) => row.novels.length > 0,
+  ).length;
+  const emptyCount = scopedResults.filter(
     (row) => !row.error && row.novels.length === 0,
   ).length;
-  const pendingCount = Math.max(0, totalPluginCount - searchedCount);
+  const pendingCount = scopedPlugins.filter((plugin) =>
+    activePluginIdSet.has(plugin.id),
+  ).length;
+  const totalPluginCount = scopedPlugins.length;
   const hasOnlyEmptyResults =
     hasSearchTerm &&
     !searching &&
-    results.length > 0 &&
-    results.every((row) => row.novels.length === 0 && !row.error);
+    scopedResults.length > 0 &&
+    scopedResults.length === scopedPlugins.length &&
+    scopedResults.every((row) => row.novels.length === 0 && !row.error);
+  const pluginsToSearch = useMemo(
+    () =>
+      hasSearchTerm
+        ? scopedPlugins.filter(
+            (plugin) =>
+              !resultPluginIds.has(plugin.id) &&
+              !activePluginIdSet.has(plugin.id),
+          )
+        : [],
+    [activePluginIdSet, hasSearchTerm, resultPluginIds, scopedPlugins],
+  );
 
   useEffect(() => {
     setSearch(query);
@@ -619,33 +874,66 @@ export function PluginSearchSection({
   useEffect(() => {
     setOpenError(null);
 
-    if (trimmedQuery === "" || scopedPlugins.length === 0) {
-      activeSearchController?.abort();
-      activeSearchController = null;
-      activeSearchKey = null;
+    if (trimmedQuery === "") {
+      abortSearchesExcept("");
+      setActivePluginIds((current) => (current.length === 0 ? current : []));
+      setRetryPluginIds((current) => (current.length === 0 ? current : []));
       clearGlobalSearch();
       return;
     }
 
-    if (currentSearchKey === searchKey) {
-      return;
+    abortSearchesExcept(searchKey);
+    setActivePluginIds((current) => {
+      const next = getActivePluginIds(searchKey);
+      return hasSameStringItems(current, next) ? current : next;
+    });
+
+    if (currentSearchKey !== searchKey) {
+      beginGlobalSearch({
+        query: trimmedQuery,
+        searchKey,
+        results: [],
+        searching: pluginsToSearch.length > 0,
+        totalPluginCount: scopedPlugins.length,
+      });
+    } else if (pluginsToSearch.length > 0 && !globalSearchState.searching) {
+      beginGlobalSearch({
+        ...globalSearchState,
+        searching: true,
+        totalPluginCount: Math.max(
+          globalSearchState.totalPluginCount,
+          scopedPlugins.length,
+        ),
+      });
     }
 
-    activeSearchController?.abort();
+    const activeIdsNow = new Set(getActivePluginIds(searchKey));
+    const resultIdsNow = new Set(
+      (currentSearchKey === searchKey ? globalSearchState.results : [])
+        .filter((row) => !retryPluginIdSet.has(row.pluginId))
+        .map((row) => row.pluginId),
+    );
+    const pluginsToStart = pluginsToSearch.filter(
+      (plugin) =>
+        !activeIdsNow.has(plugin.id) && !resultIdsNow.has(plugin.id),
+    );
+    if (pluginsToStart.length === 0) return;
+
     const controller = new AbortController();
-    activeSearchController = controller;
-    activeSearchKey = searchKey;
-    beginGlobalSearch({
-      query: trimmedQuery,
-      searchKey,
-      results: [],
-      searching: true,
-      totalPluginCount: scopedPlugins.length,
+    const pluginIds = pluginsToStart.map((plugin) => plugin.id);
+    registerActiveSearch(searchKey, controller, pluginIds);
+    setActivePluginIds((current) => {
+      const next = getActivePluginIds(searchKey);
+      return hasSameStringItems(current, next) ? current : next;
+    });
+    setRetryPluginIds((current) => {
+      const next = current.filter((pluginId) => !pluginIds.includes(pluginId));
+      return hasSameStringItems(current, next) ? current : next;
     });
 
     globalSearch(pluginManager, trimmedQuery, {
       concurrency: globalSearchConcurrency,
-      plugins: scopedPlugins,
+      plugins: pluginsToStart,
       signal: controller.signal,
       onResult: (result) => {
         if (controller.signal.aborted) return;
@@ -656,12 +944,18 @@ export function PluginSearchSection({
         // Per-plugin errors fold into GlobalSearchResult rows.
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
+        const remainingPluginIds = completeActiveSearch(
+          searchKey,
+          controller,
+          pluginIds,
+        );
+        setActivePluginIds((current) =>
+          hasSameStringItems(current, remainingPluginIds)
+            ? current
+            : remainingPluginIds,
+        );
+        if (!controller.signal.aborted && remainingPluginIds.length === 0) {
           finishGlobalSearch(searchKey);
-        }
-        if (activeSearchKey === searchKey) {
-          activeSearchController = null;
-          activeSearchKey = null;
         }
       });
   }, [
@@ -671,7 +965,10 @@ export function PluginSearchSection({
     currentSearchKey,
     finishGlobalSearch,
     globalSearchConcurrency,
-    scopedPlugins,
+    globalSearchState,
+    pluginsToSearch,
+    retryPluginIdSet,
+    scopedPlugins.length,
     searchKey,
     trimmedQuery,
   ]);
@@ -682,7 +979,7 @@ export function PluginSearchSection({
 
       const plugin = pluginManager.getPlugin(row.pluginId);
       if (!plugin) {
-        setOpenError(`Plugin "${row.pluginName}" is no longer installed.`);
+        setOpenError(t("globalSearch.pluginMissing", { name: row.pluginName }));
         return;
       }
 
@@ -695,12 +992,17 @@ export function PluginSearchSection({
         await queryClient.invalidateQueries({ queryKey: ["novel"] });
         await navigate({ to: "/novel", search: { id } });
       } catch (error) {
-        setOpenError(`Failed to open "${novel.name}": ${describeError(error)}`);
+        setOpenError(
+          t("globalSearch.openNovelFailed", {
+            name: novel.name,
+            error: describeError(error),
+          }),
+        );
       } finally {
         setOpeningKey((current) => (current === key ? null : current));
       }
     },
-    [navigate, openingKey, queryClient, setLastUsedPluginId],
+    [navigate, openingKey, queryClient, setLastUsedPluginId, t],
   );
 
   const submitSearch = () => {
@@ -719,8 +1021,10 @@ export function PluginSearchSection({
   );
 
   const retryFailed = useCallback(() => {
-    setRetryToken((value) => value + 1);
-  }, []);
+    setRetryPluginIds((current) =>
+      hasSameStringItems(current, failedPluginIds) ? current : failedPluginIds,
+    );
+  }, [failedPluginIds]);
 
   const toggleSelectedPlugin = useCallback((pluginId: string) => {
     setSelectedPluginIds((current) =>
@@ -742,22 +1046,30 @@ export function PluginSearchSection({
         selectedPluginIds={selectedPluginIds}
         onClearLanguages={() => setPluginLanguageFilter([])}
         onClearSelected={() => setSelectedPluginIds([])}
+        onOpenSite={(plugin) => openSiteBrowser(plugin.site)}
+        onOpenSource={(plugin) => {
+          setLastUsedPluginId(plugin.id);
+          void navigate({
+            to: "/source",
+            search: { pluginId: plugin.id, query: trimmedQuery },
+          });
+        }}
         onScopeModeChange={setScopeMode}
         onToggleSelectedPlugin={toggleSelectedPlugin}
       />
 
       <section className="lnr-search-results">
         <ConsoleSectionHeader
-          eyebrow="/browse global search"
-          title="Search installed sources"
-          count={`${installedCount} eligible`}
+          eyebrow={t("globalSearch.section.eyebrow")}
+          title={t("globalSearch.searchInstalledSources")}
+          count={t("globalSearch.eligibleCount", { count: installedCount })}
         />
 
         <SearchBar
           value={search}
           onChange={setSearch}
           onSubmit={submitSearch}
-          placeholder="Search across installed sources..."
+          placeholder={t("globalSearch.placeholder")}
         />
 
         <ActiveScopeRow
@@ -770,15 +1082,14 @@ export function PluginSearchSection({
         />
 
         {installedCount === 0 ? (
-          <Alert color="blue" title="No plugins available">
-            Install a plugin, clear the language filter, or enable a matching
-            language to use global search.
+          <Alert color="blue" title={t("globalSearch.noPlugins.title")}>
+            {t("globalSearch.noPlugins.message")}
           </Alert>
         ) : null}
 
         {hasSearchTerm && scopedPlugins.length === 0 ? (
-          <Alert color="yellow" title="No sources in scope">
-            Change the scope or select at least one source before searching.
+          <Alert color="yellow" title={t("globalSearch.noSources.title")}>
+            {t("globalSearch.noSources.message")}
           </Alert>
         ) : null}
 
@@ -809,19 +1120,19 @@ export function PluginSearchSection({
         {openingKey !== null ? (
           <Group gap="sm" className="lnr-search-inline-state">
             <Loader size="sm" />
-            <Text c="dimmed">Opening novel details...</Text>
+            <Text c="dimmed">{t("globalSearch.openingNovel")}</Text>
           </Group>
         ) : null}
 
         {openError ? (
-          <Alert color="red" variant="light" title="Open failed">
+          <Alert color="red" variant="light" title={t("common.openFailed")}>
             {openError}
           </Alert>
         ) : null}
 
         {!searching && hasOnlyEmptyResults ? (
-          <Alert color="yellow" title="No matches">
-            None of the selected sources matched "{query}".
+          <Alert color="yellow" title={t("common.noMatches")}>
+            {t("globalSearch.noMatches.message", { query })}
           </Alert>
         ) : null}
 

@@ -5,6 +5,7 @@ vi.mock("../client", () => ({
 }));
 
 import { getDb } from "../client";
+import { UNCATEGORIZED_CATEGORY_ID } from "./category";
 import {
   countNovels,
   getNovelById,
@@ -106,6 +107,32 @@ describe("listLibraryNovels", () => {
       "EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id AND nc.category_id = $1)",
     );
     expect(params).toEqual([7]);
+  });
+
+  it("filters uncategorized novels with no novel_category rows", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ categoryId: UNCATEGORIZED_CATEGORY_ID });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain(
+      "NOT EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id)",
+    );
+    expect(params).toEqual([]);
+  });
+
+  it("appends an unread chapter EXISTS clause when unreadOnly is enabled", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ unreadOnly: true });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain(
+      "EXISTS (SELECT 1 FROM chapter uc WHERE uc.novel_id = n.id AND uc.unread = 1)",
+    );
+    expect(params).toEqual([]);
   });
 
   it("combines search and categoryId with stable param order", async () => {

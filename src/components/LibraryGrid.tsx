@@ -5,6 +5,11 @@ import {
   type ReactNode,
 } from "react";
 import type { LibraryNovel } from "../db/queries/novel";
+import {
+  formatRelativeTimeForLocale,
+  useTranslation,
+  type TranslationKey,
+} from "../i18n";
 import type { LibraryDisplayMode } from "../store/library";
 import {
   ConsoleChip,
@@ -38,16 +43,18 @@ export function LibraryGrid({
   onActivate,
   onLongPress,
 }: LibraryGridProps) {
+  const { t } = useTranslation();
+
   return displayMode === "list" ? (
     <div className="lnr-library-table" role="table">
       <div className="lnr-library-table-header" role="row">
         <span />
         <span />
-        <span>Title / Author</span>
-        <span>Source</span>
-        <span>Progress</span>
-        <span>Unread</span>
-        <span>Updated</span>
+        <span>{t("library.grid.titleAuthor")}</span>
+        <span>{t("library.grid.source")}</span>
+        <span>{t("library.grid.progress")}</span>
+        <span>{t("library.grid.unread")}</span>
+        <span>{t("library.grid.updated")}</span>
         <span />
       </div>
       {novels.map((novel, index) => (
@@ -180,9 +187,10 @@ function LibraryTableRow({
   selected,
   showNumberBadges,
 }: LibraryTableRowProps) {
+  const { locale, t } = useTranslation();
   const progress = getReadingPercent(novel);
   const downloadProgress = getDownloadPercent(novel);
-  const status = getNovelStatus(novel);
+  const status = getNovelStatus(novel, t);
   const hasUnread = novel.chaptersUnread > 0;
 
   return (
@@ -204,10 +212,10 @@ function LibraryTableRow({
       <span className="lnr-library-title-cell">
         <span className="lnr-library-title">{novel.name}</span>
         <span className="lnr-library-subtitle">
-          {getCreatorLabel(novel)}
+          {getCreatorLabel(novel, t)}
         </span>
       </span>
-      <span className="lnr-library-source">{getSourceLabel(novel)}</span>
+      <span className="lnr-library-source">{getSourceLabel(novel, t)}</span>
       <span className="lnr-library-progress-cell">
         <ConsoleProgress
           status={progress >= 100 ? "done" : "active"}
@@ -219,7 +227,7 @@ function LibraryTableRow({
         {hasUnread ? `+${novel.chaptersUnread}` : "-"}
       </span>
       <span className="lnr-library-updated">
-        {formatRelativeTime(novel.lastUpdatedAt)}
+        {formatRelativeTimeForLocale(locale, novel.lastUpdatedAt, "compact")}
       </span>
       <span
         className="lnr-library-actions"
@@ -243,10 +251,12 @@ function LibraryCard({
   showNumberBadges,
   showUnreadBadges,
 }: LibraryNovelItemProps) {
+  const { t } = useTranslation();
   const downloadProgress = getDownloadPercent(novel);
   const readingProgress = getReadingPercent(novel);
-  const status = getNovelStatus(novel);
+  const status = getNovelStatus(novel, t);
   const coverOnly = displayMode === "cover-only";
+  const coverWidth = displayMode === "compact" ? 100 : coverOnly ? "100%" : 128;
 
   return (
     <LibraryInteractiveItem
@@ -264,13 +274,15 @@ function LibraryCard({
           alt={novel.name}
           height={displayMode === "compact" ? 150 : 190}
           src={novel.cover}
-          width={displayMode === "compact" ? 100 : 128}
+          width={coverWidth}
         />
       </div>
       {coverOnly ? null : (
         <div className="lnr-library-card-body">
           <span className="lnr-library-title">{novel.name}</span>
-          <span className="lnr-library-subtitle">{getCreatorLabel(novel)}</span>
+          <span className="lnr-library-subtitle">
+            {getCreatorLabel(novel, t)}
+          </span>
           <div className="lnr-library-card-progress">
             <ConsoleProgress
               status={readingProgress >= 100 ? "done" : "active"}
@@ -281,10 +293,16 @@ function LibraryCard({
           <div className="lnr-library-card-meta">
             <ConsoleStatusDot label={status.label} status={status.tone} />
             {showUnreadBadges && novel.chaptersUnread > 0 ? (
-              <ConsoleChip tone="accent">{novel.chaptersUnread} unread</ConsoleChip>
+              <ConsoleChip tone="accent">
+                {t("library.grid.unreadBadge", {
+                  count: novel.chaptersUnread,
+                })}
+              </ConsoleChip>
             ) : null}
             {showDownloadBadges && novel.chaptersDownloaded > 0 ? (
-              <ConsoleChip tone="success">{downloadProgress}% saved</ConsoleChip>
+              <ConsoleChip tone="success">
+                {t("library.grid.savedBadge", { progress: downloadProgress })}
+              </ConsoleChip>
             ) : null}
           </div>
         </div>
@@ -302,12 +320,18 @@ function getReadingPercent(novel: LibraryNovel) {
   return Math.max(0, Math.min(100, Math.round(novel.readingProgress)));
 }
 
-function getSourceLabel(novel: LibraryNovel) {
-  return novel.isLocal ? "Local" : novel.pluginId;
+function getSourceLabel(
+  novel: LibraryNovel,
+  t: (key: TranslationKey) => string,
+) {
+  return novel.isLocal ? t("library.grid.local") : novel.pluginId;
 }
 
-function getCreatorLabel(novel: LibraryNovel) {
-  return novel.author?.trim() || getSourceLabel(novel);
+function getCreatorLabel(
+  novel: LibraryNovel,
+  t: (key: TranslationKey) => string,
+) {
+  return novel.author?.trim() || getSourceLabel(novel, t);
 }
 
 function DownloadIcon() {
@@ -320,33 +344,18 @@ function DownloadIcon() {
   );
 }
 
-function formatRelativeTime(value: number | null) {
-  if (value == null || value <= 0) return "never";
-  const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
-  const diffMs = Date.now() - timestamp;
-  if (diffMs < 60_000) return "now";
-
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d`;
-
-  return new Date(timestamp).toLocaleDateString();
-}
-
-function getNovelStatus(novel: LibraryNovel): {
+function getNovelStatus(
+  novel: LibraryNovel,
+  t: (key: TranslationKey) => string,
+): {
   label: string;
   tone: "active" | "done" | "idle";
 } {
   if (novel.chaptersUnread > 0) {
-    return { label: "Unread", tone: "active" };
+    return { label: t("library.grid.unread"), tone: "active" };
   }
   if (novel.totalChapters > 0 && novel.chaptersDownloaded >= novel.totalChapters) {
-    return { label: "Saved", tone: "done" };
+    return { label: t("common.saved"), tone: "done" };
   }
-  return { label: "Synced", tone: "idle" };
+  return { label: t("common.synced"), tone: "idle" };
 }

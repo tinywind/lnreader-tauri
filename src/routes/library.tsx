@@ -1,11 +1,17 @@
-import { useCallback, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useState, type FormEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  Button,
+  Group,
   Loader,
+  Modal,
   Popover,
   ScrollArea,
+  Stack,
   Text,
+  TextInput,
+  Tooltip,
   UnstyledButton,
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
@@ -15,7 +21,13 @@ import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
 import { LibraryGrid } from "../components/LibraryGrid";
 import { LibrarySettingsPanel } from "../components/LibrarySettingsPanel";
 import {
+  addNovelsToCategory,
+  deleteCategory,
+  getLibraryCategoryCounts,
+  insertCategory,
   listCategories,
+  UNCATEGORIZED_CATEGORY_ID,
+  updateCategory,
   type LibraryCategory,
 } from "../db/queries/category";
 import {
@@ -27,6 +39,11 @@ import {
   type LibraryDisplayMode,
   type LibrarySortOrder,
 } from "../store/library";
+import {
+  formatRelativeTimeForLocale,
+  useTranslation,
+  type TranslationKey,
+} from "../i18n";
 import "../styles/library.css";
 
 const SEARCH_DEBOUNCE_MS = 200;
@@ -35,25 +52,38 @@ interface LibraryPageProps {
   active?: boolean;
 }
 
-const SORT_LABELS: Record<LibrarySortOrder, string> = {
-  nameAsc: "Name A-Z",
-  nameDesc: "Name Z-A",
-  downloadedAsc: "Downloaded low",
-  downloadedDesc: "Downloaded high",
-  totalChaptersAsc: "Chapters low",
-  totalChaptersDesc: "Chapters high",
-  unreadChaptersAsc: "Unread low",
-  unreadChaptersDesc: "Unread high",
-  dateAddedAsc: "Oldest added",
-  dateAddedDesc: "Newest added",
-  lastReadAsc: "Oldest read",
-  lastReadDesc: "Latest read",
-  lastUpdatedAsc: "Oldest update",
-  lastUpdatedDesc: "Latest update",
+const SORT_LABEL_KEYS: Record<LibrarySortOrder, TranslationKey> = {
+  nameAsc: "library.sort.nameAsc",
+  nameDesc: "library.sort.nameDesc",
+  downloadedAsc: "library.sort.downloadedAsc",
+  downloadedDesc: "library.sort.downloadedDesc",
+  totalChaptersAsc: "library.sort.totalChaptersAsc",
+  totalChaptersDesc: "library.sort.totalChaptersDesc",
+  unreadChaptersAsc: "library.sort.unreadChaptersAsc",
+  unreadChaptersDesc: "library.sort.unreadChaptersDesc",
+  dateAddedAsc: "library.sort.dateAddedAsc",
+  dateAddedDesc: "library.sort.dateAddedDesc",
+  lastReadAsc: "library.sort.lastReadAsc",
+  lastReadDesc: "library.sort.lastReadDesc",
+  lastUpdatedAsc: "library.sort.lastUpdatedAsc",
+  lastUpdatedDesc: "library.sort.lastUpdatedDesc",
 };
 
+type CategoryEditorState =
+  | { mode: "create" }
+  | { category: LibraryCategory; mode: "rename" };
+
+interface AssignCategoryInput {
+  categoryId: number;
+  novelIds: number[];
+}
+
+type TranslateFn = ReturnType<typeof useTranslation>["t"];
+
 export function LibraryPage({ active = true }: LibraryPageProps) {
+  const { locale, t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const search = useLibraryStore((s) => s.search);
   const setSearch = useLibraryStore((s) => s.setSearch);
@@ -69,6 +99,11 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
   const showUnreadBadges = useLibraryStore((s) => s.showUnreadBadges);
   const showNumberBadges = useLibraryStore((s) => s.showNumberBadges);
   const downloadedOnlyMode = useLibraryStore((s) => s.downloadedOnlyMode);
+  const setDownloadedOnlyMode = useLibraryStore(
+    (s) => s.setDownloadedOnlyMode,
+  );
+  const unreadOnlyMode = useLibraryStore((s) => s.unreadOnlyMode);
+  const setUnreadOnlyMode = useLibraryStore((s) => s.setUnreadOnlyMode);
   const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
 
   const novels = useQuery({
@@ -79,6 +114,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
         search: debouncedSearch,
         categoryId: selectedCategoryId,
         downloadedOnly: downloadedOnlyMode,
+        unreadOnly: unreadOnlyMode,
         sortOrder,
       },
     ] as const,
@@ -87,6 +123,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
         search: debouncedSearch,
         categoryId: selectedCategoryId,
         downloadedOnly: downloadedOnlyMode,
+        unreadOnly: unreadOnlyMode,
         sortOrder,
       }),
   });
@@ -96,10 +133,65 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     queryFn: listCategories,
   });
 
+  const categoryCounts = useQuery({
+    queryKey: ["category", "counts"],
+    queryFn: getLibraryCategoryCounts,
+  });
+
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(
     () => new Set(),
   );
   const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [categoryEditor, setCategoryEditor] =
+    useState<CategoryEditorState | null>(null);
+  const [categoryName, setCategoryName] = useState("");
+  const [categoryDeleteTarget, setCategoryDeleteTarget] =
+    useState<LibraryCategory | null>(null);
+
+  const invalidateLibraryCategories = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["category"] });
+    void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+  }, [queryClient]);
+
+  const createCategoryMutation = useMutation({
+    mutationFn: (name: string) => insertCategory({ name }),
+    onSuccess: () => {
+      invalidateLibraryCategories();
+      setCategoryEditor(null);
+      setCategoryName("");
+    },
+  });
+
+  const renameCategoryMutation = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      updateCategory(id, { name }),
+    onSuccess: () => {
+      invalidateLibraryCategories();
+      setCategoryEditor(null);
+      setCategoryName("");
+    },
+  });
+
+  const deleteCategoryMutation = useMutation({
+    mutationFn: (id: number) => deleteCategory(id),
+    onSuccess: (_data, id) => {
+      invalidateLibraryCategories();
+      if (selectedCategoryId === id) {
+        setSelectedCategoryId(null);
+      }
+      setCategoryDeleteTarget(null);
+    },
+  });
+
+  const assignCategoryMutation = useMutation({
+    mutationFn: ({ categoryId, novelIds }: AssignCategoryInput) =>
+      addNovelsToCategory(novelIds, categoryId),
+    onSuccess: () => {
+      invalidateLibraryCategories();
+      setSelectedIds(new Set());
+    },
+  });
 
   const toggleSelected = useCallback((id: number) => {
     setSelectedIds((prev) => {
@@ -116,6 +208,52 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
   }, []);
+
+  const openCreateCategory = useCallback(() => {
+    createCategoryMutation.reset();
+    renameCategoryMutation.reset();
+    setCategoryName("");
+    setCategoryEditor({ mode: "create" });
+  }, [createCategoryMutation, renameCategoryMutation]);
+
+  const openRenameCategory = useCallback(
+    (category: LibraryCategory) => {
+      createCategoryMutation.reset();
+      renameCategoryMutation.reset();
+      setCategoryName(category.name);
+      setCategoryEditor({ category, mode: "rename" });
+    },
+    [createCategoryMutation, renameCategoryMutation],
+  );
+
+  const closeCategoryEditor = useCallback(() => {
+    createCategoryMutation.reset();
+    renameCategoryMutation.reset();
+    setCategoryEditor(null);
+    setCategoryName("");
+  }, [createCategoryMutation, renameCategoryMutation]);
+
+  const handleCategorySubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!categoryEditor || categoryName.trim() === "") return;
+
+      if (categoryEditor.mode === "create") {
+        createCategoryMutation.mutate(categoryName);
+      } else {
+        renameCategoryMutation.mutate({
+          id: categoryEditor.category.id,
+          name: categoryName,
+        });
+      }
+    },
+    [
+      categoryEditor,
+      categoryName,
+      createCategoryMutation,
+      renameCategoryMutation,
+    ],
+  );
 
   const handleActivate = useCallback(
     (id: number) => {
@@ -138,21 +276,41 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
   const filterActive =
     debouncedSearch.trim() !== "" ||
     selectedCategoryId !== null ||
-    downloadedOnlyMode;
+    downloadedOnlyMode ||
+    unreadOnlyMode;
 
   const rows = novels.data ?? [];
-  const stats = getLibraryStats(rows);
+  const manualCategories = categories.data ?? [];
+  const allCategoryCount = categoryCounts.data?.total ?? 0;
+  const uncategorizedCategoryCount = categoryCounts.data?.uncategorized ?? 0;
+  const assignableCategories = manualCategories.filter(
+    (category) => category.id !== UNCATEGORIZED_CATEGORY_ID,
+  );
+  const stats = getLibraryStats(rows, locale);
   const activeCategory =
     selectedCategoryId == null
-      ? "All"
-      : (categories.data?.find((category) => category.id === selectedCategoryId)
-          ?.name ?? "Selected category");
-  const statusParts = [
-    `${stats.totalNovels} novels`,
-    `${stats.unreadChapters} unread`,
-    `${stats.downloadedChapters}/${stats.totalChapters} downloaded`,
-  ];
-  const tags = getLibraryTags(rows);
+      ? t("categories.all")
+      : selectedCategoryId === UNCATEGORIZED_CATEGORY_ID
+        ? t("categories.uncategorized")
+        : (manualCategories.find((category) => category.id === selectedCategoryId)
+            ?.name ?? t("library.selectedCategory"));
+  const categoryEditorTitle =
+    categoryEditor?.mode === "rename"
+      ? t("categories.rename")
+      : t("categories.add");
+  const categoryMutationError =
+    createCategoryMutation.error ?? renameCategoryMutation.error;
+  const categorySaving =
+    createCategoryMutation.isPending || renameCategoryMutation.isPending;
+  const status = t("library.status", {
+    novels: stats.totalNovels,
+    unread: stats.unreadChapters,
+    downloaded: stats.downloadedChapters,
+    total: stats.totalChapters,
+  });
+  const showMobileSearch = mobileSearchOpen || search.trim() !== "";
+  const tags = getLibraryTags(rows, t);
+  const sortLabel = t(SORT_LABEL_KEYS[sortOrder]);
 
   return (
     <>
@@ -160,43 +318,90 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
         <div className="lnr-library-shell">
           <CategorySubpanel
             activeId={selectedCategoryId}
-            categories={categories.data ?? []}
-            currentCount={rows.length}
+            allCount={allCategoryCount}
+            categories={manualCategories}
             error={categories.error}
             loading={categories.isLoading}
+            onCreate={openCreateCategory}
+            onDelete={setCategoryDeleteTarget}
             onOpenDrawer={() => setCategoriesOpen(true)}
+            onRename={openRenameCategory}
             onSelect={setSelectedCategoryId}
             tags={tags}
+            t={t}
+            uncategorizedCount={uncategorizedCategoryCount}
           />
 
-          <section className="lnr-library-main" aria-label="Library novels">
+          <section
+            className="lnr-library-main"
+            aria-label={t("library.mainLabel")}
+          >
             <header className="lnr-library-main-header">
               <div className="lnr-library-header-copy">
                 <h1 className="lnr-library-title-heading">
-                  Currently reading
+                  <span className="lnr-library-title-static">
+                    {activeCategory}
+                  </span>
+                  <UnstyledButton
+                    aria-label={t("library.openCategories", {
+                      name: activeCategory,
+                    })}
+                    className="lnr-library-title-button"
+                    onClick={() => setCategoriesOpen(true)}
+                    title={activeCategory}
+                  >
+                    <span>{activeCategory}</span>
+                  </UnstyledButton>
                 </h1>
                 <span className="lnr-library-header-meta">
-                  {`${rows.length} novels / sorted ${SORT_LABELS[sortOrder].toLowerCase()}`}
+                  {t("library.sortedMeta", {
+                    count: rows.length,
+                    sort: sortLabel.toLowerCase(),
+                  })}
                 </span>
               </div>
               <div className="lnr-library-header-actions">
                 <UnstyledButton
+                  aria-controls="library-mobile-search"
+                  aria-expanded={showMobileSearch}
+                  aria-label={t("library.search.aria")}
+                  className="lnr-library-mobile-search-button"
+                  data-active={showMobileSearch}
+                  onClick={() => setMobileSearchOpen((open) => !open)}
+                  title={t("library.search.placeholder")}
+                >
+                  <SearchIcon />
+                </UnstyledButton>
+                <UnstyledButton
                   className="lnr-library-mobile-category-button"
                   onClick={() => setCategoriesOpen(true)}
                 >
-                  Categories
+                  {t("categories.title")}
                 </UnstyledButton>
                 <LibraryCommandSearch value={search} onChange={setSearch} />
+                <LibraryScopeFilters
+                  downloadedOnly={downloadedOnlyMode}
+                  onDownloadedOnlyChange={setDownloadedOnlyMode}
+                  onUnreadOnlyChange={setUnreadOnlyMode}
+                  t={t}
+                  unreadOnly={unreadOnlyMode}
+                />
                 <ViewModeToggle
                   displayMode={displayMode}
                   onChange={setDisplayMode}
+                  t={t}
+                />
+                <MobileViewModePicker
+                  displayMode={displayMode}
+                  onChange={setDisplayMode}
+                  t={t}
                 />
                 <Popover position="bottom-end" shadow="md" width={390}>
                   <Popover.Target>
                     <UnstyledButton
-                      aria-label="Open library settings"
+                      aria-label={t("library.settings.open")}
                       className="lnr-library-icon-button"
-                      title="Library settings"
+                      title={t("library.settings.title")}
                     >
                       <SlidersIcon />
                     </UnstyledButton>
@@ -207,11 +412,34 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                 </Popover>
               </div>
             </header>
+            {showMobileSearch ? (
+              <div
+                className="lnr-library-mobile-search-row"
+                id="library-mobile-search"
+              >
+                <LibraryCommandSearch value={search} onChange={setSearch} />
+              </div>
+            ) : null}
 
             {selectedIds.size > 0 ? (
               <div className="lnr-library-selection-strip">
-                <span>{`${selectedIds.size} selected`}</span>
-                <UnstyledButton onClick={clearSelection}>Done</UnstyledButton>
+                <span>{t("library.selectedCount", { count: selectedIds.size })}</span>
+                <div className="lnr-library-selection-actions">
+                  <SelectionCategoryPicker
+                    assigning={assignCategoryMutation.isPending}
+                    categories={assignableCategories}
+                    onAssign={(categoryId) =>
+                      assignCategoryMutation.mutate({
+                        categoryId,
+                        novelIds: Array.from(selectedIds),
+                      })
+                    }
+                    t={t}
+                  />
+                  <UnstyledButton onClick={clearSelection}>
+                    {t("common.done")}
+                  </UnstyledButton>
+                </div>
               </div>
             ) : null}
 
@@ -222,7 +450,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                     <span className="lnr-library-loading-title">
                       <Loader size="sm" />
                       <Text c="dimmed" component="span">
-                        Loading library...
+                        {t("library.loading")}
                       </Text>
                     </span>
                   }
@@ -230,7 +458,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               ) : novels.error ? (
                 <StateView
                   color="red"
-                  title="Database error"
+                  title={t("library.databaseError")}
                   message={
                     novels.error instanceof Error
                       ? novels.error.message
@@ -252,74 +480,248 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               ) : filterActive ? (
                 <StateView
                   color="yellow"
-                  title="No matches"
-                  message="No novels match the current filter. Clear the search or pick a different category."
+                  title={t("common.noMatches")}
+                  message={t("library.noMatches.message")}
                 />
               ) : (
                 <StateView
                   color="blue"
-                  title="Empty library"
-                  message="No novels yet. Add novels from Browse to start your library."
+                  title={t("library.empty.title")}
+                  message={t("library.empty.message")}
                 />
               )}
             </div>
 
             <ConsoleStatusStrip className="lnr-library-status-strip">
-              <span>{statusParts.join(" - ")}</span>
-              <span>{`Updated ${stats.lastUpdatedLabel}`}</span>
+              <span>{status}</span>
+              <span>{t("library.statusUpdated", { time: stats.lastUpdatedLabel })}</span>
               <span>{activeCategory}</span>
-              <span>{`Sort ${SORT_LABELS[sortOrder]}`}</span>
+              <span>{t("library.statusSort", { sort: sortLabel })}</span>
             </ConsoleStatusStrip>
           </section>
         </div>
       </PageFrame>
 
       <CategoriesDrawer
+        allCount={allCategoryCount}
+        categories={manualCategories}
+        error={categories.error}
+        loading={categories.isLoading}
         opened={active && categoriesOpen}
         onClose={() => setCategoriesOpen(false)}
+        onCreate={openCreateCategory}
+        onDelete={setCategoryDeleteTarget}
+        onRename={openRenameCategory}
         selectedCategoryId={selectedCategoryId}
         onSelect={setSelectedCategoryId}
+        uncategorizedCount={uncategorizedCategoryCount}
       />
+
+      <Modal
+        opened={active && categoryEditor !== null}
+        onClose={closeCategoryEditor}
+        title={categoryEditorTitle}
+      >
+        <form onSubmit={handleCategorySubmit}>
+          <Stack gap="sm">
+            <TextInput
+              autoFocus
+              label={t("library.categoryName")}
+              onChange={(event) => setCategoryName(event.currentTarget.value)}
+              value={categoryName}
+            />
+            {categoryMutationError ? (
+              <Text c="red" size="sm">
+                {categoryMutationError instanceof Error
+                  ? categoryMutationError.message
+                  : String(categoryMutationError)}
+              </Text>
+            ) : null}
+            <Group justify="flex-end">
+              <Button
+                type="button"
+                variant="subtle"
+                onClick={closeCategoryEditor}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                disabled={categoryName.trim() === ""}
+                loading={categorySaving}
+                type="submit"
+              >
+                {t("common.save")}
+              </Button>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
+
+      <Modal
+        opened={active && categoryDeleteTarget !== null}
+        onClose={() => {
+          deleteCategoryMutation.reset();
+          setCategoryDeleteTarget(null);
+        }}
+        title={t("categories.delete")}
+      >
+        <Stack gap="sm">
+          <Text size="sm">
+            {categoryDeleteTarget
+              ? t("library.deleteCategory.message", {
+                  name: categoryDeleteTarget.name,
+                })
+              : ""}
+          </Text>
+          {deleteCategoryMutation.error ? (
+            <Text c="red" size="sm">
+              {deleteCategoryMutation.error instanceof Error
+                ? deleteCategoryMutation.error.message
+                : String(deleteCategoryMutation.error)}
+            </Text>
+          ) : null}
+          <Group justify="flex-end">
+            <Button
+              type="button"
+              variant="subtle"
+              onClick={() => {
+                deleteCategoryMutation.reset();
+                setCategoryDeleteTarget(null);
+              }}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              color="red"
+              loading={deleteCategoryMutation.isPending}
+              onClick={() => {
+                if (categoryDeleteTarget) {
+                  deleteCategoryMutation.mutate(categoryDeleteTarget.id);
+                }
+              }}
+            >
+              {t("common.delete")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </>
+  );
+}
+
+interface LibraryScopeFiltersProps {
+  downloadedOnly: boolean;
+  onDownloadedOnlyChange: (value: boolean) => void;
+  onUnreadOnlyChange: (value: boolean) => void;
+  t: TranslateFn;
+  unreadOnly: boolean;
+}
+
+function LibraryScopeFilters({
+  downloadedOnly,
+  onDownloadedOnlyChange,
+  onUnreadOnlyChange,
+  t,
+  unreadOnly,
+}: LibraryScopeFiltersProps) {
+  return (
+    <div
+      className="lnr-library-filter-toggle"
+      role="group"
+      aria-label={t("library.filters.label")}
+    >
+      <Tooltip label={t("library.downloadedOnly")} openDelay={350} withArrow>
+        <UnstyledButton
+          aria-label={t("library.downloadedOnly")}
+          aria-pressed={downloadedOnly}
+          className="lnr-library-filter-button"
+          data-active={downloadedOnly}
+          onClick={() => onDownloadedOnlyChange(!downloadedOnly)}
+          title={t("library.downloadedOnly")}
+        >
+          <DownloadFilterIcon />
+        </UnstyledButton>
+      </Tooltip>
+      <Tooltip label={t("library.unreadOnly")} openDelay={350} withArrow>
+        <UnstyledButton
+          aria-label={t("library.unreadOnly")}
+          aria-pressed={unreadOnly}
+          className="lnr-library-filter-button"
+          data-active={unreadOnly}
+          onClick={() => onUnreadOnlyChange(!unreadOnly)}
+          title={t("library.unreadOnly")}
+        >
+          <UnreadFilterIcon />
+        </UnstyledButton>
+      </Tooltip>
+    </div>
   );
 }
 
 interface CategorySubpanelProps {
   activeId: number | null;
+  allCount: number;
   categories: readonly LibraryCategory[];
-  currentCount: number;
   error: unknown;
   loading: boolean;
+  onCreate: () => void;
+  onDelete: (category: LibraryCategory) => void;
   onOpenDrawer: () => void;
+  onRename: (category: LibraryCategory) => void;
   onSelect: (id: number | null) => void;
   tags: readonly LibraryTag[];
+  t: TranslateFn;
+  uncategorizedCount: number;
 }
 
 function CategorySubpanel({
   activeId,
+  allCount,
   categories,
-  currentCount,
   error,
   loading,
+  onCreate,
+  onDelete,
   onOpenDrawer,
+  onRename,
   onSelect,
   tags,
+  t,
+  uncategorizedCount,
 }: CategorySubpanelProps) {
   return (
-    <aside className="lnr-library-subpanel" aria-label="Library categories">
+    <aside className="lnr-library-subpanel" aria-label={t("categories.title")}>
       <div className="lnr-library-subpanel-header">
-        <Text className="lnr-console-kicker">Categories</Text>
+        <Text className="lnr-console-kicker">{t("categories.title")}</Text>
+        <Tooltip label={t("categories.add")} openDelay={350} withArrow>
+          <UnstyledButton
+            aria-label={t("categories.add")}
+            className="lnr-library-subpanel-icon"
+            onClick={onCreate}
+            title={t("categories.add")}
+          >
+            <PlusIcon />
+          </UnstyledButton>
+        </Tooltip>
       </div>
       <ScrollArea className="lnr-library-category-scroll">
         <div className="lnr-library-category-list">
-          <CategoryButton
-            active={activeId === null}
-            count={activeId === null ? currentCount : undefined}
-            label="All"
-            onClick={() => onSelect(null)}
-          />
+            <CategoryButton
+              active={activeId === null}
+              count={allCount}
+              label={t("categories.all")}
+              onClick={() => onSelect(null)}
+              t={t}
+            />
+            <CategoryButton
+              active={activeId === UNCATEGORIZED_CATEGORY_ID}
+              count={uncategorizedCount}
+              label={t("categories.uncategorized")}
+              onClick={() => onSelect(UNCATEGORIZED_CATEGORY_ID)}
+              t={t}
+            />
           {loading ? (
-            <Text className="lnr-library-subpanel-note">Loading...</Text>
+            <Text className="lnr-library-subpanel-note">{t("common.loading")}</Text>
           ) : error ? (
             <Text className="lnr-library-subpanel-note" c="red">
               {error instanceof Error ? error.message : String(error)}
@@ -329,19 +731,23 @@ function CategorySubpanel({
               <CategoryButton
                 key={category.id}
                 active={activeId === category.id}
-                count={activeId === category.id ? currentCount : undefined}
+                canEdit={!category.isSystem}
+                count={category.novelCount}
                 label={category.name}
+                onDelete={() => onDelete(category)}
+                onRename={() => onRename(category)}
                 onClick={() => onSelect(category.id)}
+                t={t}
               />
             ))
           ) : (
             <Text className="lnr-library-subpanel-note">
-              No categories yet.
+              {t("categories.noManual")}
             </Text>
           )}
 
           <div className="lnr-library-tags">
-            <div className="lnr-library-tags-title">Tags</div>
+            <div className="lnr-library-tags-title">{t("library.tags.title")}</div>
             {tags.length > 0 ? (
               tags.map((tag) => (
                 <div className="lnr-library-tag-row" key={tag.label}>
@@ -350,15 +756,17 @@ function CategorySubpanel({
                 </div>
               ))
             ) : (
-              <Text className="lnr-library-subpanel-note">No tags</Text>
+              <Text className="lnr-library-subpanel-note">
+                {t("library.tags.none")}
+              </Text>
             )}
           </div>
         </div>
       </ScrollArea>
       <div className="lnr-library-subpanel-footer">
-        <span>up/down navigate / enter select</span>
+        <span>{t("library.footer.shortcuts")}</span>
         <UnstyledButton onClick={onOpenDrawer}>
-          Manage categories
+          {t("library.manageCategories")}
         </UnstyledButton>
       </div>
     </aside>
@@ -367,26 +775,109 @@ function CategorySubpanel({
 
 interface CategoryButtonProps {
   active: boolean;
+  canEdit?: boolean;
   count?: number;
   label: string;
+  onDelete?: () => void;
+  onRename?: () => void;
   onClick: () => void;
+  t: TranslateFn;
 }
 
 function CategoryButton({
   active,
+  canEdit = false,
   count,
   label,
+  onDelete,
+  onRename,
   onClick,
+  t,
 }: CategoryButtonProps) {
   return (
-    <UnstyledButton
-      className="lnr-library-category"
-      data-active={active}
-      onClick={onClick}
-    >
-      <span className="lnr-library-category-label">{label}</span>
-      <span className="lnr-library-category-count">{count ?? "-"}</span>
-    </UnstyledButton>
+    <div className="lnr-library-category-row" data-active={active}>
+      <UnstyledButton
+        className="lnr-library-category"
+        data-active={active}
+        onClick={onClick}
+      >
+        <span className="lnr-library-category-label">{label}</span>
+      </UnstyledButton>
+      {canEdit ? (
+        <span className="lnr-library-category-actions">
+          <Tooltip label={t("categories.rename")} openDelay={350} withArrow>
+            <UnstyledButton
+              aria-label={t("categories.renameNamed", { name: label })}
+              className="lnr-library-category-action"
+              onClick={onRename}
+              title={t("categories.rename")}
+            >
+              <EditIcon />
+            </UnstyledButton>
+          </Tooltip>
+          <Tooltip label={t("categories.delete")} openDelay={350} withArrow>
+            <UnstyledButton
+              aria-label={t("categories.deleteNamed", { name: label })}
+              className="lnr-library-category-action"
+              onClick={onDelete}
+              title={t("categories.delete")}
+            >
+              <TrashIcon />
+            </UnstyledButton>
+          </Tooltip>
+        </span>
+      ) : null}
+      <span className="lnr-library-category-count">{count ?? 0}</span>
+    </div>
+  );
+}
+
+interface SelectionCategoryPickerProps {
+  assigning: boolean;
+  categories: readonly LibraryCategory[];
+  onAssign: (categoryId: number) => void;
+  t: TranslateFn;
+}
+
+function SelectionCategoryPicker({
+  assigning,
+  categories,
+  onAssign,
+  t,
+}: SelectionCategoryPickerProps) {
+  return (
+    <Popover position="bottom-end" shadow="md" width={220}>
+      <Popover.Target>
+        <UnstyledButton
+          aria-label={t("library.addSelectedToCategory")}
+          className="lnr-library-selection-icon"
+          disabled={categories.length === 0 || assigning}
+          title={t("library.addSelectedToCategory")}
+        >
+          <FolderPlusIcon />
+        </UnstyledButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-library-category-assign-popover">
+        <div className="lnr-library-category-assign-list">
+          {categories.length > 0 ? (
+            categories.map((category) => (
+              <UnstyledButton
+                className="lnr-library-category-assign-option"
+                disabled={assigning}
+                key={category.id}
+                onClick={() => onAssign(category.id)}
+              >
+                <span>{category.name}</span>
+              </UnstyledButton>
+            ))
+          ) : (
+            <Text c="dimmed" size="sm">
+              {t("library.addCategoryFirst")}
+            </Text>
+          )}
+        </div>
+      </Popover.Dropdown>
+    </Popover>
   );
 }
 
@@ -399,18 +890,20 @@ function LibraryCommandSearch({
   onChange,
   value,
 }: LibraryCommandSearchProps) {
+  const { t } = useTranslation();
+
   return (
     <label className="lnr-library-command-search">
       <SearchIcon />
       <input
-        aria-label="Search library"
+        aria-label={t("library.search.aria")}
         onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder="Search or jump..."
+        placeholder={t("library.search.placeholder")}
         value={value}
       />
       {value.length > 0 ? (
         <button
-          aria-label="Clear search"
+          aria-label={t("searchBar.clear")}
           onClick={() => onChange("")}
           type="button"
         >
@@ -425,36 +918,126 @@ function LibraryCommandSearch({
 
 const VIEW_MODE_OPTIONS: {
   icon: "cover" | "grid" | "list" | "rows";
-  label: string;
+  labelKey: TranslationKey;
   mode: LibraryDisplayMode;
 }[] = [
-  { icon: "grid", label: "Grid view", mode: "comfortable" },
-  { icon: "list", label: "List view", mode: "list" },
-  { icon: "rows", label: "Compact rows", mode: "compact" },
-  { icon: "cover", label: "Cover only", mode: "cover-only" },
+  { icon: "grid", labelKey: "library.viewMode.grid", mode: "comfortable" },
+  { icon: "list", labelKey: "library.viewMode.list", mode: "list" },
+  { icon: "rows", labelKey: "library.viewMode.compact", mode: "compact" },
+  { icon: "cover", labelKey: "library.viewMode.coverOnly", mode: "cover-only" },
 ];
 
 interface ViewModeToggleProps {
   displayMode: LibraryDisplayMode;
   onChange: (mode: LibraryDisplayMode) => void;
+  t: TranslateFn;
 }
 
-function ViewModeToggle({ displayMode, onChange }: ViewModeToggleProps) {
+function ViewModeToggle({ displayMode, onChange, t }: ViewModeToggleProps) {
   return (
-    <div className="lnr-library-view-toggle" role="group" aria-label="View mode">
-      {VIEW_MODE_OPTIONS.map((option) => (
-        <UnstyledButton
-          aria-label={option.label}
-          className="lnr-library-view-button"
-          data-active={displayMode === option.mode}
-          key={option.mode}
-          onClick={() => onChange(option.mode)}
-          title={option.label}
-        >
-          <ViewModeIcon icon={option.icon} />
-        </UnstyledButton>
-      ))}
+    <div
+      className="lnr-library-view-toggle"
+      role="group"
+      aria-label={t("library.viewMode.label")}
+    >
+      {VIEW_MODE_OPTIONS.map((option) => {
+        const label = t(option.labelKey);
+        return (
+          <UnstyledButton
+            aria-label={label}
+            className="lnr-library-view-button"
+            data-active={displayMode === option.mode}
+            key={option.mode}
+            onClick={() => onChange(option.mode)}
+            title={label}
+          >
+            <ViewModeIcon icon={option.icon} />
+          </UnstyledButton>
+        );
+      })}
     </div>
+  );
+}
+
+function MobileViewModePicker({
+  displayMode,
+  onChange,
+  t,
+}: ViewModeToggleProps) {
+  const activeOption =
+    VIEW_MODE_OPTIONS.find((option) => option.mode === displayMode) ??
+    VIEW_MODE_OPTIONS[0];
+  const activeLabel = t(activeOption.labelKey);
+
+  return (
+    <Popover position="bottom-end" shadow="md" width={180}>
+      <Popover.Target>
+        <UnstyledButton
+          aria-label={t("library.viewMode.label")}
+          className="lnr-library-mobile-view-button"
+          title={activeLabel}
+        >
+          <ViewModeIcon icon={activeOption.icon} />
+        </UnstyledButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-library-mobile-view-menu">
+        {VIEW_MODE_OPTIONS.map((option) => {
+          const label = t(option.labelKey);
+          return (
+            <UnstyledButton
+              className="lnr-library-mobile-view-option"
+              data-active={displayMode === option.mode}
+              key={option.mode}
+              onClick={() => onChange(option.mode)}
+            >
+              <ViewModeIcon icon={option.icon} />
+              <span>{label}</span>
+            </UnstyledButton>
+          );
+        })}
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 20h4" />
+      <path d="M14 5l5 5" />
+      <path d="M17 3l4 4L9 19H5v-4z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 7h16" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M6 7l1 14h10l1-14" />
+      <path d="M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+function FolderPlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 6h6l2 2h8v10H4z" />
+      <path d="M12 13h6" />
+      <path d="M15 10v6" />
+    </svg>
   );
 }
 
@@ -476,6 +1059,28 @@ function SlidersIcon() {
       <path d="M10 17h10" />
       <circle cx="16" cy="7" r="2" />
       <circle cx="8" cy="17" r="2" />
+    </svg>
+  );
+}
+
+function DownloadFilterIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 18h14" />
+      <path d="M8 21h8" />
+    </svg>
+  );
+}
+
+function UnreadFilterIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5h14v14H5z" />
+      <path d="M8 10h6" />
+      <path d="M8 14h5" />
+      <circle cx="17" cy="7" r="2" />
     </svg>
   );
 }
@@ -525,7 +1130,10 @@ interface LibraryTag {
   label: string;
 }
 
-function getLibraryTags(novels: readonly LibraryNovel[]): LibraryTag[] {
+function getLibraryTags(
+  novels: readonly LibraryNovel[],
+  t: TranslateFn,
+): LibraryTag[] {
   const unread = novels.filter((novel) => novel.chaptersUnread > 0).length;
   const downloaded = novels.filter(
     (novel) => novel.chaptersDownloaded > 0,
@@ -536,14 +1144,17 @@ function getLibraryTags(novels: readonly LibraryNovel[]): LibraryTag[] {
   ).length;
 
   return [
-    { count: unread, label: "unread" },
-    { count: downloaded, label: "downloaded" },
-    { count: local, label: "local" },
-    { count: complete, label: "complete" },
+    { count: unread, label: t("library.tags.unread") },
+    { count: downloaded, label: t("library.tags.downloaded") },
+    { count: local, label: t("library.tags.local") },
+    { count: complete, label: t("library.tags.complete") },
   ].filter((tag) => tag.count > 0);
 }
 
-function getLibraryStats(novels: readonly LibraryNovel[]) {
+function getLibraryStats(
+  novels: readonly LibraryNovel[],
+  locale: ReturnType<typeof useTranslation>["locale"],
+) {
   const totalNovels = novels.length;
   const unreadChapters = novels.reduce(
     (sum, novel) => sum + novel.chaptersUnread,
@@ -567,27 +1178,9 @@ function getLibraryStats(novels: readonly LibraryNovel[]) {
 
   return {
     downloadedChapters,
-    lastUpdatedLabel: formatRelativeTime(lastUpdatedAt),
+    lastUpdatedLabel: formatRelativeTimeForLocale(locale, lastUpdatedAt),
     totalChapters,
     totalNovels,
     unreadChapters,
   };
-}
-
-function formatRelativeTime(value: number | null) {
-  if (value == null || value <= 0) return "never";
-  const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
-  const diffMs = Date.now() - timestamp;
-  if (diffMs < 60_000) return "just now";
-
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-
-  return new Date(timestamp).toLocaleDateString();
 }

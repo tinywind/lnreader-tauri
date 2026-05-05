@@ -1,4 +1,5 @@
 import { getDb } from "../client";
+import { UNCATEGORIZED_CATEGORY_ID } from "./category";
 import type { LibrarySortOrder } from "../../store/library";
 
 /**
@@ -28,9 +29,10 @@ export interface LibraryNovel {
 export interface LibraryFilter {
   /** Case-insensitive substring match against `name`. Empty and blank values are ignored. */
   search?: string;
-  /** Restrict to novels assigned to this category. `null` and undefined include all. */
+  /** Restrict to an assigned category, or to uncategorized novels with the sentinel id. */
   categoryId?: number | null;
   downloadedOnly?: boolean;
+  unreadOnly?: boolean;
   sortOrder?: LibrarySortOrder;
 }
 
@@ -71,7 +73,11 @@ export async function listLibraryNovels(
       `n.name LIKE '%' || $${params.length} || '%' COLLATE NOCASE`,
     );
   }
-  if (filter.categoryId != null) {
+  if (filter.categoryId === UNCATEGORIZED_CATEGORY_ID) {
+    conditions.push(
+      "NOT EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id)",
+    );
+  } else if (filter.categoryId != null) {
     params.push(filter.categoryId);
     conditions.push(
       `EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id AND nc.category_id = $${params.length})`,
@@ -80,6 +86,11 @@ export async function listLibraryNovels(
   if (filter.downloadedOnly) {
     conditions.push(
       `(n.is_local = 1 OR EXISTS (SELECT 1 FROM chapter dc WHERE dc.novel_id = n.id AND dc.is_downloaded = 1))`,
+    );
+  }
+  if (filter.unreadOnly) {
+    conditions.push(
+      "EXISTS (SELECT 1 FROM chapter uc WHERE uc.novel_id = n.id AND uc.unread = 1)",
     );
   }
 

@@ -1,14 +1,20 @@
-import { useMutation } from "@tanstack/react-query";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  Button,
   Group,
   Loader,
   Stack,
   Text,
+  Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import {
-  ConsoleChip,
   ConsoleCover,
   ConsolePanel,
   ConsoleSectionHeader,
@@ -16,23 +22,39 @@ import {
   ConsoleStatusStrip,
 } from "../components/ConsolePrimitives";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
-import type { LibraryUpdateEntry } from "../db/queries/chapter";
+import {
+  listLibraryUpdatesPage,
+  type LibraryUpdateEntry,
+} from "../db/queries/chapter";
+import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
 import {
   checkLibraryUpdates,
   type UpdateCheckFailure,
   type UpdateCheckResult,
 } from "../lib/updates/check-library-updates";
+import {
+  formatDateTimeForLocale,
+  useTranslation,
+  type AppLocale,
+  type TranslationKey,
+} from "../i18n";
+import { useUpdatesStore } from "../store/updates";
 import "../styles/updates.css";
 
-const UPDATES_LIMIT = 200;
-const FALLBACK_COVER = "https://placehold.co/56x84?text=?";
+const UPDATES_PAGE_SIZE = 100;
+const LOAD_MORE_THRESHOLD_PX = 480;
 
-function formatDateTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleString();
+function formatDateTime(epochSeconds: number, locale: AppLocale): string {
+  return formatDateTimeForLocale(locale, epochSeconds * 1000);
 }
 
-function plural(value: number, noun: string): string {
-  return `${value} ${noun}${value === 1 ? "" : "s"}`;
+function countLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  value: number,
+  singularKey: TranslationKey,
+  pluralKey: TranslationKey,
+): string {
+  return t(value === 1 ? singularKey : pluralKey, { count: value });
 }
 
 interface SourceUpdateState {
@@ -41,11 +63,14 @@ interface SourceUpdateState {
   updates: number;
 }
 
-function getSourceStates(result: UpdateCheckResult | undefined): SourceUpdateState[] {
-  if (!result) return [];
+function getSourceStates(
+  result: UpdateCheckResult | undefined,
+  updates: LibraryUpdateEntry[] = result?.updates ?? [],
+): SourceUpdateState[] {
+  if (!result && updates.length === 0) return [];
   const sources = new Map<string, SourceUpdateState>();
 
-  for (const entry of result.updates) {
+  for (const entry of updates) {
     const current =
       sources.get(entry.pluginId) ??
       { failures: 0, pluginId: entry.pluginId, updates: 0 };
@@ -53,7 +78,7 @@ function getSourceStates(result: UpdateCheckResult | undefined): SourceUpdateSta
     sources.set(entry.pluginId, current);
   }
 
-  for (const failure of result.failures) {
+  for (const failure of result?.failures ?? []) {
     const current =
       sources.get(failure.pluginId) ??
       { failures: 0, pluginId: failure.pluginId, updates: 0 };
@@ -67,12 +92,19 @@ function getSourceStates(result: UpdateCheckResult | undefined): SourceUpdateSta
 }
 
 interface UpdateSummaryProps {
+  hasMoreUpdates: boolean;
+  loadedUpdates: number;
   result: UpdateCheckResult | undefined;
   running: boolean;
 }
 
-function UpdateSummary({ result, running }: UpdateSummaryProps) {
-  const updates = result?.updates.length ?? 0;
+function UpdateSummary({
+  hasMoreUpdates,
+  loadedUpdates,
+  result,
+  running,
+}: UpdateSummaryProps) {
+  const { t } = useTranslation();
   const failures = result?.failures.length ?? 0;
   const checked = result?.checkedNovels ?? 0;
   const skipped = result?.skippedNovels ?? 0;
@@ -80,41 +112,80 @@ function UpdateSummary({ result, running }: UpdateSummaryProps) {
   return (
     <ConsolePanel className="lnr-updates-summary">
       <div className="lnr-updates-summary-grid">
-        <div>
-          <Text className="lnr-console-kicker">Queue state</Text>
+        <div className="lnr-updates-summary-queue">
+          <Text className="lnr-console-kicker">{t("updates.queueState")}</Text>
           <Group gap="xs" mt={6} wrap="wrap">
             <ConsoleStatusDot
               status={running ? "active" : failures > 0 ? "warning" : "idle"}
-              label={running ? "checking" : result ? "ready" : "idle"}
+              label={
+                running
+                  ? t("common.checking")
+                  : result
+                    ? t("common.ready")
+                    : t("settings.idle")
+              }
             />
-            <ConsoleChip active={updates > 0} tone={updates > 0 ? "accent" : "default"}>
-              {plural(updates, "update")}
-            </ConsoleChip>
-            <ConsoleChip tone={failures > 0 ? "warning" : "default"}>
-              {plural(failures, "failure")}
-            </ConsoleChip>
+            <UpdateFlag
+              count={loadedUpdates}
+              label={countLabel(
+                t,
+                loadedUpdates,
+                "updates.loadedUpdateCount",
+                "updates.loadedUpdateCountPlural",
+              )}
+              tone={loadedUpdates > 0 ? "accent" : "default"}
+            >
+              <RefreshIcon />
+            </UpdateFlag>
+            {hasMoreUpdates ? (
+              <UpdateFlag label={t("updates.moreAvailable")} tone="accent">
+                <PlusIcon />
+              </UpdateFlag>
+            ) : null}
+            <UpdateFlag
+              count={failures}
+              label={countLabel(
+                t,
+                failures,
+                "updates.failureCount",
+                "updates.failureCountPlural",
+              )}
+              tone={failures > 0 ? "warning" : "default"}
+            >
+              <AlertIcon />
+            </UpdateFlag>
           </Group>
         </div>
 
-        <div>
-          <Text className="lnr-console-kicker">Source check</Text>
+        <div className="lnr-updates-summary-source">
+          <Text className="lnr-console-kicker">{t("updates.sourceCheck")}</Text>
           <Text className="lnr-updates-summary-value" mt={4}>
-            {plural(checked, "novel")}
+            {countLabel(
+              t,
+              checked,
+              "updates.novelCount",
+              "updates.novelCountPlural",
+            )}
           </Text>
           <Text className="lnr-updates-summary-copy">
             {skipped > 0
-              ? `${plural(skipped, "local novel")} skipped`
-              : "No local novels skipped"}
+              ? countLabel(
+                  t,
+                  skipped,
+                  "updates.localNovelSkipped",
+                  "updates.localNovelSkippedPlural",
+                )
+              : t("updates.noLocalSkipped")}
           </Text>
         </div>
 
-        <div>
-          <Text className="lnr-console-kicker">Limit</Text>
+        <div className="lnr-updates-summary-limit">
+          <Text className="lnr-console-kicker">{t("updates.limit")}</Text>
           <Text className="lnr-updates-summary-value" mt={4}>
-            {UPDATES_LIMIT}
+            {UPDATES_PAGE_SIZE}
           </Text>
           <Text className="lnr-updates-summary-copy">
-            unread chapters per run
+            {t("updates.rowsLoadedPerPage")}
           </Text>
         </div>
       </div>
@@ -126,15 +197,21 @@ function SourceStatePanel({
   result,
   running,
   onRetry,
+  updates,
 }: {
   result: UpdateCheckResult | undefined;
   running: boolean;
   onRetry: () => void;
+  updates: LibraryUpdateEntry[];
 }) {
-  const sources = getSourceStates(result);
+  const { t } = useTranslation();
+  const sources = getSourceStates(result, updates);
 
   return (
-    <ConsolePanel className="lnr-updates-source-state" title="Source state">
+    <ConsolePanel
+      className="lnr-updates-source-state"
+      title={t("updates.sourceState")}
+    >
       {sources.length > 0 ? (
         <div className="lnr-updates-source-grid">
           {sources.map((source) => {
@@ -147,16 +224,40 @@ function SourceStatePanel({
             return (
               <div className="lnr-updates-source-row" key={source.pluginId}>
                 <ConsoleStatusDot status={status} label={source.pluginId} />
-                <ConsoleChip tone={source.updates > 0 ? "accent" : "default"}>
-                  {plural(source.updates, "update")}
-                </ConsoleChip>
-                <ConsoleChip tone={source.failures > 0 ? "error" : "default"}>
-                  {plural(source.failures, "failure")}
-                </ConsoleChip>
+                <UpdateFlag
+                  count={source.updates}
+                  label={countLabel(
+                    t,
+                    source.updates,
+                    "updates.updateCount",
+                    "updates.updateCountPlural",
+                  )}
+                  tone={source.updates > 0 ? "accent" : "default"}
+                >
+                  <RefreshIcon />
+                </UpdateFlag>
+                <UpdateFlag
+                  count={source.failures}
+                  label={countLabel(
+                    t,
+                    source.failures,
+                    "updates.failureCount",
+                    "updates.failureCountPlural",
+                  )}
+                  tone={source.failures > 0 ? "error" : "default"}
+                >
+                  <AlertIcon />
+                </UpdateFlag>
                 {source.failures > 0 ? (
-                  <Button size="compact-xs" variant="subtle" onClick={onRetry}>
-                    Retry source
-                  </Button>
+                  <UpdateIconButton
+                    className="lnr-updates-source-retry"
+                    disabled={running}
+                    label={t("updates.retrySource")}
+                    onClick={onRetry}
+                    tone="accent"
+                  >
+                    {running ? <SpinnerIcon /> : <RefreshIcon />}
+                  </UpdateIconButton>
                 ) : null}
               </div>
             );
@@ -166,7 +267,9 @@ function SourceStatePanel({
         <div className="lnr-updates-source-empty">
           <ConsoleStatusDot
             status={running ? "active" : "idle"}
-            label={running ? "checking sources" : "no source state yet"}
+            label={
+              running ? t("updates.checkingSources") : t("updates.noSourceState")
+            }
           />
         </div>
       )}
@@ -180,11 +283,13 @@ interface FailureRowProps {
 }
 
 function FailureRow({ failure, onOpenNovel }: FailureRowProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="lnr-updates-failure-row">
       <div className="lnr-updates-failure-main">
         <Group gap="xs" wrap="nowrap">
-          <ConsoleStatusDot status="error" label="failed" />
+          <ConsoleStatusDot status="error" label={t("common.failed")} />
           <button
             className="lnr-updates-link"
             type="button"
@@ -197,28 +302,155 @@ function FailureRow({ failure, onOpenNovel }: FailureRowProps) {
           {failure.pluginId} / {failure.reason}
         </Text>
       </div>
-      <Button size="xs" variant="light" color="gray" onClick={onOpenNovel}>
-        Details
-      </Button>
+      <UpdateIconButton label={t("updates.details")} onClick={onOpenNovel}>
+        <DetailsIcon />
+      </UpdateIconButton>
     </div>
   );
 }
 
+interface UpdateIconButtonProps {
+  children: ReactNode;
+  className?: string;
+  disabled?: boolean;
+  label: string;
+  onClick: () => void;
+  tone?: "default" | "accent" | "error";
+}
+
+function UpdateIconButton({
+  children,
+  className,
+  disabled = false,
+  label,
+  onClick,
+  tone = "default",
+}: UpdateIconButtonProps) {
+  const classNames = `lnr-updates-icon-button${
+    className ? ` ${className}` : ""
+  }`;
+
+  return (
+    <Tooltip label={label} openDelay={350} withArrow>
+      <UnstyledButton
+        aria-label={label}
+        className={classNames}
+        data-tone={tone}
+        disabled={disabled}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
+        title={label}
+        type="button"
+      >
+        {children}
+      </UnstyledButton>
+    </Tooltip>
+  );
+}
+
+interface UpdateFlagProps {
+  children: ReactNode;
+  count?: number;
+  label: string;
+  tone?: "accent" | "default" | "done" | "error" | "warning";
+}
+
+function UpdateFlag({
+  children,
+  count,
+  label,
+  tone = "default",
+}: UpdateFlagProps) {
+  const hasCount = count != null;
+
+  return (
+    <Tooltip label={label} openDelay={350} withArrow>
+      <span
+        aria-label={label}
+        className="lnr-updates-icon-flag"
+        data-count={hasCount ? "true" : undefined}
+        data-tone={tone}
+        role="img"
+        title={label}
+      >
+        {children}
+        {hasCount ? (
+          <span className="lnr-updates-icon-count">{count}</span>
+        ) : null}
+      </span>
+    </Tooltip>
+  );
+}
+
+function UpdateDownloadStatusFlag({
+  status,
+}: {
+  status: DownloadStatus | undefined;
+}) {
+  const { t } = useTranslation();
+
+  if (!status || status.kind === "done") return null;
+
+  if (status.kind === "failed") {
+    return (
+      <UpdateFlag label={status.error} tone="error">
+        <AlertIcon />
+      </UpdateFlag>
+    );
+  }
+
+  if (status.kind === "running") {
+    return (
+      <UpdateFlag label={t("common.downloading")}>
+        <SpinnerIcon />
+      </UpdateFlag>
+    );
+  }
+
+  return (
+    <UpdateFlag label={t("common.queued")}>
+      <ClockIcon />
+    </UpdateFlag>
+  );
+}
+
 interface UpdateRowProps {
+  downloadStatus: DownloadStatus | undefined;
   entry: LibraryUpdateEntry;
+  onDownload: () => void;
   onOpen: () => void;
   onOpenNovel: () => void;
 }
 
-function UpdateRow({ entry, onOpen, onOpenNovel }: UpdateRowProps) {
+function UpdateRow({
+  downloadStatus,
+  entry,
+  onDownload,
+  onOpen,
+  onOpenNovel,
+}: UpdateRowProps) {
+  const { locale, t } = useTranslation();
+  const isQueued = downloadStatus?.kind === "queued";
+  const isRunning = downloadStatus?.kind === "running";
+  const failedMessage =
+    downloadStatus?.kind === "failed" ? downloadStatus.error : null;
   const status = entry.isDownloaded ? "done" : "active";
+  const downloadLabel = failedMessage
+    ? `${t("novel.retryDownload")}: ${failedMessage}`
+    : isRunning
+      ? t("common.downloading")
+      : isQueued
+        ? t("common.queued")
+        : t("novel.downloadChapter");
 
   return (
     <div
       className="lnr-updates-row"
       role="button"
       tabIndex={0}
-      aria-label={`Open chapter ${entry.chapterName}`}
+      aria-label={t("updates.openChapter", { name: entry.chapterName })}
       onClick={onOpen}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -228,7 +460,6 @@ function UpdateRow({ entry, onOpen, onOpenNovel }: UpdateRowProps) {
     >
       <ConsoleCover
         alt={entry.novelName}
-        fallbackSrc={FALLBACK_COVER}
         height={72}
         src={entry.novelCover}
         width={48}
@@ -238,7 +469,7 @@ function UpdateRow({ entry, onOpen, onOpenNovel }: UpdateRowProps) {
         <Group gap="xs" wrap="nowrap">
           <ConsoleStatusDot
             status={status}
-            label={entry.isDownloaded ? "downloaded" : "new"}
+            label={entry.isDownloaded ? t("common.downloaded") : t("common.new")}
           />
           <button
             className="lnr-updates-link"
@@ -255,50 +486,290 @@ function UpdateRow({ entry, onOpen, onOpenNovel }: UpdateRowProps) {
           #{entry.position} - {entry.chapterName}
         </Text>
         <Group gap="xs" mt={6} wrap="wrap">
-          <ConsoleChip>{entry.pluginId}</ConsoleChip>
-          <ConsoleChip>Novel #{entry.novelId}</ConsoleChip>
-          <ConsoleChip tone={entry.isDownloaded ? "success" : "accent"}>
-            {entry.isDownloaded ? "cached" : "unread"}
-          </ConsoleChip>
+          <span className="lnr-updates-row-flags" aria-label={t("novel.chapterStatus")}>
+            <UpdateFlag label={entry.pluginId}>
+              <SourceIcon />
+            </UpdateFlag>
+            <UpdateFlag label={t("library.grid.unread")} tone="accent">
+              <UnreadIcon />
+            </UpdateFlag>
+            {entry.isDownloaded ? (
+              <UpdateFlag label={t("novel.downloaded")} tone="done">
+                <CachedIcon />
+              </UpdateFlag>
+            ) : null}
+            <UpdateDownloadStatusFlag status={downloadStatus} />
+          </span>
           <Text className="lnr-updates-row-meta">
-            Found {formatDateTime(entry.foundAt)}
+            {t("updates.foundAt", {
+              date: formatDateTime(entry.foundAt, locale),
+            })}
           </Text>
         </Group>
       </div>
 
       <div className="lnr-updates-row-actions">
-        <Button
-          size="xs"
-          variant="filled"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpen();
-          }}
-        >
-          Read
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          color="gray"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpenNovel();
-          }}
-        >
-          Details
-        </Button>
+        <UpdateIconButton label={t("common.read")} onClick={onOpen} tone="accent">
+          <ReadForwardIcon />
+        </UpdateIconButton>
+        {!entry.isDownloaded ? (
+          <UpdateIconButton
+            disabled={isQueued || isRunning}
+            label={downloadLabel}
+            onClick={onDownload}
+            tone={failedMessage ? "error" : "default"}
+          >
+            {isRunning ? (
+              <SpinnerIcon />
+            ) : isQueued ? (
+              <ClockIcon />
+            ) : (
+              <DownloadIcon />
+            )}
+          </UpdateIconButton>
+        ) : null}
+        <UpdateIconButton label={t("updates.details")} onClick={onOpenNovel}>
+          <DetailsIcon />
+        </UpdateIconButton>
       </div>
     </div>
   );
 }
 
+function ReadForwardIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
+      <path d="M9 9h5" />
+      <path d="M9 13h4" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 19h14" />
+    </svg>
+  );
+}
+
+function CachedIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 19h14" />
+    </svg>
+  );
+}
+
+function UnreadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5h14v14H5z" />
+      <path d="M8 10h6" />
+      <path d="M8 14h5" />
+      <circle cx="17" cy="7" r="2" />
+    </svg>
+  );
+}
+
+function DetailsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4l9 16H3z" />
+      <path d="M12 9v5" />
+      <path d="M12 18h.01" />
+    </svg>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg
+      className="lnr-updates-spin-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 3a9 9 0 1 1-8.49 6" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v5l3 2" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 1 1-3-6.7" />
+      <path d="M21 4v5h-5" />
+    </svg>
+  );
+}
+
+function SourceIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18" />
+      <path d="M12 3a14 14 0 0 0 0 18" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
 export function UpdatesPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const hasLoaded = useUpdatesStore((state) => state.hasLoaded);
+  const hasMoreUpdates = useUpdatesStore((state) => state.hasMoreUpdates);
+  const lastCheckResult = useUpdatesStore((state) => state.lastCheckResult);
+  const nextUpdateOffset = useUpdatesStore(
+    (state) => state.nextUpdateOffset,
+  );
+  const updates = useUpdatesStore((state) => state.updates);
+  const appendPage = useUpdatesStore((state) => state.appendPage);
+  const applyCheckResult = useUpdatesStore(
+    (state) => state.applyCheckResult,
+  );
+  const markChapterDownloaded = useUpdatesStore(
+    (state) => state.markChapterDownloaded,
+  );
+  const mergeFirstPage = useUpdatesStore((state) => state.mergeFirstPage);
+  const [downloadStatuses, setDownloadStatuses] = useState<
+    ReadonlyMap<number, DownloadStatus>
+  >(() => new Map());
+
+  const refresh = useMutation({
+    mutationFn: () => listLibraryUpdatesPage(UPDATES_PAGE_SIZE),
+    onSuccess: mergeFirstPage,
+  });
 
   const check = useMutation({
-    mutationFn: () => checkLibraryUpdates(UPDATES_LIMIT),
+    mutationFn: () => checkLibraryUpdates(UPDATES_PAGE_SIZE),
+    onSuccess: applyCheckResult,
   });
+
+  const loadMore = useMutation({
+    mutationFn: (offset: number) =>
+      listLibraryUpdatesPage(UPDATES_PAGE_SIZE, offset),
+    onSuccess: appendPage,
+  });
+  const isInitialLoading = refresh.isPending && !hasLoaded;
+  const isLoadingMore = loadMore.isPending;
+  const refreshFirstPage = refresh.mutate;
+  const loadMorePage = loadMore.mutate;
+
+  const loadMoreIfNeeded = useCallback(() => {
+    if (
+      !hasLoaded ||
+      refresh.isPending ||
+      check.isPending ||
+      isLoadingMore ||
+      !hasMoreUpdates
+    ) {
+      return;
+    }
+
+    const scrollElement = document.scrollingElement ?? document.documentElement;
+    const distanceToBottom =
+      scrollElement.scrollHeight - window.innerHeight - scrollElement.scrollTop;
+
+    if (distanceToBottom <= LOAD_MORE_THRESHOLD_PX) {
+      loadMorePage(nextUpdateOffset);
+    }
+  }, [
+    check.isPending,
+    hasLoaded,
+    hasMoreUpdates,
+    isLoadingMore,
+    loadMorePage,
+    nextUpdateOffset,
+    refresh.isPending,
+  ]);
+
+  useEffect(() => {
+    refreshFirstPage();
+  }, [refreshFirstPage]);
+
+  useEffect(() => {
+    return downloadQueue.subscribe((event) => {
+      setDownloadStatuses((current) => {
+        const next = new Map(current);
+        next.set(event.job.id, event.status);
+        return next;
+      });
+      if (event.status.kind === "done") {
+        markChapterDownloaded(event.job.id);
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+      }
+    });
+  }, [markChapterDownloaded, queryClient]);
+
+  useEffect(() => {
+    for (const entry of updates) {
+      const status = downloadQueue.status(entry.chapterId);
+      if (status?.kind === "done" && !entry.isDownloaded) {
+        markChapterDownloaded(entry.chapterId);
+      }
+    }
+
+    setDownloadStatuses((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const entry of updates) {
+        const status = downloadQueue.status(entry.chapterId);
+        if (status && next.get(entry.chapterId) !== status) {
+          next.set(entry.chapterId, status);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [markChapterDownloaded, updates]);
+
+  useEffect(() => {
+    window.addEventListener("scroll", loadMoreIfNeeded, { passive: true });
+    window.addEventListener("resize", loadMoreIfNeeded);
+    return () => {
+      window.removeEventListener("scroll", loadMoreIfNeeded);
+      window.removeEventListener("resize", loadMoreIfNeeded);
+    };
+  }, [loadMoreIfNeeded]);
+
+  useEffect(() => {
+    loadMoreIfNeeded();
+  }, [loadMoreIfNeeded, updates.length]);
 
   const openChapter = (chapterId: number) => {
     void navigate({ to: "/reader", search: { chapterId } });
@@ -306,59 +777,104 @@ export function UpdatesPage() {
   const openNovel = (novelId: number) => {
     void navigate({ to: "/novel", search: { id: novelId } });
   };
+  const downloadChapter = (entry: LibraryUpdateEntry) => {
+    downloadQueue.enqueue({
+      id: entry.chapterId,
+      pluginId: entry.pluginId,
+      chapterPath: entry.chapterPath,
+    });
+  };
 
-  const result = check.data;
+  const result = lastCheckResult ?? undefined;
 
   return (
     <PageFrame className="lnr-updates-page" size="wide">
       <PageHeader
         eyebrow="/updates"
-        title="Updates"
-        description="Refresh installed sources and process newly indexed unread chapters."
+        title={t("updates.title")}
+        description={t("updates.description")}
         actions={
-          <Button
-            size="sm"
-            loading={check.isPending}
+          <UpdateIconButton
+            className="lnr-updates-check-button"
+            disabled={check.isPending}
+            label={t("updates.check")}
             onClick={() => check.mutate()}
+            tone="accent"
           >
-            Check for updates
-          </Button>
+            {check.isPending ? <SpinnerIcon /> : <RefreshIcon />}
+          </UpdateIconButton>
         }
       />
 
-      <UpdateSummary result={result} running={check.isPending} />
+      <UpdateSummary
+        hasMoreUpdates={hasMoreUpdates}
+        loadedUpdates={updates.length}
+        result={result}
+        running={check.isPending || refresh.isPending}
+      />
       <SourceStatePanel
         result={result}
         running={check.isPending}
         onRetry={() => check.mutate()}
+        updates={updates}
       />
 
-      {check.isPending ? (
+      {isInitialLoading ? (
         <StateView
           title={
             <Group gap="sm">
               <Loader size="sm" />
-              <Text c="dimmed">Checking library sources...</Text>
+              <Text c="dimmed">{t("updates.loadingRecent")}</Text>
             </Group>
           }
         />
-      ) : check.error ? (
+      ) : refresh.error && !hasLoaded ? (
         <StateView
-          action={{ label: "Retry", onClick: () => check.mutate() }}
+          action={{
+            icon: <RefreshIcon />,
+            iconOnly: true,
+            label: t("common.retry"),
+            onClick: () => refreshFirstPage(),
+          }}
           color="red"
-          title="Failed to check updates"
+          title={t("updates.loadFailed")}
           message={
-            check.error instanceof Error
-              ? check.error.message
-              : String(check.error)
+            refresh.error instanceof Error
+              ? refresh.error.message
+              : String(refresh.error)
           }
         />
-      ) : result ? (
+      ) : (
         <Stack gap="md">
-          {result.failures.length > 0 ? (
+          {check.isPending ? (
+            <StateView
+              title={
+                <Group gap="sm">
+                  <Loader size="sm" />
+                  <Text c="dimmed">{t("updates.checkingLibrarySources")}</Text>
+                </Group>
+              }
+            />
+          ) : check.error ? (
+            <StateView
+              action={{
+                icon: <RefreshIcon />,
+                iconOnly: true,
+                label: t("common.retry"),
+                onClick: () => check.mutate(),
+              }}
+              color="red"
+              title={t("updates.checkFailed")}
+              message={
+                check.error instanceof Error
+                  ? check.error.message
+                  : String(check.error)
+              }
+            />
+          ) : result && result.failures.length > 0 ? (
             <ConsolePanel
               className="lnr-updates-failures"
-              title="Source failures"
+              title={t("updates.sourceFailures")}
             >
               <Stack gap={0}>
                 {result.failures.map((failure) => (
@@ -371,56 +887,110 @@ export function UpdatesPage() {
               </Stack>
               <div className="lnr-updates-failure-footer">
                 <Text className="lnr-updates-row-meta">
-                  Retry runs the full source check again. Failed novels remain
-                  visible so the source issue is not hidden by successful rows.
+                  {t("updates.failureFooter")}
                 </Text>
-                <Button size="xs" variant="light" onClick={() => check.mutate()}>
-                  Retry failed check
-                </Button>
+                <UpdateIconButton
+                  className="lnr-updates-footer-action"
+                  disabled={check.isPending}
+                  label={t("updates.retryFailedCheck")}
+                  onClick={() => check.mutate()}
+                  tone="accent"
+                >
+                  {check.isPending ? <SpinnerIcon /> : <RefreshIcon />}
+                </UpdateIconButton>
               </div>
             </ConsolePanel>
           ) : null}
 
           <ConsolePanel className="lnr-updates-queue">
             <ConsoleSectionHeader
-              eyebrow="Work queue"
-              title="Unread chapter updates"
-              count={plural(result.updates.length, "row")}
+              eyebrow={t("updates.workQueue")}
+              title={t("updates.unreadChapterUpdates")}
+              count={`${countLabel(
+                t,
+                updates.length,
+                "updates.loadedRowCount",
+                "updates.loadedRowCountPlural",
+              )}${hasMoreUpdates ? ` / ${t("updates.moreAvailable")}` : ""}`}
             />
 
-            {result.updates.length > 0 ? (
+            {updates.length > 0 ? (
               <Stack gap={0} mt="sm">
-                {result.updates.map((entry) => (
+                {updates.map((entry) => (
                   <UpdateRow
                     key={entry.chapterId}
+                    downloadStatus={downloadStatuses.get(entry.chapterId)}
                     entry={entry}
+                    onDownload={() => downloadChapter(entry)}
                     onOpen={() => openChapter(entry.chapterId)}
                     onOpenNovel={() => openNovel(entry.novelId)}
                   />
                 ))}
+                {hasMoreUpdates ? (
+                  <div className="lnr-updates-load-more">
+                    <UpdateIconButton
+                      className="lnr-updates-load-more-action"
+                      disabled={isLoadingMore}
+                      label={t("updates.loadMore")}
+                      onClick={() => loadMorePage(nextUpdateOffset)}
+                      tone="accent"
+                    >
+                      {isLoadingMore ? <SpinnerIcon /> : <PlusIcon />}
+                    </UpdateIconButton>
+                    <Text className="lnr-updates-row-meta">
+                      {t("updates.autoLoadMore")}
+                    </Text>
+                  </div>
+                ) : null}
               </Stack>
             ) : (
               <StateView
                 color="blue"
-                title="Caught up"
-                message="No unread chapters were discovered after library registration."
+                title={t("updates.caughtUp")}
+                message={t("updates.caughtUpCurrentMessage")}
               />
             )}
           </ConsolePanel>
         </Stack>
-      ) : (
-        <StateView
-          action={{ label: "Check now", onClick: () => check.mutate() }}
-          color="blue"
-          title="Manual check"
-          message="Use the check button to refresh installed source plugins."
-        />
       )}
 
       <ConsoleStatusStrip>
-        <span>{result ? plural(result.checkedNovels, "checked novel") : "No check run yet"}</span>
-        <span>{result ? plural(result.skippedNovels, "skipped local novel") : "Manual refresh"}</span>
-        <span>{result ? plural(result.failures.length, "source failure") : `Limit ${UPDATES_LIMIT}`}</span>
+        <span>
+          {check.isPending
+            ? t("updates.checkingSourcesLabel")
+            : refresh.isPending
+              ? t("updates.refreshingLocalUpdates")
+              : result
+                ? countLabel(
+                    t,
+                    result.checkedNovels,
+                    "updates.checkedNovelCount",
+                    "updates.checkedNovelCountPlural",
+                  )
+                : hasLoaded
+                  ? t("updates.localUpdatesLoaded")
+                  : t("updates.noLocalUpdatesLoaded")}
+        </span>
+        <span>
+          {result
+            ? countLabel(
+                t,
+                result.skippedNovels,
+                "updates.skippedLocalNovelCount",
+                "updates.skippedLocalNovelCountPlural",
+              )
+            : hasLoaded
+              ? t("updates.manualSourceCheckAvailable")
+              : t("common.loading")}
+        </span>
+        <span>
+          {`${countLabel(
+            t,
+            updates.length,
+            "updates.loadedUpdateCount",
+            "updates.loadedUpdateCountPlural",
+          )}${hasMoreUpdates ? ` / ${t("common.more")}` : ""}`}
+        </span>
       </ConsoleStatusStrip>
     </PageFrame>
   );

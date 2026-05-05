@@ -1,6 +1,6 @@
 import { getDb } from "../../db/client";
 import {
-  listLibraryUpdates,
+  listLibraryUpdatesPage,
   upsertChapter,
   type LibraryUpdateEntry,
 } from "../../db/queries/chapter";
@@ -25,6 +25,8 @@ export interface UpdateCheckResult {
   checkedNovels: number;
   skippedNovels: number;
   failures: UpdateCheckFailure[];
+  hasMoreUpdates: boolean;
+  nextUpdateOffset: number;
   updates: LibraryUpdateEntry[];
 }
 
@@ -106,10 +108,14 @@ export async function checkLibraryUpdates(
     }
   }
 
+  const updatesPage = await listLibraryUpdatesPage(limit);
+
   return {
     checkedNovels,
     skippedNovels,
     failures,
-    updates: await listLibraryUpdates(limit),
+    hasMoreUpdates: updatesPage.hasMore,
+    nextUpdateOffset: updatesPage.nextOffset,
+    updates: updatesPage.updates,
   };
 }

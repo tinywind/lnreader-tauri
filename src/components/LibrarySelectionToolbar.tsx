@@ -1,4 +1,5 @@
 import { Button, Group, Paper, Text } from "@mantine/core";
+import { useTranslation } from "../i18n";
 
 interface LibrarySelectionToolbarProps {
   count: number;
@@ -16,19 +17,31 @@ export function LibrarySelectionToolbar({
   count,
   onClear,
 }: LibrarySelectionToolbarProps) {
+  const { t } = useTranslation();
+
   return (
     <Paper withBorder p="xs" radius="md" shadow="sm">
       <Group justify="space-between" wrap="nowrap">
-        <Text fw={600}>{count} selected</Text>
+        <Text fw={600}>{t("library.selectedCount", { count })}</Text>
         <Group gap="xs" wrap="nowrap">
-          <Button size="xs" variant="subtle" disabled title="Sprint 6">
-            Mark read
+          <Button
+            size="xs"
+            variant="subtle"
+            disabled
+            title={t("library.selection.sprint6")}
+          >
+            {t("library.selection.markRead")}
           </Button>
-          <Button size="xs" variant="subtle" disabled title="Sprint 6">
-            Remove
+          <Button
+            size="xs"
+            variant="subtle"
+            disabled
+            title={t("library.selection.sprint6")}
+          >
+            {t("common.remove")}
           </Button>
           <Button size="xs" variant="light" onClick={onClear}>
-            Done
+            {t("common.done")}
           </Button>
         </Group>
       </Group>
