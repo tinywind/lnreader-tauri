@@ -1,13 +1,13 @@
 import {
-  Outlet,
   createRootRoute,
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import { RootLayout } from "./routes/__root";
 import { LibraryPage } from "./routes/library";
 
 const rootRoute = createRootRoute({
-  component: () => <Outlet />,
+  component: RootLayout,
 });
 
 const libraryRoute = createRoute({
