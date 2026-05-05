@@ -1,3 +1,5 @@
+mod cf_webview;
+
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,6 +19,7 @@ pub fn run() {
                 .add_migrations("sqlite:lnreader.db", migrations)
                 .build(),
         )
+        .invoke_handler(tauri::generate_handler![cf_webview::cf_solve])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
