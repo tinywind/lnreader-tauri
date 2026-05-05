@@ -57,6 +57,9 @@ jobs:
             exit 1
           fi
 
+      - name: Unit tests
+        run: pnpm test
+
   desktop-build:
     name: Desktop debug build (${{ matrix.os }})
     needs: frontend
