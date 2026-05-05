@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tsc": "tsc --noEmit",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

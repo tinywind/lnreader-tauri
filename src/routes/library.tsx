@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Badge,
+  Button,
   Container,
   Group,
   Loader,
@@ -9,57 +10,69 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { getDb } from "../db";
+import { LibraryGrid } from "../components/LibraryGrid";
+import { insertNovel, listLibraryNovels } from "../db/queries/novel";
 
-interface CountRow {
-  count: number;
-}
-
-async function fetchNovelCount(): Promise<number> {
-  const db = await getDb();
-  const rows = await db.select<CountRow[]>(
-    "SELECT COUNT(*) AS count FROM novel",
-  );
-  return rows[0]?.count ?? 0;
-}
+const LIBRARY_QUERY_KEY = ["novel", "library"] as const;
 
 export function LibraryPage() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["novel", "count"],
-    queryFn: fetchNovelCount,
+  const queryClient = useQueryClient();
+
+  const novels = useQuery({
+    queryKey: LIBRARY_QUERY_KEY,
+    queryFn: listLibraryNovels,
+  });
+
+  const seed = useMutation({
+    mutationFn: async () => {
+      const stamp = Date.now();
+      await insertNovel({
+        pluginId: "local",
+        path: `local-${stamp}`,
+        name: `Sample novel #${stamp}`,
+        cover: null,
+      });
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["novel"] }),
   });
 
   return (
-    <Container size="sm" py="xl">
+    <Container size="lg" py="xl">
       <Stack gap="md">
         <Group justify="space-between" align="baseline">
-          <Title order={1}>LNReaderTauri</Title>
-          <Badge variant="light" color="gray">
-            Sprint 1
-          </Badge>
+          <Title order={1}>Library</Title>
+          <Group gap="xs">
+            <Badge variant="light" color="gray">
+              Sprint 1
+            </Badge>
+            <Button
+              size="xs"
+              variant="light"
+              loading={seed.isPending}
+              onClick={() => seed.mutate()}
+            >
+              + Seed novel
+            </Button>
+          </Group>
         </Group>
-        <Text c="dimmed">
-          Library — bound to local SQLite via{" "}
-          <Text span fw={600}>
-            tauri-plugin-sql
-          </Text>{" "}
-          and queried with TanStack Query.
-        </Text>
-        {isLoading ? (
+
+        {novels.isLoading ? (
           <Group gap="sm">
             <Loader size="sm" />
-            <Text c="dimmed">Opening database…</Text>
+            <Text c="dimmed">Loading library…</Text>
           </Group>
-        ) : error ? (
+        ) : novels.error ? (
           <Alert color="red" title="Database error">
-            {error instanceof Error ? error.message : String(error)}
+            {novels.error instanceof Error
+              ? novels.error.message
+              : String(novels.error)}
           </Alert>
+        ) : novels.data && novels.data.length > 0 ? (
+          <LibraryGrid novels={novels.data} />
         ) : (
-          <Alert color="green" title="Library">
-            Novels:{" "}
-            <Text span fw={700}>
-              {data}
-            </Text>
+          <Alert color="blue" title="Empty library">
+            No novels yet. Click "+ Seed novel" to insert a sample row.
           </Alert>
         )}
       </Stack>
