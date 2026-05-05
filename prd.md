@@ -46,8 +46,9 @@ model.
    and shares cookies with the HTTP client.
 5. **Background downloads**: chapter download queue, Android
    foreground-service so it survives backgrounding.
-6. **Backup**: local file backup + self-hosted HTTP target. Our own
-   format. (Upstream `.zip` round-trip is **not** a goal.)
+6. **Backup**: local file backup only. Our own format. (Upstream
+   `.zip` round-trip is **not** a goal; self-hosted HTTP target
+   was scoped out per user direction.)
 7. **Core screens**: Library, Browse, Novel detail, Reader, Updates,
    History, More/Settings.
 
@@ -273,14 +274,17 @@ Queueing 50 chapters and immediately backgrounding the app on
 Android continues downloading to completion with the foreground
 notification visible.
 
-### Sprint 5 — backup & restore (local + self-hosted)
+### Sprint 5 — backup & restore (local only)
 
 - "Create backup" produces a `.zip` with our own format
   (`version.json` + DB dump + chapter HTML blobs). Format documented
   in `docs/backup/format-v0.1.md` (written during the sprint).
 - Local file flow uses `tauri-plugin-dialog` (desktop) and
   `tauri-plugin-android-fs` (Android SAF document tree).
-- Self-hosted backup target: HTTP PUT to a user-configured URL.
+- **Self-hosted HTTP backup target — dropped per user direction.**
+  v0.1 ships local file backup only; users wanting cloud sync run
+  their own file-sync layer (Syncthing, OneDrive, etc.) on the
+  backup folder.
 
 **Acceptance**
 
