@@ -247,6 +247,18 @@ pub async fn webview_fetch(
         .map(|c| (c.name().to_string(), c.value().to_string()))
         .collect();
 
+    // Diagnostic: surfaces what the WebView jar is handing us so the
+    // user can see whether `cf_clearance` etc. actually crossed over
+    // from the visible site browser session. Visible in the cargo
+    // run / `pnpm tauri dev` stderr.
+    {
+        let names: Vec<&str> = cookie_pairs.iter().map(|(k, _)| k.as_str()).collect();
+        eprintln!(
+            "[scraper] webview_fetch {url} :: {n} cookies attached: {names:?}",
+            n = cookie_pairs.len(),
+        );
+    }
+
     let init = init.unwrap_or_default();
     let method = parse_method(init.method.as_deref().unwrap_or("GET"))?;
 

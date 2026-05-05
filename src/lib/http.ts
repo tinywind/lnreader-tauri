@@ -3,8 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 export interface HttpInit {
   method?: string;
   headers?: Record<string, string>;
-  /** Only string bodies survive the IPC hop; FormData is v0.2. */
-  body?: string;
+  /**
+   * Anything plugin code passes through `fetchApi`. The IPC layer
+   * needs a string, so non-string values get serialized in
+   * `serializeBody` before they cross the boundary — plain objects
+   * become JSON, URLSearchParams becomes their query-string form,
+   * FormData is dropped to undefined (v0.2 will add multipart).
+   */
+  body?: unknown;
   /** Reserved for v0.2; the WebView fetch IPC ignores it today. */
   signal?: AbortSignal;
 }
@@ -23,11 +29,28 @@ interface FetchResultWire {
   finalUrl: string;
 }
 
+function serializeBody(body: unknown): string | undefined {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === "string") return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    // Multipart bodies don't survive the IPC string field today.
+    // Plugins that rely on multipart fail visibly here rather than
+    // silently sending the wrong thing.
+    return undefined;
+  }
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return String(body);
+  }
+}
+
 function toWireInit(init: HttpInit): FetchInitWire {
   return {
     method: init.method,
     headers: init.headers,
-    body: init.body,
+    body: serializeBody(init.body),
   };
 }
 
