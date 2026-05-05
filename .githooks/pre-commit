@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+echo "Running pre-commit checks..."
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pnpm is required for pre-commit checks."
+  exit 1
+fi
+
+pnpm tsc
+pnpm db:generate
+
+if ! git diff --exit-code -- drizzle/; then
+  echo "drizzle migrations are out of sync with schema.ts."
+  echo "Run 'pnpm db:generate' locally and commit the generated migration changes."
+  exit 1
+fi
+
+pnpm test
+
