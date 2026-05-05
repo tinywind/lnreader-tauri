@@ -1,4 +1,5 @@
 import { fetch } from "@tauri-apps/plugin-http";
+import { isCloudflareChallenge, solveCloudflare } from "./cf_webview";
 
 export interface HttpInit {
   method?: string;
@@ -25,25 +26,56 @@ const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
   "Sec-Fetch-Mode": "cors",
 };
 
+function buildRequestInit(init: HttpInit, extraHeaders?: Record<string, string>) {
+  return {
+    method: init.method ?? "GET",
+    headers: { ...DEFAULT_HEADERS, ...init.headers, ...extraHeaders },
+    body: init.body,
+    signal: init.signal,
+  };
+}
+
+function shouldProbeCloudflare(response: Response): boolean {
+  if (response.status !== 403 && response.status !== 503) return false;
+  const ct = response.headers.get("content-type") ?? "";
+  return ct.includes("text/html");
+}
+
+function cookieHeaderFromList(
+  cookies: ReadonlyArray<{ name: string; value: string }>,
+): string {
+  return cookies
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join("; ");
+}
+
 /**
  * Plugin-scraper-facing HTTP fetch.
  *
  * Routes through `tauri-plugin-http` on the Rust side so the
- * cookie jar can be shared with the Cloudflare hidden-WebView
- * (Sprint 2 part 2). Returns a `Response`-like object; consumers
- * should check `.ok` / `.status`.
+ * cookie jar can be shared with the Cloudflare hidden-WebView.
+ * On a 403/503 + text/html response with a Cloudflare challenge
+ * marker, hands off to `solveCloudflare(url)` to clear the
+ * challenge and retries once with the returned cookies attached
+ * via the `Cookie` header. Returns a `Response`-like object;
+ * consumers should check `.ok` / `.status`.
  */
 export async function pluginFetch(
   url: string,
   init: HttpInit = {},
 ): Promise<Response> {
-  const headers = { ...DEFAULT_HEADERS, ...init.headers };
-  return fetch(url, {
-    method: init.method ?? "GET",
-    headers,
-    body: init.body,
-    signal: init.signal,
-  });
+  const response = await fetch(url, buildRequestInit(init));
+
+  if (shouldProbeCloudflare(response)) {
+    const body = await response.clone().text();
+    if (isCloudflareChallenge(body)) {
+      const result = await solveCloudflare(url);
+      const cookie = cookieHeaderFromList(result.cookies);
+      return fetch(url, buildRequestInit(init, cookie ? { Cookie: cookie } : undefined));
+    }
+  }
+
+  return response;
 }
 
 /**
