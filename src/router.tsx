@@ -11,6 +11,7 @@ import { LibraryPage } from "./routes/library";
 import { MorePage } from "./routes/more";
 import { NovelDetailPage } from "./routes/novel";
 import { ReaderPage } from "./routes/reader";
+import { SourcePage } from "./routes/source";
 import { UpdatesPage } from "./routes/updates";
 
 const rootRoute = createRootRoute({
@@ -76,6 +77,16 @@ const updatesRoute = createRoute({
   component: UpdatesPage,
 });
 
+export const sourceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/source",
+  validateSearch: (search: Record<string, unknown>) => ({
+    pluginId:
+      typeof search.pluginId === "string" ? search.pluginId : "",
+  }),
+  component: SourcePage,
+});
+
 const routeTree = rootRoute.addChildren([
   libraryRoute,
   browseRoute,
@@ -85,6 +96,7 @@ const routeTree = rootRoute.addChildren([
   novelRoute,
   historyRoute,
   updatesRoute,
+  sourceRoute,
 ]);
 
 export const router = createRouter({ routeTree });

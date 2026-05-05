@@ -6,6 +6,8 @@
  * later as call sites materialize.
  */
 
+import type { Filters, FilterToValues } from "./filterTypes";
+
 export enum NovelStatus {
   Unknown = "Unknown",
   Ongoing = "Ongoing",
@@ -69,7 +71,7 @@ export interface PluginItem {
 
 export interface PluginPopularOptions {
   showLatestNovels?: boolean;
-  filters?: Record<string, unknown>;
+  filters?: FilterToValues<Filters>;
 }
 
 export interface Plugin extends PluginItem {
@@ -80,7 +82,7 @@ export interface Plugin extends PluginItem {
     body?: string;
   };
   /** Filter schema rendered by the host as form controls. */
-  filters?: Record<string, unknown>;
+  filters?: Filters;
   pluginSettings?: Record<string, unknown>;
   popularNovels: (
     pageNo: number,

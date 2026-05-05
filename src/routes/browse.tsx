@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Alert,
   Anchor,
@@ -366,6 +367,7 @@ function InstalledSection({
   onUninstall,
   uninstalling,
 }: InstalledSectionProps) {
+  const navigate = useNavigate();
   return (
     <Stack gap="xs">
       <Title order={3}>Installed plugins</Title>
@@ -395,6 +397,17 @@ function InstalledSection({
                   </Anchor>
                 </Stack>
                 <Group gap="xs" wrap="nowrap">
+                  <Button
+                    size="xs"
+                    onClick={() =>
+                      void navigate({
+                        to: "/source",
+                        search: { pluginId: plugin.id },
+                      })
+                    }
+                  >
+                    Source
+                  </Button>
                   <Button
                     size="xs"
                     variant="default"

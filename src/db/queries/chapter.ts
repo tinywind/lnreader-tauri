@@ -92,6 +92,31 @@ export async function insertChapter(
   );
 }
 
+export async function upsertChapter(input: InsertChapterInput): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO chapter
+       (novel_id, path, name, position, chapter_number, page, release_time)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT(novel_id, path) DO UPDATE SET
+       name           = excluded.name,
+       position       = excluded.position,
+       chapter_number = excluded.chapter_number,
+       page           = excluded.page,
+       release_time   = excluded.release_time,
+       updated_at     = unixepoch()`,
+    [
+      input.novelId,
+      input.path,
+      input.name,
+      input.position,
+      input.chapterNumber ?? null,
+      input.page ?? "1",
+      input.releaseTime ?? null,
+    ],
+  );
+}
+
 export async function updateChapterProgress(
   chapterId: number,
   progress: number,

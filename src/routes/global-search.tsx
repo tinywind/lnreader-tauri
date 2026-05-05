@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Badge,
@@ -6,34 +6,111 @@ import {
   Group,
   Loader,
   Paper,
+  SimpleGrid,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import { NovelCard } from "../components/NovelCard";
 import { SearchBar } from "../components/SearchBar";
 import {
   globalSearch,
   type GlobalSearchResult,
 } from "../lib/plugins/global-search";
+import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { pluginManager } from "../lib/plugins/manager";
+import type { NovelItem } from "../lib/plugins/types";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+function resultKey(pluginId: string, novelPath: string): string {
+  return `${pluginId}::${novelPath}`;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface SearchResultSectionProps {
+  row: GlobalSearchResult;
+  openingKey: string | null;
+  onOpen: (row: GlobalSearchResult, novel: NovelItem) => void;
+}
+
+function SearchResultSection({
+  row,
+  openingKey,
+  onOpen,
+}: SearchResultSectionProps) {
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Stack gap="sm">
+        <Group justify="space-between" wrap="nowrap" align="baseline">
+          <Text size="sm" fw={600}>
+            {row.pluginName}
+          </Text>
+          {row.error ? (
+            <Text size="xs" c="red">
+              Failed
+            </Text>
+          ) : (
+            <Text size="xs" c="dimmed">
+              {row.novels.length} result
+              {row.novels.length === 1 ? "" : "s"}
+            </Text>
+          )}
+        </Group>
+
+        {row.error ? (
+          <Alert color="red" variant="light">
+            {row.error}
+          </Alert>
+        ) : row.novels.length > 0 ? (
+          <SimpleGrid
+            cols={{ base: 2, xs: 3, sm: 4, md: 5, lg: 6 }}
+            spacing="md"
+            verticalSpacing="lg"
+          >
+            {row.novels.map((novel, index) => {
+              const key = resultKey(row.pluginId, novel.path);
+              return (
+                <NovelCard
+                  key={`${key}::${index}`}
+                  name={novel.name}
+                  cover={novel.cover ?? null}
+                  selected={openingKey === key}
+                  onActivate={() => onOpen(row, novel)}
+                />
+              );
+            })}
+          </SimpleGrid>
+        ) : (
+          <Text size="sm" c="dimmed">
+            No results from this source.
+          </Text>
+        )}
+      </Stack>
+    </Paper>
+  );
+}
+
 export function GlobalSearchPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
   const [results, setResults] = useState<GlobalSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [openingKey, setOpeningKey] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    // Cancel any in-flight search before starting a new one. Per
-    // prd.md §8 Sprint 2 acceptance, this needs to fire within
-    // 100 ms of the user typing a new query — useDebouncedValue
-    // gives us 300 ms of input quiescence, then a single abort +
-    // restart.
     controllerRef.current?.abort();
+    setOpenError(null);
 
     const trimmed = debouncedSearch.trim();
     if (trimmed === "") {
@@ -55,9 +132,7 @@ export function GlobalSearchPage() {
       },
     })
       .catch(() => {
-        // Per-plugin errors fold into the GlobalSearchResult row;
-        // an outer rejection is fatal and we just stop showing the
-        // spinner.
+        // Per-plugin errors fold into GlobalSearchResult rows.
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -68,7 +143,38 @@ export function GlobalSearchPage() {
     return () => controller.abort();
   }, [debouncedSearch]);
 
+  const handleOpenNovel = useCallback(
+    async (row: GlobalSearchResult, novel: NovelItem) => {
+      if (openingKey !== null) return;
+
+      const plugin = pluginManager.getPlugin(row.pluginId);
+      if (!plugin) {
+        setOpenError(`Plugin "${row.pluginName}" is no longer installed.`);
+        return;
+      }
+
+      const key = resultKey(row.pluginId, novel.path);
+      setOpeningKey(key);
+      setOpenError(null);
+      try {
+        const id = await importNovelFromSource(plugin, novel);
+        await queryClient.invalidateQueries({ queryKey: ["novel"] });
+        await navigate({ to: "/novel", search: { id } });
+      } catch (error) {
+        setOpenError(`Failed to open "${novel.name}": ${describeError(error)}`);
+      } finally {
+        setOpeningKey((current) => (current === key ? null : current));
+      }
+    },
+    [navigate, openingKey, queryClient],
+  );
+
   const installedCount = pluginManager.size();
+  const hasSearchTerm = debouncedSearch.trim() !== "";
+  const hasOnlyEmptyResults =
+    hasSearchTerm &&
+    results.length > 0 &&
+    results.every((row) => row.novels.length === 0 && !row.error);
 
   return (
     <Container size="lg" py="xl">
@@ -93,53 +199,40 @@ export function GlobalSearchPage() {
             <Loader size="sm" />
             <Text c="dimmed">
               Searching across {installedCount} plugin
-              {installedCount === 1 ? "" : "s"}…
+              {installedCount === 1 ? "" : "s"}...
             </Text>
           </Group>
         ) : null}
 
-        {!searching &&
-        debouncedSearch.trim() !== "" &&
-        results.length > 0 &&
-        results.every((row) => row.novels.length === 0 && !row.error) ? (
-          <Alert color="yellow" title="No matches">
-            None of the installed plugins matched “{debouncedSearch}”.
+        {openingKey !== null ? (
+          <Group gap="sm">
+            <Loader size="sm" />
+            <Text c="dimmed">Opening novel details...</Text>
+          </Group>
+        ) : null}
+
+        {openError ? (
+          <Alert color="red" variant="light" title="Open failed">
+            {openError}
           </Alert>
         ) : null}
 
-        <Stack gap="xs">
+        {!searching && hasOnlyEmptyResults ? (
+          <Alert color="yellow" title="No matches">
+            None of the installed plugins matched "{debouncedSearch}".
+          </Alert>
+        ) : null}
+
+        <Stack gap="md">
           {results.map((row) => (
-            <Paper key={row.pluginId} withBorder p="xs" radius="md">
-              <Group justify="space-between" wrap="nowrap" align="baseline">
-                <Text size="sm" fw={500}>
-                  {row.pluginName}
-                </Text>
-                {row.error ? (
-                  <Text size="xs" c="red">
-                    {row.error}
-                  </Text>
-                ) : (
-                  <Text size="xs" c="dimmed">
-                    {row.novels.length} result
-                    {row.novels.length === 1 ? "" : "s"}
-                  </Text>
-                )}
-              </Group>
-              {row.novels.length > 0 ? (
-                <Stack gap={2} mt="xs">
-                  {row.novels.slice(0, 5).map((novel) => (
-                    <Text key={novel.path} size="sm" truncate>
-                      • {novel.name}
-                    </Text>
-                  ))}
-                  {row.novels.length > 5 ? (
-                    <Text size="xs" c="dimmed">
-                      … {row.novels.length - 5} more
-                    </Text>
-                  ) : null}
-                </Stack>
-              ) : null}
-            </Paper>
+            <SearchResultSection
+              key={row.pluginId}
+              row={row}
+              openingKey={openingKey}
+              onOpen={(resultRow, novel) => {
+                void handleOpenNovel(resultRow, novel);
+              }}
+            />
           ))}
         </Stack>
       </Stack>

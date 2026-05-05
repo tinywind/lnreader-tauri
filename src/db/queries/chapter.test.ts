@@ -17,6 +17,7 @@ import {
   saveChapterContent,
   setChapterBookmark,
   updateChapterProgress,
+  upsertChapter,
 } from "./chapter";
 
 const mockedGetDb = vi.mocked(getDb);
@@ -95,6 +96,38 @@ describe("insertChapter", () => {
     });
     const [, params] = mockExecute.mock.calls[0]!;
     expect(params).toEqual([2, "/c/x", "Untitled", 0, null, "1", null]);
+  });
+});
+
+describe("upsertChapter", () => {
+  it("updates source metadata without touching progress fields", async () => {
+    mockExecute.mockResolvedValueOnce(undefined);
+
+    await upsertChapter({
+      novelId: 7,
+      path: "/c/1",
+      name: "Chapter One",
+      position: 1,
+      chapterNumber: "1",
+      page: "2",
+      releaseTime: "2026-05-01",
+    });
+
+    const [sql, params] = mockExecute.mock.calls[0]!;
+    expect(sql).toContain("ON CONFLICT(novel_id, path) DO UPDATE");
+    expect(sql).toContain("name           = excluded.name");
+    expect(sql).toContain("updated_at     = unixepoch()");
+    expect(sql).not.toContain("progress");
+    expect(sql).not.toContain("is_downloaded");
+    expect(params).toEqual([
+      7,
+      "/c/1",
+      "Chapter One",
+      1,
+      "1",
+      "2",
+      "2026-05-01",
+    ]);
   });
 });
 
