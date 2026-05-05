@@ -1,47 +1,45 @@
-//! Scraper WebView — single persistent Tauri child Webview embedded
+//! Scraper WebView: single persistent Tauri child Webview embedded
 //! in the main window that owns the per-host cookie jar for plugin
 //! fetches.
 //!
-//! Architecture (post Origin/CORS fight):
+//! Architecture:
 //!
 //! - The scraper webview lives at `scraper.html` (a stable
 //!   tauri://localhost origin) and is never destroyed. It exists
 //!   for two reasons:
-//!     1. It owns a real-browser cookie jar — when the user opens
+//!     1. It owns a real-browser cookie jar. When the user opens
 //!        the in-app site browser overlay and navigates to a plugin
 //!        site, every cookie the site sets (CF clearance, login
 //!        sessions) lands in that jar and persists across requests.
 //!     2. It is the surface React's `SiteBrowserOverlay` paints
 //!        into when the user wants to interact with a site.
 //!
-//! - Plugin HTTP fetches do NOT run inside the scraper's JS
-//!   context. JS-side `fetch()` from an external page can't make
-//!   the IPC call back to Rust because cross-origin pages send an
-//!   Origin header that Tauri's invoke handshake rejects ("Origin
-//!   header is not a valid URL" for `null` etc). Instead,
-//!   `webview_fetch` reads cookies from the scraper's jar via
-//!   `Webview::cookies_for_url` and issues the request from Rust
-//!   with `reqwest` plus a browser-shaped User-Agent. Effectively
-//!   the WebView is the cookie store and CF-clearance solver; reqwest
-//!   is the request engine.
+//! - Plugin HTTP fetches run inside the scraper WebView's JavaScript
+//!   context. This covers source browsing/search/listing, novel
+//!   metadata/detail parsing, update checks, and chapter body
+//!   downloads. That keeps the request on the browser network stack
+//!   that solved Cloudflare, owns the TLS/browser fingerprint, and
+//!   carries the WebView cookie jar without copying cookies into a
+//!   host-side HTTP client.
 //!
-//! - For sites with strict TLS fingerprinting (JA3) the cookie path
-//!   alone may not pass — those sites need the user to interact
-//!   through the visible site browser overlay, which uses the
-//!   scraper webview's own network stack. After a successful manual
-//!   pass, subsequent `webview_fetch` calls reuse the cleared
-//!   cookies.
+//! - Cross-origin pages still cannot call Tauri IPC directly, so
+//!   the host asks the WebView to start an async browser fetch and
+//!   polls a page-local result slot through `eval_with_callback`.
 
 use std::collections::HashMap;
-use std::error::Error as StdError;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
     WebviewUrl,
 };
+use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 const SCRAPER_LABEL: &str = "scraper";
 /// Local HTML file served by Vite (dev) / bundled in dist/ (prod).
@@ -49,11 +47,56 @@ const SCRAPER_LABEL: &str = "scraper";
 /// origin so any IPC the page does (none today, but future-proof)
 /// passes Tauri's Origin handshake.
 const SCRAPER_HOMEPAGE_PATH: &str = "scraper.html";
+static FETCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// User-Agent we put on outbound requests. Mirrors the Edge WebView2
-/// channel reasonably closely so plugin sites that gate by UA accept
-/// the request the same way they accept the visible site browser.
-const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0";
+/// Polyfill + before-content hook injected at scraper webview creation.
+/// The script runs before any page script in every navigation, so
+/// callers (e.g. `webview_extract`) can pass an arbitrary
+/// before-content script via the URL fragment and receive results
+/// asynchronously via `window.ReactNativeWebView.postMessage`.
+///
+/// Bridge wiring:
+/// - `__lnr_script__=ENCODED` fragment: decoded + eval'd before any
+///   page script runs (e.g. patches `Element.prototype.attachShadow`).
+/// - `ReactNativeWebView.postMessage(payload)` polyfill: writes the
+///   payload to `location.hash` as `#__lnr_result__=ENCODED`. The host
+///   polls `Webview::url()` to pick up the result.
+const SCRAPER_INIT_SCRIPT: &str = r##"
+(function () {
+  window.ReactNativeWebView = window.ReactNativeWebView || {};
+  window.ReactNativeWebView.postMessage = function (payload) {
+    try {
+      var encoded = encodeURIComponent(String(payload));
+      var marker = "#__lnr_result__=" + encoded;
+      try {
+        history.replaceState(null, "", location.pathname + location.search + marker);
+      } catch (e) {
+        location.hash = marker;
+      }
+    } catch (e) {}
+  };
+  try {
+    var hash = location.hash || "";
+    var prefix = "#__lnr_script__=";
+    var idx = hash.indexOf(prefix);
+    if (idx !== -1) {
+      var encoded = hash.substring(idx + prefix.length);
+      var script = decodeURIComponent(encoded);
+      try {
+        history.replaceState(null, "", location.pathname + location.search);
+      } catch (e) {}
+      try {
+        (0, eval)(script);
+      } catch (e) {
+        var msg = (e && e.message) || String(e);
+        try {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ ok: false, error: "before-script error: " + msg }));
+        } catch (e2) {}
+      }
+    }
+  } catch (e) {}
+})();
+"##;
 
 /// Inbound JSON shape from `webview_fetch` callers (matches the
 /// browser `RequestInit` subset our pluginFetch surfaces).
@@ -96,7 +139,7 @@ fn scraper_handle(app: &AppHandle) -> Result<Webview<tauri::Wry>, String> {
 }
 
 /// Eagerly attach the scraper child Webview to the main window at
-/// app setup. Idempotent — re-running is a no-op once attached.
+/// app setup. Idempotent; re-running is a no-op once attached.
 pub fn init_scraper(app: &AppHandle) -> Result<(), String> {
     if app.get_webview(SCRAPER_LABEL).is_some() {
         return Ok(());
@@ -108,7 +151,8 @@ pub fn init_scraper(app: &AppHandle) -> Result<(), String> {
     let builder = WebviewBuilder::new(
         SCRAPER_LABEL,
         WebviewUrl::App(PathBuf::from(SCRAPER_HOMEPAGE_PATH)),
-    );
+    )
+    .initialization_script(SCRAPER_INIT_SCRIPT);
 
     let scraper = main_window
         .add_child(
@@ -178,6 +222,22 @@ pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete all cookies held by the scraper WebView cookie jar.
+#[tauri::command]
+pub async fn scraper_clear_cookies(app: AppHandle) -> Result<usize, String> {
+    let scraper = scraper_handle(&app)?;
+    let cookies = scraper
+        .cookies()
+        .map_err(|err| format!("scraper: read cookies: {err}"))?;
+    let count = cookies.len();
+    for cookie in cookies {
+        scraper
+            .delete_cookie(cookie)
+            .map_err(|err| format!("scraper: delete cookie: {err}"))?;
+    }
+    Ok(count)
+}
+
 /// Navigate the scraper Webview to `url`. Used by the in-app site
 /// browser overlay so the user can log in / clear CF / interact
 /// before sending plugin scrape requests.
@@ -202,122 +262,399 @@ pub async fn scraper_navigate(
     Ok(())
 }
 
-fn parse_method(raw: &str) -> Result<reqwest::Method, String> {
-    reqwest::Method::from_bytes(raw.as_bytes())
-        .map_err(|err| format!("scraper: invalid HTTP method '{raw}': {err}"))
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebviewFetchScriptResult {
+    ok: bool,
+    status: Option<u16>,
+    status_text: Option<String>,
+    body: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    final_url: Option<String>,
+    error: Option<String>,
 }
 
-/// Format an error plus its full source chain so silent connection
-/// failures (DNS, TCP refused, TLS handshake, proxy, firewall …)
-/// surface in the global toast instead of getting flattened into a
-/// single "error sending request" line.
-fn describe_with_chain(err: &(dyn StdError + 'static)) -> String {
-    let mut out = err.to_string();
-    let mut cur = err.source();
-    while let Some(src) = cur {
-        out.push_str(" :: ");
-        out.push_str(&src.to_string());
-        cur = src.source();
+async fn eval_json<T: DeserializeOwned>(
+    scraper: &Webview<tauri::Wry>,
+    script: String,
+) -> Result<T, String> {
+    let (tx, rx) = oneshot::channel::<String>();
+    let sender = Arc::new(Mutex::new(Some(tx)));
+    let sender_for_callback = Arc::clone(&sender);
+
+    scraper
+        .eval_with_callback(script, move |payload| {
+            if let Ok(mut guard) = sender_for_callback.lock() {
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(payload);
+                }
+            }
+        })
+        .map_err(|err| format!("scraper: eval browser fetch script: {err}"))?;
+
+    let payload = timeout(Duration::from_secs(5), rx)
+        .await
+        .map_err(|_| "scraper: eval browser fetch script timed out".to_string())?
+        .map_err(|_| "scraper: eval browser fetch callback dropped".to_string())?;
+
+    match serde_json::from_str::<T>(&payload) {
+        Ok(value) => Ok(value),
+        Err(first_err) => {
+            let inner = serde_json::from_str::<String>(&payload)
+                .map_err(|_| format!("scraper: eval returned invalid JSON: {first_err}"))?;
+            serde_json::from_str::<T>(&inner)
+                .map_err(|err| format!("scraper: eval returned invalid nested JSON: {err}"))
+        }
+    }
+}
+
+fn same_origin(left: &Url, right: &Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
+
+fn scraper_is_at_origin(scraper: &Webview<tauri::Wry>, target: &Url) -> bool {
+    scraper
+        .url()
+        .map(|current| same_origin(&current, target))
+        .unwrap_or(false)
+}
+
+async fn document_is_ready(scraper: &Webview<tauri::Wry>) -> bool {
+    let ready = eval_json::<String>(
+        scraper,
+        r#"(function () { return document.readyState || "loading"; })()"#
+            .to_string(),
+    )
+    .await;
+    matches!(ready.as_deref(), Ok("interactive" | "complete"))
+}
+
+async fn prepare_fetch_context(
+    scraper: &Webview<tauri::Wry>,
+    context_url: Option<&str>,
+) -> Result<(), String> {
+    let Some(context_url) = context_url else {
+        return Ok(());
+    };
+    let target: Url = context_url
+        .parse()
+        .map_err(|err| format!("scraper: invalid context url '{context_url}': {err}"))?;
+
+    if scraper_is_at_origin(scraper, &target) && document_is_ready(scraper).await {
+        return Ok(());
+    }
+
+    scraper
+        .navigate(target.clone())
+        .map_err(|err| format!("scraper: navigate fetch context: {err}"))?;
+
+    let deadline = Duration::from_secs(15);
+    let poll_interval = Duration::from_millis(150);
+    let started = Instant::now();
+
+    while started.elapsed() < deadline {
+        tokio::time::sleep(poll_interval).await;
+        if scraper_is_at_origin(scraper, &target) && document_is_ready(scraper).await {
+            return Ok(());
+        }
+    }
+
+    Err(format!(
+        "scraper: timed out preparing fetch context {context_url}"
+    ))
+}
+
+fn build_webview_fetch_start_script(
+    request_id: &str,
+    url: &str,
+    init: &FetchInit,
+) -> Result<String, String> {
+    let request_json = serde_json::to_string(&serde_json::json!({
+        "url": url,
+        "init": init,
+    }))
+    .map_err(|err| format!("scraper: serialize fetch request: {err}"))?;
+    let request_id_json = serde_json::to_string(request_id)
+        .map_err(|err| format!("scraper: serialize fetch request id: {err}"))?;
+
+    Ok(format!(
+        r#"(function () {{
+  const request = {request_json};
+  const requestId = {request_id_json};
+  const blockedHeaders = new Set([
+    "accept-charset", "accept-encoding", "access-control-request-headers",
+    "access-control-request-method", "connection", "content-length", "cookie",
+    "cookie2", "date", "dnt", "expect", "host", "keep-alive", "origin",
+    "referer", "te", "trailer", "transfer-encoding", "upgrade", "via",
+    "user-agent"
+  ]);
+  const init = request.init || {{}};
+  const headers = new Headers();
+  for (const key of Object.keys(init.headers || {{}})) {{
+    if (!blockedHeaders.has(key.toLowerCase())) {{
+      headers.set(key, String(init.headers[key]));
+    }}
+  }}
+  window.__lnrFetchResults = window.__lnrFetchResults || {{}};
+  window.__lnrFetchResults[requestId] = {{ done: false }};
+  (async function () {{
+    try {{
+      const fetchInit = {{
+        method: init.method || "GET",
+        headers,
+        credentials: "include",
+        redirect: "follow"
+      }};
+      if (init.body !== undefined && init.body !== null) {{
+        fetchInit.body = init.body;
+      }}
+      const response = await fetch(request.url, fetchInit);
+      const responseHeaders = {{}};
+      response.headers.forEach(function (value, key) {{
+        responseHeaders[key] = value;
+      }});
+      const body = await response.text();
+      window.__lnrFetchResults[requestId] = {{
+        done: true,
+        ok: true,
+        status: response.status,
+        statusText: response.statusText || "",
+        body,
+        headers: responseHeaders,
+        finalUrl: response.url || request.url
+      }};
+    }} catch (error) {{
+      window.__lnrFetchResults[requestId] = {{
+        done: true,
+        ok: false,
+        error: (error && (error.message || error.toString())) || String(error)
+      }};
+    }}
+  }})();
+}})();"#
+    ))
+}
+
+fn build_webview_fetch_poll_script(request_id: &str) -> Result<String, String> {
+    let request_id_json = serde_json::to_string(request_id)
+        .map_err(|err| format!("scraper: serialize fetch request id: {err}"))?;
+    Ok(format!(
+        r#"(function () {{
+  const requestId = {request_id_json};
+  const store = window.__lnrFetchResults || {{}};
+  const result = store[requestId];
+  if (!result || !result.done) return null;
+  delete store[requestId];
+  return result;
+}})()"#
+    ))
+}
+
+fn build_webview_fetch_cleanup_script(request_id: &str) -> Result<String, String> {
+    let request_id_json = serde_json::to_string(request_id)
+        .map_err(|err| format!("scraper: serialize fetch request id: {err}"))?;
+    Ok(format!(
+        r#"(function () {{
+  const requestId = {request_id_json};
+  if (window.__lnrFetchResults) {{
+    delete window.__lnrFetchResults[requestId];
+  }}
+}})();"#
+    ))
+}
+
+/// Issue an HTTP request through the scraper WebView's own browser
+/// `fetch()`, preserving Cloudflare/browser-network behavior.
+#[tauri::command]
+pub async fn webview_fetch(
+    app: AppHandle,
+    state: tauri::State<'_, ScraperState>,
+    url: String,
+    init: Option<FetchInit>,
+    context_url: Option<String>,
+) -> Result<FetchResult, String> {
+    let _guard = state.nav_lock.lock().await;
+    let scraper = scraper_handle(&app)?;
+    let _: Url = url
+        .parse()
+        .map_err(|err| format!("scraper: invalid url '{url}': {err}"))?;
+    prepare_fetch_context(&scraper, context_url.as_deref()).await?;
+    let init = init.unwrap_or_default();
+    let request_id = format!(
+        "fetch-{}",
+        FETCH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let start_script = build_webview_fetch_start_script(&request_id, &url, &init)?;
+    scraper
+        .eval(start_script)
+        .map_err(|err| format!("scraper: start browser fetch: {err}"))?;
+
+    let deadline = Duration::from_secs(60);
+    let poll_interval = Duration::from_millis(150);
+    let started = Instant::now();
+
+    while started.elapsed() < deadline {
+        tokio::time::sleep(poll_interval).await;
+        let poll_script = build_webview_fetch_poll_script(&request_id)?;
+        let result: Option<WebviewFetchScriptResult> =
+            eval_json(&scraper, poll_script).await?;
+        let Some(result) = result else {
+            continue;
+        };
+
+        if !result.ok {
+            let error = result
+                .error
+                .unwrap_or_else(|| "unknown browser fetch error".to_string());
+            return Err(format!("scraper: browser fetch to {url} failed: {error}"));
+        }
+
+        return Ok(FetchResult {
+            status: result
+                .status
+                .ok_or_else(|| "scraper: browser fetch missing status".to_string())?,
+            status_text: result.status_text.unwrap_or_default(),
+            body: result.body.unwrap_or_default(),
+            headers: result.headers.unwrap_or_default(),
+            final_url: result.final_url.unwrap_or(url),
+        });
+    }
+
+    if let Ok(cleanup_script) = build_webview_fetch_cleanup_script(&request_id) {
+        let _ = scraper.eval(cleanup_script);
+    }
+
+    Err(format!(
+        "scraper: browser fetch to {url} timed out after {}ms",
+        deadline.as_millis()
+    ))
+}
+
+/// RFC 3986 percent-encode every byte that is not in the unreserved
+/// set. Used to embed an arbitrary script string inside a URL
+/// fragment without breaking parsing.
+fn percent_encode_uri_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.as_bytes() {
+        let c = *byte as char;
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
     }
     out
 }
 
-/// Issue an HTTP request through Rust's reqwest, attaching whatever
-/// cookies the scraper webview's jar holds for the target URL.
+/// Inverse of `encodeURIComponent`. Strict on malformed escapes so the
+/// caller can surface the failure rather than silently dropping data.
+fn decode_uri_component(input: &str) -> Result<String, String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(format!("invalid percent escape at offset {i}"));
+            }
+            let hi = (bytes[i + 1] as char)
+                .to_digit(16)
+                .ok_or_else(|| format!("non-hex char at offset {}", i + 1))?;
+            let lo = (bytes[i + 2] as char)
+                .to_digit(16)
+                .ok_or_else(|| format!("non-hex char at offset {}", i + 2))?;
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|err| format!("invalid utf-8 in payload: {err}"))
+}
+
+/// Navigate the scraper WebView to `url`, run the optional
+/// `before_script` before any page script via the
+/// `SCRAPER_INIT_SCRIPT` bridge, and resolve with whatever the page
+/// (or the injected script) emits via
+/// `window.ReactNativeWebView.postMessage`.
 ///
-/// CF/login cookies populate via the in-app site browser overlay —
-/// when the user navigates the scraper to a plugin site and clears a
-/// CF challenge, those cookies stay in the WebView2 cookie jar and
-/// are visible here through `cookies_for_url`.
+/// Use this instead of `webview_fetch` for plugins that need a fully
+/// rendered page (closed shadow roots, JS-decrypted bodies,
+/// fingerprinted CDN handshake) - e.g. Booktoki, which decrypts
+/// chapter HTML inside a closed shadow root that only a real Chromium
+/// session can read.
+///
+/// Concurrency: serialized via `nav_lock` so chapter downloads do not
+/// race the visible site browser overlay.
 #[tauri::command]
-pub async fn webview_fetch(
+pub async fn webview_extract(
     app: AppHandle,
+    state: tauri::State<'_, ScraperState>,
     url: String,
-    init: Option<FetchInit>,
-) -> Result<FetchResult, String> {
+    before_script: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<String, String> {
+    let _guard = state.nav_lock.lock().await;
     let scraper = scraper_handle(&app)?;
-    let target_url: Url = url
-        .parse()
-        .map_err(|err| format!("scraper: invalid url '{url}': {err}"))?;
 
-    let cookie_pairs: Vec<(String, String)> = scraper
-        .cookies_for_url(target_url.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|c| (c.name().to_string(), c.value().to_string()))
-        .collect();
+    // Embed the before-content script in the URL fragment. The
+    // browser does not send the fragment to the server, and the
+    // initialization script picks it up before any page script runs.
+    let target_url_str = match before_script.as_deref().filter(|s| !s.is_empty()) {
+        Some(script) => {
+            let encoded = percent_encode_uri_component(script);
+            // The fragment is consumed by SCRAPER_INIT_SCRIPT before the
+            // page sees it, so a `?cb=...#...` URL stays well-formed
+            // because we prepend a fresh `#`. If the caller's URL
+            // already had a fragment, that fragment is dropped.
+            let base = url.split('#').next().unwrap_or(&url);
+            format!("{base}#__lnr_script__={encoded}")
+        }
+        None => url.clone(),
+    };
 
-    // Diagnostic: surfaces what the WebView jar is handing us so the
-    // user can see whether `cf_clearance` etc. actually crossed over
-    // from the visible site browser session. Visible in the cargo
-    // run / `pnpm tauri dev` stderr.
-    {
-        let names: Vec<&str> = cookie_pairs.iter().map(|(k, _)| k.as_str()).collect();
-        eprintln!(
-            "[scraper] webview_fetch {url} :: {n} cookies attached: {names:?}",
-            n = cookie_pairs.len(),
-        );
-    }
+    let parsed: Url = target_url_str.parse().map_err(|err| {
+        format!("webview_extract: invalid url '{target_url_str}': {err}")
+    })?;
 
-    let init = init.unwrap_or_default();
-    let method = parse_method(init.method.as_deref().unwrap_or("GET"))?;
+    eprintln!("[scraper] webview_extract navigate: {url}");
 
-    let client = reqwest::Client::builder()
-        .user_agent(BROWSER_UA)
-        .gzip(true)
-        .build()
-        .map_err(|err| format!("scraper: reqwest client: {describe}", describe = describe_with_chain(&err)))?;
+    scraper
+        .navigate(parsed)
+        .map_err(|err| format!("webview_extract: navigate: {err}"))?;
 
-    let mut req = client.request(method, target_url.clone());
+    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
+    let poll_interval = std::time::Duration::from_millis(150);
+    let start = std::time::Instant::now();
+    let result_marker = "#__lnr_result__=";
 
-    if !cookie_pairs.is_empty() {
-        let cookie_header = cookie_pairs
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("; ");
-        req = req.header(reqwest::header::COOKIE, cookie_header);
-    }
-
-    if let Some(headers) = init.headers {
-        for (k, v) in headers {
-            req = req.header(k, v);
+    while start.elapsed() < timeout {
+        tokio::time::sleep(poll_interval).await;
+        let current = match scraper.url() {
+            Ok(u) => u.to_string(),
+            Err(_) => continue,
+        };
+        if let Some(idx) = current.find(result_marker) {
+            let encoded = &current[idx + result_marker.len()..];
+            let decoded = decode_uri_component(encoded).map_err(|err| {
+                format!("webview_extract: decode result: {err}")
+            })?;
+            // Park the scraper on a clean URL so the next call does
+            // not see a stale `#__lnr_result__=...` if it polls
+            // before the new navigation lands.
+            let blank = "about:blank";
+            if let Ok(blank_url) = blank.parse::<Url>() {
+                let _ = scraper.navigate(blank_url);
+            }
+            return Ok(decoded);
         }
     }
 
-    if let Some(body) = init.body {
-        req = req.body(body);
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|err| {
-            format!(
-                "scraper: request to {url} failed: {chain}",
-                chain = describe_with_chain(&err),
-            )
-        })?;
-    let status = resp.status();
-    let final_url = resp.url().to_string();
-
-    let mut result_headers: HashMap<String, String> = HashMap::new();
-    for (name, value) in resp.headers() {
-        if let Ok(value_str) = value.to_str() {
-            result_headers.insert(name.to_string(), value_str.to_string());
-        }
-    }
-
-    let body = resp
-        .text()
-        .await
-        .map_err(|err| format!("scraper: body read failed: {err}"))?;
-
-    Ok(FetchResult {
-        status: status.as_u16(),
-        status_text: status.canonical_reason().unwrap_or("").to_string(),
-        body,
-        headers: result_headers,
-        final_url,
-    })
+    Err(format!(
+        "webview_extract: timeout after {}ms",
+        timeout.as_millis(),
+    ))
 }

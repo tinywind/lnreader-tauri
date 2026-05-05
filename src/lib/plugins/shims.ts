@@ -1,13 +1,49 @@
+import { invoke } from "@tauri-apps/api/core";
 import { load } from "cheerio";
 import dayjs from "dayjs";
 import { Parser } from "htmlparser2";
-import { pluginFetch, pluginFetchText } from "../http";
+import {
+  createPluginFetch,
+  createPluginFetchText,
+  pluginFetch,
+  pluginFetchText,
+} from "../http";
 import { NovelStatus } from "./types";
+
+interface WebViewFetchOptions {
+  beforeContentScript?: string;
+  /** Reserved for v0.2; no host hook today. */
+  afterContentScript?: string;
+  /** Reserved for v0.2; the scraper webview's own UA is used. */
+  userAgent?: string;
+  timeoutMs?: number;
+}
+
+/**
+ * Mirror of upstream `@libs/webView.webViewFetch`. Navigates the
+ * scraper WebView to `url`, runs `beforeContentScript` before any
+ * page script via the SCRAPER_INIT_SCRIPT bridge, and resolves with
+ * whatever the page emits via `window.ReactNativeWebView.postMessage`.
+ *
+ * Used by plugins (e.g. Booktoki) whose chapter content is locked
+ * behind closed shadow roots that only a real Chromium session can
+ * read after the page's own JS finishes decrypting.
+ */
+async function webViewFetch(
+  url: string,
+  options: WebViewFetchOptions = {},
+): Promise<string> {
+  return invoke<string>("webview_extract", {
+    url,
+    beforeScript: options.beforeContentScript ?? null,
+    timeoutMs: options.timeoutMs ?? 30_000,
+  });
+}
 
 /**
  * Filter-input enum values upstream plugins expect from
  * `@libs/filterInputs`. Plugins use these as discriminators when
- * building their `filters` schema (per `docs/plugins/contract.md §3`).
+ * building their `filters` schema.
  */
 export const FilterTypes = {
   TextInput: "Text",
@@ -91,19 +127,21 @@ function makeNamespacedStorage(
 /**
  * Build the `_require` resolver for a sandboxed plugin instance.
  *
- * Mirrors the upstream lnreader whitelist from
- * `docs/plugins/contract.md §5`. Modules outside the whitelist
- * throw — plugins that touch `window`/`document` directly are
- * unsupported (and would still partially work today since the
- * sandbox runs on the main thread; that gets fixed when we
- * relocate to a Web Worker in a later Sprint 2 iteration).
+ * Mirrors the upstream lnreader whitelist from the plugin contract
+ * reference. Modules outside the whitelist throw. Plugins that touch
+ * `window`/`document` directly are unsupported.
  */
 export function createShimResolver(
   pluginId: string,
+  siteUrl?: string,
 ): (id: string) => unknown {
   const prefix = `plugin:${pluginId}:`;
   const storage = makeNamespacedStorage(prefix, true);
   const sessionStg = makeNamespacedStorage(prefix, false);
+  const fetchApi = siteUrl ? createPluginFetch(siteUrl) : pluginFetch;
+  const fetchText = siteUrl
+    ? createPluginFetchText(siteUrl)
+    : pluginFetchText;
 
   return (id) => {
     switch (id) {
@@ -117,8 +155,8 @@ export function createShimResolver(
         return { encode: encodeURIComponent, decode: decodeURIComponent };
       case "@libs/fetch":
         return {
-          fetchApi: pluginFetch,
-          fetchText: pluginFetchText,
+          fetchApi,
+          fetchText,
           fetchProto: () =>
             Promise.reject(
               new Error(
@@ -142,7 +180,9 @@ export function createShimResolver(
           localStorage: storage,
           sessionStorage: sessionStg,
         };
-      // TODO Sprint 2 part 3c: @libs/cookies, @libs/webView, @libs/aes
+      case "@libs/webView":
+        return { webViewFetch };
+      // TODO Sprint 2 part 3c: @libs/cookies, @libs/aes
       default:
         throw new Error(
           `Module '${id}' is not whitelisted in the plugin sandbox.`,

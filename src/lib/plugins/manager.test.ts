@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../http", () => ({
+  appFetchText: vi.fn(),
+  createPluginFetch: vi.fn(() => vi.fn()),
+  createPluginFetchShim: vi.fn(() => vi.fn()),
+  createPluginFetchText: vi.fn(() => vi.fn()),
   pluginFetch: vi.fn(),
   pluginFetchText: vi.fn(),
+  pluginFetchShim: vi.fn(),
 }));
 vi.mock("../../db/queries/installed-plugin", () => ({
   upsertInstalledPlugin: vi.fn().mockResolvedValue(undefined),
@@ -10,14 +15,15 @@ vi.mock("../../db/queries/installed-plugin", () => ({
   listInstalledPlugins: vi.fn().mockResolvedValue([]),
 }));
 
-import { pluginFetchText } from "../http";
+import { appFetchText, createPluginFetchShim } from "../http";
 import {
   PluginManager,
   PluginValidationError,
   isValidPluginItem,
 } from "./manager";
 
-const mockedFetchText = vi.mocked(pluginFetchText);
+const mockedFetchText = vi.mocked(appFetchText);
+const mockedCreateFetchShim = vi.mocked(createPluginFetchShim);
 
 const VALID_ITEM = {
   id: "demo",
@@ -119,6 +125,7 @@ describe("PluginManager.installPlugin", () => {
     expect(manager.has("demo")).toBe(true);
     expect(manager.size()).toBe(1);
     expect(manager.getPlugin("demo")).toBe(plugin);
+    expect(mockedCreateFetchShim).toHaveBeenCalledWith(VALID_ITEM.site);
   });
 
   it("throws PluginValidationError when ids don't match", async () => {

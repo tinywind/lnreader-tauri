@@ -1,9 +1,8 @@
 /**
- * Plugin contract types — surface the upstream lnreader plugin
- * shape (`docs/plugins/contract.md §1-§4`) so most existing
- * community plugins keep working in the Tauri runtime. Where a
- * field is awkward to type strictly we use `unknown` and tighten
- * later as call sites materialize.
+ * Plugin contract types. These surface the upstream lnreader plugin
+ * shape so most existing community plugins keep working in the
+ * Tauri runtime. Where a field is awkward to type strictly we use
+ * `unknown` and tighten later as call sites materialize.
  */
 
 import type { Filters, FilterToValues } from "./filterTypes";
@@ -19,7 +18,7 @@ export enum NovelStatus {
 }
 
 export interface NovelItem {
-  /** Reserved by upstream — host assigns the local DB id. */
+  /** Reserved by upstream; host assigns the local DB id. */
   id?: undefined;
   name: string;
   /** Plugin-specific identifier (URL path or opaque string). */

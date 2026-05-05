@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+vi.mock("@tauri-apps/plugin-http", () => ({
+  fetch: vi.fn(),
+}));
 
 import { invoke } from "@tauri-apps/api/core";
 import { pluginFetch, pluginFetchText } from "./http";
@@ -48,9 +51,10 @@ describe("pluginFetch", () => {
       url: "https://ok.test/",
       init: {
         method: "POST",
-        headers: { "X-Custom": "1" },
+        headers: expect.objectContaining({ "X-Custom": "1" }),
         body: "payload",
       },
+      contextUrl: null,
     });
 
     expect(response.status).toBe(200);
@@ -65,6 +69,24 @@ describe("pluginFetch", () => {
 
     const response = await pluginFetch("https://ok.test/before");
     expect(response.url).toBe("https://ok.test/after-redirect");
+  });
+
+  it("forwards the optional scraper context URL", async () => {
+    invokeMock.mockResolvedValueOnce(wireOk("hello"));
+
+    await pluginFetch("https://ok.test/path", {
+      contextUrl: "https://ok.test",
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("webview_fetch", {
+      url: "https://ok.test/path",
+      init: {
+        headers: undefined,
+        method: undefined,
+        body: undefined,
+      },
+      contextUrl: "https://ok.test",
+    });
   });
 
   it("surfaces non-2xx status as a Response with ok=false", async () => {

@@ -125,11 +125,34 @@ v0.1 are closed `wontfix`:
 | Animation | Framer Motion + CSS — never animate layout-bound props (`width`, `height`, `top`, `left`); only `transform`, `opacity`, `clip-path`, `filter` |
 | ORM | drizzle-orm + `drizzle-orm/sqlite-proxy` calling `tauri-plugin-sql` |
 | DB | SQLite via `tauri-plugin-sql` (sqlx underneath) |
-| HTTP | `tauri-plugin-http` + Rust `reqwest` (cookie jar built-in) |
+| HTTP | `tauri-plugin-http` for app/repository fetches; scraper WebView for plugin-owned site fetches |
 | EPUB | Rust `rbook` crate |
 | Zip | Rust `zip` crate |
 | Package manager | pnpm |
 | Node | 22 LTS |
+
+### 7.1 Plugin fetch invariant
+
+There are two different fetch paths:
+
+1. App/repository fetches may use ordinary app-side HTTP utilities.
+   This includes repository JSON and plugin JavaScript source
+   downloads.
+2. Plugin-owned site fetches must go through the persistent scraper
+   WebView. This includes source browsing/search/listing, novel
+   metadata/detail parsing, library update checks, and chapter body
+   downloads.
+
+Do not replace plugin-owned site fetches with Rust `reqwest`,
+`tauri-plugin-http`, copied-cookie host HTTP, or raw window fetch from
+the app origin. Cloudflare, login sessions, CORS, and TLS/browser
+fingerprinting depend on the scraper WebView network stack.
+
+Before a plugin-owned site fetch runs, the scraper WebView must first
+navigate to that plugin's representative `site` URL so the request
+executes from the plugin origin. The scraper WebView is single
+instance state, so context navigation and WebView fetches must be
+serialized with the scraper navigation lock.
 
 ## 8. Sprint structure (`prd.md §8`)
 

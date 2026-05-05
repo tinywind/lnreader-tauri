@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 export interface HttpInit {
   method?: string;
@@ -6,11 +7,14 @@ export interface HttpInit {
   /**
    * Anything plugin code passes through `fetchApi`. The IPC layer
    * needs a string, so non-string values get serialized in
-   * `serializeBody` before they cross the boundary — plain objects
+   * `serializeBody` before they cross the boundary. Plain objects
    * become JSON, URLSearchParams becomes their query-string form,
-   * FormData is dropped to undefined (v0.2 will add multipart).
+   * and FormData is dropped to undefined until multipart support
+   * lands.
    */
   body?: unknown;
+  /** Plugin-owned site origin to prepare in the scraper WebView. */
+  contextUrl?: string;
   /** Reserved for v0.2; the WebView fetch IPC ignores it today. */
   signal?: AbortSignal;
 }
@@ -49,25 +53,48 @@ function serializeBody(body: unknown): string | undefined {
 function toWireInit(init: HttpInit): FetchInitWire {
   return {
     method: init.method,
-    headers: init.headers,
+    headers: init.headers ? { ...init.headers } : undefined,
     body: serializeBody(init.body),
   };
+}
+
+export async function appFetch(
+  url: string,
+  init: HttpInit = {},
+): Promise<Response> {
+  return tauriFetch(url, {
+    method: init.method,
+    headers: init.headers,
+    body: serializeBody(init.body),
+  });
+}
+
+export async function appFetchText(
+  url: string,
+  init: HttpInit = {},
+): Promise<string> {
+  const response = await appFetch(url, init);
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status} ${response.statusText} on ${url}`,
+    );
+  }
+  return response.text();
 }
 
 /**
  * Plugin-scraper-facing HTTP fetch.
  *
- * Every request is routed through the persistent in-app Webview
+ * Every request is routed through the persistent in-app WebView
  * (see `src-tauri/src/scraper.rs`). That gives us a real browser's
- * TLS fingerprint, Sec-Fetch-* headers, User-Agent and cookie jar
- * — Cloudflare, JA3-fingerprinting CDNs and login-walled sites
- * accept it the same way they accept any browser tab. There is no
- * host-side cookie store: the Webview owns the jar.
+ * TLS fingerprint, Sec-Fetch-* headers, User-Agent and cookie jar.
+ * Cloudflare, JA3-fingerprinting CDNs and login-walled sites accept
+ * it the same way they accept any browser tab. There is no host-side
+ * cookie store: the WebView owns the jar.
  *
- * The response is reconstituted into a standard `Response` object
- * so callers (and sandboxed plugins via `@libs/fetch`) keep the
- * familiar fetch-style API. `Response.url` is patched on so plugins
- * that follow redirects can still see the final URL.
+ * The response is reconstituted into a standard `Response` object so
+ * callers keep the familiar fetch-style API. `Response.url` is patched
+ * on so plugins that follow redirects can still see the final URL.
  */
 export async function pluginFetch(
   url: string,
@@ -76,6 +103,7 @@ export async function pluginFetch(
   const result = await invoke<FetchResultWire>("webview_fetch", {
     url,
     init: toWireInit(init),
+    contextUrl: init.contextUrl ?? null,
   });
   const response = new Response(result.body, {
     status: result.status,
@@ -105,4 +133,82 @@ export async function pluginFetchText(
     );
   }
   return response.text();
+}
+
+export function createPluginFetch(
+  contextUrl: string,
+): (url: string, init?: HttpInit) => Promise<Response> {
+  return (url, init = {}) =>
+    pluginFetch(url, {
+      ...init,
+      contextUrl,
+    });
+}
+
+export function createPluginFetchText(
+  contextUrl: string,
+): (url: string, init?: HttpInit) => Promise<string> {
+  return (url, init = {}) =>
+    pluginFetchText(url, {
+      ...init,
+      contextUrl,
+    });
+}
+
+function normalizeHeaders(
+  headers: HeadersInit | undefined,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    const obj: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      obj[key] = value;
+    });
+    return obj;
+  }
+  if (Array.isArray(headers)) {
+    const obj: Record<string, string> = {};
+    for (const [key, value] of headers) {
+      obj[key] = value;
+    }
+    return obj;
+  }
+  return headers as Record<string, string>;
+}
+
+/**
+ * Adapter from the native `fetch(input, init)` signature to
+ * `pluginFetch`. Sandboxed plugin code that uses raw `fetch()`
+ * during search/listing, novel metadata parsing, update checks, or
+ * chapter downloads gets routed through the scraper-WebView-backed
+ * IPC the same way explicit `fetchApi` callers are.
+ */
+export function pluginFetchShim(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  return createPluginFetchShim()(input, init);
+}
+
+export function createPluginFetchShim(
+  contextUrl?: string,
+): (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response> {
+  return (input, init) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    return pluginFetch(url, {
+      method: init?.method,
+      headers: normalizeHeaders(init?.headers),
+      body: init?.body,
+      contextUrl,
+      signal: init?.signal ?? undefined,
+    });
+  };
 }

@@ -3,7 +3,10 @@ import {
   listInstalledPlugins,
   upsertInstalledPlugin,
 } from "../../db/queries/installed-plugin";
-import { pluginFetchText } from "../http";
+import {
+  appFetchText,
+  createPluginFetchShim,
+} from "../http";
 import { loadPlugin } from "./sandbox";
 import { createShimResolver } from "./shims";
 import type { Plugin, PluginItem } from "./types";
@@ -34,12 +37,26 @@ export function isValidPluginItem(value: unknown): value is PluginItem {
   );
 }
 
+function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
+  const target = plugin as Plugin & Partial<PluginItem>;
+  target.id = typeof target.id === "string" ? target.id : item.id;
+  target.name = typeof target.name === "string" ? target.name : item.name;
+  target.site = typeof target.site === "string" ? target.site : item.site;
+  target.lang = typeof target.lang === "string" ? target.lang : item.lang;
+  target.version =
+    typeof target.version === "string" ? target.version : item.version;
+  target.url = typeof target.url === "string" ? target.url : item.url;
+  target.iconUrl =
+    typeof target.iconUrl === "string" ? target.iconUrl : item.iconUrl;
+  return plugin;
+}
+
 /**
  * Manages installed plugins for the running session.
  *
- * v0.1 keeps plugins in memory only — restarting the app
- * re-fetches from the repository on demand. Disk persistence
- * (`tauri-plugin-fs`) lands in Sprint 2 part 3d.
+ * Plugins are kept in memory and persisted to SQLite. App startup
+ * rehydrates installed plugin source from the DB without hitting
+ * the repository network path.
  */
 export class PluginManager {
   private readonly installed = new Map<string, Plugin>();
@@ -50,7 +67,7 @@ export class PluginManager {
    * if the response isn't valid JSON or isn't an array.
    */
   async fetchRepository(repositoryUrl: string): Promise<PluginItem[]> {
-    const text = await pluginFetchText(repositoryUrl);
+    const text = await appFetchText(repositoryUrl);
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -76,29 +93,32 @@ export class PluginManager {
    * the loaded plugin's `id` doesn't match `item.id`.
    */
   async installPlugin(item: PluginItem): Promise<Plugin> {
-    const source = await pluginFetchText(item.url);
-    const plugin = loadPlugin(source, {
-      resolveRequire: createShimResolver(item.id),
-    });
+    const source = await appFetchText(item.url);
+    const plugin = withPluginMetadata(
+      loadPlugin(source, {
+        resolveRequire: createShimResolver(item.id, item.site),
+        fetch: createPluginFetchShim(item.site),
+      }),
+      item,
+    );
     if (plugin.id !== item.id) {
       throw new PluginValidationError(
-        `Plugin id mismatch — repository index says '${item.id}', source says '${plugin.id}'.`,
+        `Plugin id mismatch: repository index says '${item.id}', source says '${plugin.id}'.`,
       );
     }
     this.installed.set(plugin.id, plugin);
     // Some plugin sources (e.g. Komga) only set `id`/`name`/
     // `version`/`site` on the loaded instance and rely on the
     // repository index for `lang`/`iconUrl`. Fall back to the
-    // index entry so the DB UPSERT never sees null for NOT NULL
-    // columns (otherwise SQLite trips on
-    // `installed_plugin.lang NOT NULL constraint`).
+    // index entry so runtime lists and the DB UPSERT never see null
+    // for required metadata columns.
     await upsertInstalledPlugin({
       id: plugin.id,
-      name: plugin.name ?? item.name,
-      site: plugin.site ?? item.site,
-      lang: plugin.lang ?? item.lang,
-      version: plugin.version ?? item.version,
-      iconUrl: plugin.iconUrl ?? item.iconUrl,
+      name: plugin.name,
+      site: plugin.site,
+      lang: plugin.lang,
+      version: plugin.version,
+      iconUrl: plugin.iconUrl,
       sourceUrl: item.url,
       sourceCode: source,
     });
@@ -115,9 +135,21 @@ export class PluginManager {
     const rows = await listInstalledPlugins();
     for (const row of rows) {
       try {
-        const plugin = loadPlugin(row.sourceCode, {
-          resolveRequire: createShimResolver(row.id),
-        });
+        const plugin = withPluginMetadata(
+          loadPlugin(row.sourceCode, {
+            resolveRequire: createShimResolver(row.id, row.site),
+            fetch: createPluginFetchShim(row.site),
+          }),
+          {
+            id: row.id,
+            name: row.name,
+            site: row.site,
+            lang: row.lang,
+            version: row.version,
+            iconUrl: row.iconUrl,
+            url: row.sourceUrl,
+          },
+        );
         this.installed.set(plugin.id, plugin);
       } catch (error) {
         // eslint-disable-next-line no-console

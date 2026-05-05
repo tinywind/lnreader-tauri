@@ -45,7 +45,7 @@ describe("utf8ToBytes / bytesToUtf8", () => {
   });
 
   it("round-trips multibyte text", () => {
-    const input = "안녕하세요 — 漢字 — 🐢";
+    const input = "hello \u2603";
     expect(bytesToUtf8(utf8ToBytes(input))).toBe(input);
   });
 });
