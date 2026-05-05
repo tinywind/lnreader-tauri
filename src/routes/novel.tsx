@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -21,6 +22,7 @@ import {
   setNovelInLibrary,
   type NovelDetailRecord,
 } from "../db/queries/novel";
+import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
 import { novelRoute } from "../router";
 
 const FALLBACK_COVER = "https://placehold.co/200x300?text=No+Cover";
@@ -38,32 +40,48 @@ function formatDate(epoch: number | null): string {
   return new Date(epoch * 1000).toLocaleDateString();
 }
 
+interface ChapterListItemProps {
+  chapter: ChapterRow;
+  status: DownloadStatus | undefined;
+  onOpen: () => void;
+  onDownload: () => void;
+}
+
 function ChapterListItem({
   chapter,
-  onClick,
-}: {
-  chapter: ChapterRow;
-  onClick: () => void;
-}) {
+  status,
+  onOpen,
+  onDownload,
+}: ChapterListItemProps) {
+  const isQueued = status?.kind === "queued";
+  const isRunning = status?.kind === "running";
+  const failedMessage = status?.kind === "failed" ? status.error : null;
+  const showDownloadButton =
+    !chapter.isDownloaded && !isQueued && !isRunning;
+
   return (
     <Paper
       p="sm"
       radius="sm"
       withBorder
-      onClick={onClick}
+      onClick={onOpen}
       role="button"
       tabIndex={0}
       style={{ cursor: "pointer" }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onClick();
+          onOpen();
         }
       }}
     >
       <Group justify="space-between" wrap="nowrap" align="flex-start">
         <Stack gap={4} style={{ minWidth: 0, flex: 1 }}>
-          <Text fw={chapter.unread ? 500 : 400} lineClamp={1} title={chapter.name}>
+          <Text
+            fw={chapter.unread ? 500 : 400}
+            lineClamp={1}
+            title={chapter.name}
+          >
             {chapter.name}
           </Text>
           <Group gap="xs">
@@ -80,6 +98,21 @@ function ChapterListItem({
                 Downloaded
               </Badge>
             )}
+            {isQueued && (
+              <Badge size="xs" color="gray" variant="light">
+                Queued
+              </Badge>
+            )}
+            {isRunning && (
+              <Badge size="xs" color="blue" variant="light">
+                Downloading…
+              </Badge>
+            )}
+            {failedMessage && (
+              <Badge size="xs" color="red" variant="light" title={failedMessage}>
+                Failed
+              </Badge>
+            )}
             {!chapter.unread && (
               <Badge size="xs" color="gray" variant="light">
                 Read
@@ -87,13 +120,27 @@ function ChapterListItem({
             )}
           </Group>
         </Stack>
-        {chapter.progress > 0 && chapter.progress < 100 && (
-          <Progress
-            value={chapter.progress}
-            size="xs"
-            style={{ width: 60, marginTop: 8 }}
-          />
-        )}
+        <Group gap="xs" wrap="nowrap" align="center">
+          {chapter.progress > 0 && chapter.progress < 100 && (
+            <Progress
+              value={chapter.progress}
+              size="xs"
+              style={{ width: 60 }}
+            />
+          )}
+          {showDownloadButton && (
+            <Button
+              size="xs"
+              variant="light"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDownload();
+              }}
+            >
+              {failedMessage ? "Retry" : "Download"}
+            </Button>
+          )}
+        </Group>
       </Group>
     </Paper>
   );
@@ -192,8 +239,37 @@ export function NovelDetailPage() {
     },
   });
 
+  const [statuses, setStatuses] = useState<
+    ReadonlyMap<number, DownloadStatus>
+  >(() => new Map());
+
+  useEffect(() => {
+    return downloadQueue.subscribe((event) => {
+      setStatuses((prev) => {
+        const next = new Map(prev);
+        next.set(event.job.id, event.status);
+        return next;
+      });
+      if (event.status.kind === "done") {
+        void queryClient.invalidateQueries({
+          queryKey: chaptersKey(id),
+        });
+      }
+    });
+  }, [id, queryClient]);
+
   function openChapter(chapterId: number) {
     void navigate({ to: "/reader", search: { chapterId } });
+  }
+
+  function downloadChapter(chapter: ChapterRow): void {
+    const novel = novelQuery.data;
+    if (!novel) return;
+    downloadQueue.enqueue({
+      id: chapter.id,
+      pluginId: novel.pluginId,
+      chapterPath: chapter.path,
+    });
   }
 
   if (id <= 0) {
@@ -284,7 +360,9 @@ export function NovelDetailPage() {
                 <ChapterListItem
                   key={chapter.id}
                   chapter={chapter}
-                  onClick={() => openChapter(chapter.id)}
+                  status={statuses.get(chapter.id)}
+                  onOpen={() => openChapter(chapter.id)}
+                  onDownload={() => downloadChapter(chapter)}
                 />
               ))}
             </Stack>
