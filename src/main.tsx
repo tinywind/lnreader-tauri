@@ -53,9 +53,17 @@ const queryClient = new QueryClient({
   },
 });
 
-/** Catch async errors that escape React Query entirely. */
+/**
+ * Async errors that escape React Query entirely (e.g. fire-and-
+ * forget promises inside sandboxed plugins) get logged for devtools
+ * but NOT toasted — plugin-side scrape failures during a global
+ * search would otherwise spam the user with one toast per plugin.
+ * Per-row error UI in /search and /browse already shows the actual
+ * cause where it matters.
+ */
 window.addEventListener("unhandledrejection", (event) => {
-  showErrorToast("Unhandled error", event.reason);
+  // eslint-disable-next-line no-console
+  console.warn("[unhandledrejection]", event.reason);
 });
 
 const rootElement = document.getElementById("root");
