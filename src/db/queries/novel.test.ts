@@ -7,8 +7,10 @@ vi.mock("../client", () => ({
 import { getDb } from "../client";
 import {
   countNovels,
+  getNovelById,
   insertNovel,
   listLibraryNovels,
+  setNovelInLibrary,
 } from "./novel";
 
 const mockedGetDb = vi.mocked(getDb);
@@ -168,5 +170,73 @@ describe("insertNovel", () => {
       "https://example.test/c.jpg",
       false,
     ]);
+  });
+});
+
+describe("getNovelById", () => {
+  it("returns null when no row matches", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    const result = await getNovelById(999);
+
+    expect(result).toBeNull();
+    const [, params] = db.select.mock.calls[0]!;
+    expect(params).toEqual([999]);
+  });
+
+  it("coerces in_library and is_local to strict booleans", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([
+      {
+        id: 5,
+        pluginId: "demo",
+        path: "/n/5",
+        name: "Hero",
+        cover: null,
+        summary: null,
+        author: null,
+        artist: null,
+        status: null,
+        genres: null,
+        inLibrary: 1,
+        isLocal: 0,
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_000,
+        lastReadAt: null,
+      },
+    ]);
+
+    const result = await getNovelById(5);
+
+    expect(result?.inLibrary).toBe(true);
+    expect(result?.isLocal).toBe(false);
+    expect(result?.id).toBe(5);
+    expect(result?.name).toBe("Hero");
+  });
+});
+
+describe("setNovelInLibrary", () => {
+  it("updates in_library and bumps updated_at", async () => {
+    const db = stubDb();
+    db.execute.mockResolvedValueOnce(undefined);
+
+    await setNovelInLibrary(7, true);
+
+    const [sql, params] = db.execute.mock.calls[0]!;
+    expect(sql).toContain("UPDATE novel");
+    expect(sql).toContain("SET in_library = $2");
+    expect(sql).toContain("updated_at = unixepoch()");
+    expect(params).toEqual([7, true]);
+  });
+
+  it("can flip the flag back to false", async () => {
+    const db = stubDb();
+    db.execute.mockResolvedValueOnce(undefined);
+
+    await setNovelInLibrary(7, false);
+
+    const [, params] = db.execute.mock.calls[0]!;
+    expect(params).toEqual([7, false]);
   });
 });

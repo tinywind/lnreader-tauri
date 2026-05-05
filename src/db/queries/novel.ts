@@ -63,6 +63,86 @@ export async function listLibraryNovels(
   return db.select<LibraryNovel[]>(sql, params);
 }
 
+/**
+ * Full row shape used by the novel detail screen. Booleans are
+ * coerced from SQLite's 0/1 ints so consumers can use strict
+ * `=== true` comparisons.
+ */
+export interface NovelDetailRecord {
+  id: number;
+  pluginId: string;
+  path: string;
+  name: string;
+  cover: string | null;
+  summary: string | null;
+  author: string | null;
+  artist: string | null;
+  status: string | null;
+  genres: string | null;
+  inLibrary: boolean;
+  isLocal: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastReadAt: number | null;
+}
+
+interface RawNovelDetail extends Omit<NovelDetailRecord, "inLibrary" | "isLocal"> {
+  inLibrary: number;
+  isLocal: number;
+}
+
+const SELECT_NOVEL_DETAIL = `
+  SELECT
+    id,
+    plugin_id      AS pluginId,
+    path,
+    name,
+    cover,
+    summary,
+    author,
+    artist,
+    status,
+    genres,
+    in_library     AS inLibrary,
+    is_local       AS isLocal,
+    created_at     AS createdAt,
+    updated_at     AS updatedAt,
+    last_read_at   AS lastReadAt
+  FROM novel
+  WHERE id = $1
+`;
+
+export async function getNovelById(
+  id: number,
+): Promise<NovelDetailRecord | null> {
+  const db = await getDb();
+  const rows = await db.select<RawNovelDetail[]>(SELECT_NOVEL_DETAIL, [id]);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    ...row,
+    inLibrary: !!row.inLibrary,
+    isLocal: !!row.isLocal,
+  };
+}
+
+/**
+ * Toggle a novel's library membership. Touches `updated_at` so
+ * Library reorders the row on the next paint.
+ */
+export async function setNovelInLibrary(
+  id: number,
+  inLibrary: boolean,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE novel
+     SET in_library = $2, updated_at = unixepoch()
+     WHERE id = $1`,
+    [id, inLibrary],
+  );
+}
+
 export async function countNovels(): Promise<number> {
   const db = await getDb();
   const rows = await db.select<{ count: number }[]>(
