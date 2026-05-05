@@ -7,6 +7,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
+import { useTranslation } from "../i18n";
 import { FilterTypes, type Filters } from "../lib/plugins/filterTypes";
 
 /**
@@ -48,9 +49,10 @@ export function PluginFilters({
   values,
   onChange,
 }: PluginFiltersProps) {
+  const { t } = useTranslation();
   const entries = Object.entries(schema);
   if (entries.length === 0) {
-    return <Text c="dimmed">This plugin doesn't expose any filters.</Text>;
+    return <Text c="dimmed">{t("pluginFilters.empty")}</Text>;
   }
 
   return (
@@ -177,9 +179,12 @@ export function PluginFilters({
                         size="xs"
                         value={state}
                         data={[
-                          { label: `${o.label} (off)`, value: "" },
-                          { label: "include", value: "+" },
-                          { label: "exclude", value: "-" },
+                          {
+                            label: `${o.label} (${t("pluginFilters.off")})`,
+                            value: "",
+                          },
+                          { label: t("pluginFilters.include"), value: "+" },
+                          { label: t("pluginFilters.exclude"), value: "-" },
                         ]}
                         onChange={(next) =>
                           setOption(o.value, next as "" | "+" | "-")

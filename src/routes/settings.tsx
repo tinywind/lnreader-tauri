@@ -20,6 +20,7 @@ import {
   PageFrame,
   StateView,
 } from "../components/AppFrame";
+import { BackIconButton } from "../components/BackIconButton";
 import { BrowseSettingsPanel } from "../components/BrowseSettingsPanel";
 import {
   ConsoleChip,
@@ -37,6 +38,7 @@ import {
   exportBackupToFile,
   importBackupFromFile,
 } from "../lib/backup/io";
+import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
 import {
   DEFAULT_APPEARANCE,
   type AppThemeMode,
@@ -70,10 +72,6 @@ interface SettingsCategory {
   summary: string;
   title: string;
 }
-
-const RESTORE_WARNING =
-  "Restoring will replace your current library, chapters, categories, and " +
-  "repositories with the contents of the backup file. Continue?";
 
 const LATEST_RELEASE_URL =
   "https://github.com/tinywind/lnreader-tauri/releases/latest";
@@ -130,11 +128,13 @@ function normalizeSection(section: string | undefined): SettingsCategoryId {
 }
 
 function StatusBanner({ status }: { status: Status }) {
+  const { t } = useTranslation();
+
   if (status.kind === "ok") {
     return (
       <StateView
         color="green"
-        title="Settings updated"
+        title={t("settings.updatedTitle")}
         message={status.message}
       />
     );
@@ -143,7 +143,7 @@ function StatusBanner({ status }: { status: Status }) {
     return (
       <StateView
         color="red"
-        title="Settings error"
+        title={t("settings.errorTitle")}
         message={status.message}
       />
     );
@@ -152,7 +152,7 @@ function StatusBanner({ status }: { status: Status }) {
     return (
       <StateView
         color="blue"
-        title="Working"
+        title={t("settings.workingTitle")}
         message={status.message}
       />
     );
@@ -206,22 +206,23 @@ function SettingsFormRow({
 
 function AppSettingsSection() {
   const appearance = useAppearanceStore();
+  const { t } = useTranslation();
 
   return (
     <Stack gap="md">
       <SettingsSection
-        title="Appearance"
-        summary="Theme mode, accent color, and display surface."
+        title={t("settings.app.appearance.title")}
+        summary={t("settings.app.appearance.summary")}
       >
         <SettingsFormRow
-          label="Theme mode"
-          description="Follow the system theme or force a specific mode."
+          label={t("settings.app.themeMode.label")}
+          description={t("settings.app.themeMode.description")}
         >
           <Select
             data={[
-              { value: "system", label: "System" },
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
+              { value: "system", label: t("settings.app.themeMode.system") },
+              { value: "light", label: t("settings.app.themeMode.light") },
+              { value: "dark", label: t("settings.app.themeMode.dark") },
             ]}
             value={appearance.themeMode}
             onChange={(themeMode) =>
@@ -231,8 +232,8 @@ function AppSettingsSection() {
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="App theme"
-          description="Choose the app color set used by the shell."
+          label={t("settings.app.appTheme.label")}
+          description={t("settings.app.appTheme.description")}
         >
           <Select
             data={APP_THEME_OPTIONS}
@@ -244,19 +245,19 @@ function AppSettingsSection() {
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="Custom accent color"
-          description="Override the selected theme accent when needed."
+          label={t("settings.app.customAccent.label")}
+          description={t("settings.app.customAccent.description")}
         >
           <ColorInput
             value={appearance.customAccentColor}
-            placeholder="Use theme accent"
+            placeholder={t("settings.app.customAccent.placeholder")}
             onChange={appearance.setCustomAccentColor}
             w={{ base: "100%", sm: 220 }}
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="AMOLED black"
-          description="Use a pure black background in dark mode."
+          label={t("settings.app.amoled.label")}
+          description={t("settings.app.amoled.description")}
         >
           <Switch
             checked={appearance.amoledBlack}
@@ -268,20 +269,18 @@ function AppSettingsSection() {
       </SettingsSection>
 
       <SettingsSection
-        title="Localization"
-        summary="Language used by app chrome and settings."
+        title={t("settings.app.localization.title")}
+        summary={t("settings.app.localization.summary")}
       >
         <SettingsFormRow
-          label="Locale"
-          description="Select the preferred interface language."
+          label={t("settings.app.locale.label")}
+          description={t("settings.app.locale.description")}
         >
           <Select
-            data={[
-              { value: "en", label: "English" },
-              { value: "ko", label: "Korean" },
-              { value: "ja", label: "Japanese" },
-              { value: "zh", label: "Chinese" },
-            ]}
+            data={SUPPORTED_APP_LOCALES.map((locale) => ({
+              value: locale,
+              label: t(locale === "ko" ? "locale.ko" : "locale.en"),
+            }))}
             value={appearance.appLocale}
             onChange={(appLocale) =>
               appearance.setAppLocale(appLocale ?? DEFAULT_APPEARANCE.appLocale)
@@ -292,12 +291,12 @@ function AppSettingsSection() {
       </SettingsSection>
 
       <SettingsSection
-        title="Navigation"
-        summary="Control which shell destinations are visible."
+        title={t("settings.app.navigation.title")}
+        summary={t("settings.app.navigation.summary")}
       >
         <SettingsFormRow
-          label="History tab"
-          description="Show the reading history destination in navigation."
+          label={t("settings.app.historyTab.label")}
+          description={t("settings.app.historyTab.description")}
         >
           <Switch
             checked={appearance.showHistoryTab}
@@ -307,8 +306,8 @@ function AppSettingsSection() {
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="Updates tab"
-          description="Show the library updates destination in navigation."
+          label={t("settings.app.updatesTab.label")}
+          description={t("settings.app.updatesTab.description")}
         >
           <Switch
             checked={appearance.showUpdatesTab}
@@ -318,8 +317,8 @@ function AppSettingsSection() {
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="Navigation labels"
-          description="Display text labels next to navigation icons."
+          label={t("settings.app.navLabels.label")}
+          description={t("settings.app.navLabels.description")}
         >
           <Switch
             checked={appearance.showLabelsInNav}
@@ -329,11 +328,11 @@ function AppSettingsSection() {
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="Reset appearance"
-          description="Restore the default app appearance values."
+          label={t("settings.app.reset.label")}
+          description={t("settings.app.reset.description")}
         >
           <Button variant="default" onClick={appearance.resetAppearance}>
-            Reset appearance
+            {t("settings.app.reset.button")}
           </Button>
         </SettingsFormRow>
       </SettingsSection>
@@ -360,6 +359,7 @@ function DataSettingsSection({
   onClearStorage: () => void;
   onStatusChange: (status: Status) => void;
 }) {
+  const { t } = useTranslation();
   const userAgent = useUserAgentStore((state) => state.userAgent);
   const setUserAgent = useUserAgentStore((state) => state.setUserAgent);
   const resetUserAgent = useUserAgentStore((state) => state.resetUserAgent);
@@ -368,16 +368,16 @@ function DataSettingsSection({
   return (
     <Stack gap="md">
       <SettingsSection
-        title="Backup"
-        summary="Export or replace the local reader database."
+        title={t("settings.data.backup.title")}
+        summary={t("settings.data.backup.summary")}
       >
         <SettingsFormRow
-          label="Backup file"
-          description="Write the current app data to a local backup file."
+          label={t("settings.data.backupFile.label")}
+          description={t("settings.data.backupFile.description")}
         >
           <Group className="lnr-settings-actions" gap="xs" justify="flex-end">
             <Button onClick={onExport} loading={isBusy} disabled={isBusy}>
-              Export backup
+              {t("settings.data.exportBackup")}
             </Button>
             <Button
               onClick={onImport}
@@ -385,19 +385,19 @@ function DataSettingsSection({
               disabled={isBusy}
               variant="default"
             >
-              Import backup
+              {t("settings.data.importBackup")}
             </Button>
           </Group>
         </SettingsFormRow>
       </SettingsSection>
 
       <SettingsSection
-        title="Maintenance"
-        summary="Clear local caches and derived reader state."
+        title={t("settings.data.maintenance.title")}
+        summary={t("settings.data.maintenance.summary")}
       >
         <SettingsFormRow
-          label="Cached novels"
-          description="Delete non-library novels and their chapters."
+          label={t("settings.data.cachedNovels.label")}
+          description={t("settings.data.cachedNovels.description")}
         >
           <Button
             disabled={isBusy}
@@ -405,18 +405,18 @@ function DataSettingsSection({
             variant="default"
             onClick={() => {
               onRunMaintenance(
-                "Clearing cached novels...",
-                "Delete all non-library novels and their chapters?",
+                t("settings.data.cachedNovels.busy"),
+                t("settings.data.cachedNovels.warning"),
                 clearCachedNovels,
               );
             }}
           >
-            Clear cached novels
+            {t("settings.data.cachedNovels.button")}
           </Button>
         </SettingsFormRow>
         <SettingsFormRow
-          label="Updates queue"
-          description="Mark all current library updates as read."
+          label={t("settings.data.updatesQueue.label")}
+          description={t("settings.data.updatesQueue.description")}
         >
           <Button
             disabled={isBusy}
@@ -424,18 +424,18 @@ function DataSettingsSection({
             variant="default"
             onClick={() => {
               onRunMaintenance(
-                "Clearing updates...",
-                "Mark all current library updates as read?",
+                t("settings.data.updatesQueue.busy"),
+                t("settings.data.updatesQueue.warning"),
                 clearUpdatesTab,
               );
             }}
           >
-            Clear updates tab
+            {t("settings.data.updatesQueue.button")}
           </Button>
         </SettingsFormRow>
         <SettingsFormRow
-          label="Read downloads"
-          description="Delete downloaded content for chapters already read."
+          label={t("settings.data.readDownloads.label")}
+          description={t("settings.data.readDownloads.description")}
         >
           <Button
             disabled={isBusy}
@@ -443,32 +443,32 @@ function DataSettingsSection({
             variant="default"
             onClick={() => {
               onRunMaintenance(
-                "Deleting read downloaded chapters...",
-                "Delete downloaded content for chapters already marked read?",
+                t("settings.data.readDownloads.busy"),
+                t("settings.data.readDownloads.warning"),
                 deleteReadDownloadedChapters,
               );
             }}
           >
-            Delete read downloads
+            {t("settings.data.readDownloads.button")}
           </Button>
         </SettingsFormRow>
         <SettingsFormRow
-          label="Plugin storage"
-          description="Clear app-origin plugin storage and scraper cookies."
+          label={t("settings.data.pluginStorage.label")}
+          description={t("settings.data.pluginStorage.description")}
         >
           <Button variant="default" onClick={onClearStorage}>
-            Clear cookies and plugin storage
+            {t("settings.data.pluginStorage.button")}
           </Button>
         </SettingsFormRow>
       </SettingsSection>
 
       <SettingsSection
-        title="Network identity"
-        summary="Default User-Agent sent by plugin requests."
+        title={t("settings.data.network.title")}
+        summary={t("settings.data.network.summary")}
       >
         <SettingsFormRow
-          label="Custom User-Agent"
-          description="Used when a plugin does not set its own User-Agent header."
+          label={t("settings.data.userAgent.label")}
+          description={t("settings.data.userAgent.description")}
         >
           <Textarea
             value={userAgentInput}
@@ -479,17 +479,20 @@ function DataSettingsSection({
           />
         </SettingsFormRow>
         <SettingsFormRow
-          label="Save User-Agent"
-          description="Persist or restore the default network identity."
+          label={t("settings.data.saveUserAgent.label")}
+          description={t("settings.data.saveUserAgent.description")}
         >
           <Group className="lnr-settings-actions" gap="xs" justify="flex-end">
             <Button
               onClick={() => {
                 setUserAgent(userAgentInput);
-                onStatusChange({ kind: "ok", message: "User-Agent saved." });
+                onStatusChange({
+                  kind: "ok",
+                  message: t("settings.data.userAgentSaved"),
+                });
               }}
             >
-              Save User-Agent
+              {t("settings.data.saveUserAgent.button")}
             </Button>
             <Button
               variant="default"
@@ -498,11 +501,11 @@ function DataSettingsSection({
                 setUserAgentInput(DEFAULT_USER_AGENT);
                 onStatusChange({
                   kind: "ok",
-                  message: "User-Agent reset to default.",
+                  message: t("settings.data.userAgentReset"),
                 });
               }}
             >
-              Reset
+              {t("common.reset")}
             </Button>
           </Group>
         </SettingsFormRow>
@@ -512,37 +515,39 @@ function DataSettingsSection({
 }
 
 function AboutSettingsSection({ onOpenRelease }: { onOpenRelease: () => void }) {
+  const { t } = useTranslation();
+
   return (
     <Stack gap="md">
       <SettingsSection
-        title="Build"
-        summary="Release channel and update policy."
+        title={t("settings.about.build.title")}
+        summary={t("settings.about.build.summary")}
       >
         <SettingsFormRow
-          label="Version"
-          description="The current v0.1 line ships unsigned debug builds."
+          label={t("settings.about.version.label")}
+          description={t("settings.about.version.description")}
         >
           <ConsoleChip tone="accent">v0.1</ConsoleChip>
         </SettingsFormRow>
         <SettingsFormRow
-          label="Auto-update"
-          description="In-app auto-update is intentionally deferred until v0.2."
+          label={t("settings.about.autoUpdate.label")}
+          description={t("settings.about.autoUpdate.description")}
         >
-          <ConsoleChip>Manual release check</ConsoleChip>
+          <ConsoleChip>{t("settings.about.manualReleaseCheck")}</ConsoleChip>
         </SettingsFormRow>
       </SettingsSection>
 
       <SettingsSection
-        title="Links"
-        summary="Open the project release page outside the app."
+        title={t("settings.about.links.title")}
+        summary={t("settings.about.links.summary")}
       >
         <SettingsFormRow
-          label="Latest release"
-          description="Open GitHub Releases in the system browser."
+          label={t("settings.about.latestRelease.label")}
+          description={t("settings.about.latestRelease.description")}
         >
           <Group className="lnr-settings-actions" gap="xs" justify="flex-end">
             <Button variant="default" onClick={onOpenRelease}>
-              Open latest release
+              {t("settings.about.openLatestRelease")}
             </Button>
             <Anchor
               href={LATEST_RELEASE_URL}
@@ -550,7 +555,7 @@ function AboutSettingsSection({ onOpenRelease }: { onOpenRelease: () => void }) 
               rel="noreferrer"
               size="sm"
             >
-              GitHub Releases
+              {t("settings.about.githubReleases")}
             </Anchor>
           </Group>
         </SettingsFormRow>
@@ -568,10 +573,12 @@ function SettingsCategoryList({
   activeId: SettingsCategoryId;
   onSelect: (id: SettingsCategoryId) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
-    <aside className="lnr-settings-nav" aria-label="Settings navigation">
+    <aside className="lnr-settings-nav" aria-label={t("settings.title")}>
       <div className="lnr-settings-nav-header">
-        <Text className="lnr-console-kicker">Settings</Text>
+        <Text className="lnr-console-kicker">{t("settings.title")}</Text>
       </div>
       <ScrollArea className="lnr-settings-nav-scroll">
         <div className="lnr-settings-nav-list">
@@ -611,6 +618,8 @@ function SettingsDetail({
   onBackToList: () => void;
   status: Status;
 }) {
+  const { t } = useTranslation();
+
   return (
     <section
       className="lnr-settings-detail"
@@ -618,16 +627,13 @@ function SettingsDetail({
     >
       <div className="lnr-settings-detail-inner">
         <Text className="lnr-settings-kicker">
-          Settings / {category.title}
+          {t("settings.breadcrumb", { title: category.title })}
         </Text>
-        <Button
+        <BackIconButton
           className="lnr-settings-mobile-back"
-          size="xs"
-          variant="subtle"
+          label={t("settings.backToSettings")}
           onClick={onBackToList}
-        >
-          Back to settings
-        </Button>
+        />
         <Group
           className="lnr-settings-detail-header"
           align="flex-start"
@@ -647,7 +653,9 @@ function SettingsDetail({
             </Text>
           </Box>
           <Group className="lnr-settings-detail-meta" gap="xs" justify="flex-end">
-            <ConsoleChip tone="accent">{category.groupCount} groups</ConsoleChip>
+            <ConsoleChip tone="accent">
+              {t("settings.groups", { count: category.groupCount })}
+            </ConsoleChip>
             <ConsoleChip>{category.id}</ConsoleChip>
           </Group>
         </Group>
@@ -667,6 +675,7 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ section }: SettingsPageProps = {}) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [activeSection, setActiveSection] = useState<SettingsCategoryId>(() =>
     normalizeSection(section),
@@ -679,38 +688,48 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
   }, [section]);
 
   async function handleExport(): Promise<void> {
-    setStatus({ kind: "busy", message: "Saving backup..." });
+    setStatus({ kind: "busy", message: t("settings.data.savingBackup") });
     try {
       const path = await exportBackupToFile();
       setStatus(
         path
-          ? { kind: "ok", message: `Backup saved to ${path}` }
+          ? {
+              kind: "ok",
+              message: t("settings.data.backupSaved", { path }),
+            }
           : { kind: "idle" },
       );
     } catch (error) {
       setStatus({
         kind: "error",
-        message: `Export failed: ${describeError(error)}`,
+        message: t("settings.data.exportFailed", {
+          error: describeError(error),
+        }),
       });
     }
   }
 
   async function handleImport(): Promise<void> {
-    if (!window.confirm(RESTORE_WARNING)) {
+    if (!window.confirm(t("settings.data.restoreWarning"))) {
       return;
     }
-    setStatus({ kind: "busy", message: "Restoring backup..." });
+    setStatus({ kind: "busy", message: t("settings.data.restoringBackup") });
     try {
       const path = await importBackupFromFile();
       setStatus(
         path
-          ? { kind: "ok", message: `Restored from ${path}` }
+          ? {
+              kind: "ok",
+              message: t("settings.data.restoredBackup", { path }),
+            }
           : { kind: "idle" },
       );
     } catch (error) {
       setStatus({
         kind: "error",
-        message: `Restore failed: ${describeError(error)}`,
+        message: t("settings.data.restoreFailed", {
+          error: describeError(error),
+        }),
       });
     }
   }
@@ -728,12 +747,16 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
       const result = await action();
       setStatus({
         kind: "ok",
-        message: `${message} Done. ${result.rowsAffected} rows changed.`,
+        message: t("settings.data.maintenanceDone", {
+          rows: result.rowsAffected,
+        }),
       });
     } catch (error) {
       setStatus({
         kind: "error",
-        message: `${message} Failed: ${describeError(error)}`,
+        message: `${message} ${t("settings.data.maintenanceFailed", {
+          error: describeError(error),
+        })}`,
       });
     }
   }
@@ -748,23 +771,25 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
       PLUGIN_STORAGE_PREFIX,
     );
     const cookieCount = clearAccessibleCookies();
-    setStatus({ kind: "busy", message: "Clearing plugin storage..." });
+    setStatus({ kind: "busy", message: t("settings.data.clearStorageBusy") });
     try {
       const webviewCookieCount = await invoke<number>("scraper_clear_cookies");
       setStatus({
         kind: "ok",
-        message:
-          `Cleared ${localCount + sessionCount} plugin storage keys, ` +
-          `${cookieCount} app-origin cookies, and ` +
-          `${webviewCookieCount} site WebView cookies.`,
+        message: t("settings.data.clearStorageOk", {
+          cookieCount,
+          storageCount: localCount + sessionCount,
+          webviewCookieCount,
+        }),
       });
     } catch (error) {
       setStatus({
         kind: "error",
-        message:
-          `Cleared ${localCount + sessionCount} plugin storage keys and ` +
-          `${cookieCount} app-origin cookies, but site WebView cookie clear ` +
-          `failed: ${describeError(error)}`,
+        message: t("settings.data.clearStoragePartial", {
+          cookieCount,
+          error: describeError(error),
+          storageCount: localCount + sessionCount,
+        }),
       });
     }
   }
@@ -773,7 +798,9 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     void openExternal(LATEST_RELEASE_URL).catch((error: unknown) => {
       setStatus({
         kind: "error",
-        message: `Failed to open release page: ${describeError(error)}`,
+        message: t("settings.data.openReleaseFailed", {
+          error: describeError(error),
+        }),
       });
     });
   }
@@ -781,20 +808,20 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
   const categories: SettingsCategory[] = [
     {
       id: "app",
-      title: "App",
-      summary: "Theme, locale, and navigation.",
+      title: t("settings.category.app.title"),
+      summary: t("settings.category.app.summary"),
       groupCount: 3,
       content: <AppSettingsSection />,
     },
     {
       id: "reader",
-      title: "Reader",
-      summary: "Typography, paging, controls, and advanced overrides.",
+      title: t("settings.category.reader.title"),
+      summary: t("settings.category.reader.summary"),
       groupCount: 6,
       content: (
         <SettingsSection
-          title="Reader preferences"
-          summary="Reading mode, text, controls, indicators, automation, and advanced overrides."
+          title={t("settings.reader.preferences.title")}
+          summary={t("settings.reader.preferences.summary")}
         >
           <ReaderSettingsPanel />
         </SettingsSection>
@@ -802,13 +829,13 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     },
     {
       id: "library",
-      title: "Library",
-      summary: "Display, sorting, badges, and reading scope.",
+      title: t("settings.category.library.title"),
+      summary: t("settings.category.library.summary"),
       groupCount: 1,
       content: (
         <SettingsSection
-          title="Library preferences"
-          summary="Library display, sorting, badges, and reading scope."
+          title={t("settings.library.preferences.title")}
+          summary={t("settings.library.preferences.summary")}
         >
           <LibrarySettingsPanel />
         </SettingsSection>
@@ -816,13 +843,13 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     },
     {
       id: "browse",
-      title: "Browse",
-      summary: "Plugin languages, global search, and pinned sources.",
+      title: t("settings.category.browse.title"),
+      summary: t("settings.category.browse.summary"),
       groupCount: 1,
       content: (
         <SettingsSection
-          title="Browse preferences"
-          summary="Plugin language filtering, global search, and pinned sources."
+          title={t("settings.browse.preferences.title")}
+          summary={t("settings.browse.preferences.summary")}
         >
           <BrowseSettingsPanel />
         </SettingsSection>
@@ -830,8 +857,8 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     },
     {
       id: "data",
-      title: "Data",
-      summary: "Backup, maintenance, plugin storage, and network identity.",
+      title: t("settings.category.data.title"),
+      summary: t("settings.category.data.summary"),
       groupCount: 3,
       content: (
         <DataSettingsSection
@@ -854,8 +881,8 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     },
     {
       id: "about",
-      title: "About",
-      summary: "Version, release policy, and project links.",
+      title: t("settings.category.about.title"),
+      summary: t("settings.category.about.summary"),
       groupCount: 2,
       content: <AboutSettingsSection onOpenRelease={openLatestRelease} />,
     },
@@ -888,9 +915,9 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
         />
       </div>
       <ConsoleStatusStrip className="lnr-settings-strip">
-        <span>{categories.length} sections</span>
-        <span>Selected: {activeCategory.title}</span>
-        <span>{status.kind === "idle" ? "Idle" : status.message}</span>
+        <span>{t("settings.sections", { count: categories.length })}</span>
+        <span>{t("settings.selected", { title: activeCategory.title })}</span>
+        <span>{status.kind === "idle" ? t("settings.idle") : status.message}</span>
       </ConsoleStatusStrip>
     </PageFrame>
   );

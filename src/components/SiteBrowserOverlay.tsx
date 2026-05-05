@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ActionIcon, Box, Group, Text } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "../i18n";
 import { isTauriRuntime } from "../lib/tauri-runtime";
 import { useSiteBrowserStore } from "../store/site-browser";
 
@@ -48,6 +49,7 @@ async function hideScraper(): Promise<void> {
  * to the next plugin scrape.
  */
 export function SiteBrowserOverlay() {
+  const { t } = useTranslation();
   const visible = useSiteBrowserStore((s) => s.visible);
   const currentUrl = useSiteBrowserStore((s) => s.currentUrl);
   const hide = useSiteBrowserStore((s) => s.hide);
@@ -119,7 +121,7 @@ export function SiteBrowserOverlay() {
         <ActionIcon
           variant="subtle"
           size="lg"
-          aria-label="Close site browser"
+          aria-label={t("siteBrowser.close")}
           onClick={hide}
         >
           X

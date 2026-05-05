@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { normalizeAppLocale, type AppLocale } from "../i18n/locales";
 import type { AppThemeId } from "../theme/md3";
 
 export type AppThemeMode = "system" | "light" | "dark";
@@ -9,7 +10,7 @@ interface AppearanceState {
   appThemeId: AppThemeId;
   amoledBlack: boolean;
   customAccentColor: string;
-  appLocale: string;
+  appLocale: AppLocale;
   showHistoryTab: boolean;
   showUpdatesTab: boolean;
   showLabelsInNav: boolean;
@@ -29,7 +30,7 @@ export const DEFAULT_APPEARANCE = {
   appThemeId: "default" as AppThemeId,
   amoledBlack: false,
   customAccentColor: "",
-  appLocale: "en",
+  appLocale: "en" as AppLocale,
   showHistoryTab: true,
   showUpdatesTab: true,
   showLabelsInNav: true,
@@ -45,7 +46,7 @@ export const useAppearanceStore = create<AppearanceState>()(
       setCustomAccentColor: (customAccentColor) =>
         set({ customAccentColor: customAccentColor.trim() }),
       setAppLocale: (appLocale) =>
-        set({ appLocale: appLocale.trim() || DEFAULT_APPEARANCE.appLocale }),
+        set({ appLocale: normalizeAppLocale(appLocale) }),
       setShowHistoryTab: (showHistoryTab) => set({ showHistoryTab }),
       setShowUpdatesTab: (showUpdatesTab) => set({ showUpdatesTab }),
       setShowLabelsInNav: (showLabelsInNav) => set({ showLabelsInNav }),
@@ -63,6 +64,17 @@ export const useAppearanceStore = create<AppearanceState>()(
         showUpdatesTab: state.showUpdatesTab,
         showLabelsInNav: state.showLabelsInNav,
       }),
+      merge: (persistedState, currentState) => {
+        if (persistedState === null || typeof persistedState !== "object") {
+          return currentState;
+        }
+        const persisted = persistedState as Partial<AppearanceState>;
+        return {
+          ...currentState,
+          ...persisted,
+          appLocale: normalizeAppLocale(persisted.appLocale),
+        };
+      },
     },
   ),
 );

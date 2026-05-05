@@ -12,6 +12,7 @@ import {
   type WheelEvent,
 } from "react";
 import { Box } from "@mantine/core";
+import { formatTimeForLocale, useTranslation, type AppLocale } from "../i18n";
 import {
   useReaderStore,
   type ReaderTapAction,
@@ -66,11 +67,8 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return !!target.closest("button,a,input,select,textarea,[role='button']");
 }
 
-function formatClock(date: Date): string {
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function formatClock(date: Date, locale: AppLocale): string {
+  return formatTimeForLocale(locale, date);
 }
 
 function emphasizeWord(word: string): string {
@@ -243,6 +241,7 @@ function ReaderContentInner(
   } = props;
   const general = useReaderStore((state) => state.general);
   const appearance = useReaderStore((state) => state.appearance);
+  const { locale, t } = useTranslation();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const latestProgressRef = useRef(clampProgress(initialProgress));
@@ -469,7 +468,9 @@ function ReaderContentInner(
     const update = () => {
       if (!manager || disposed) return;
       setBattery(
-        `${Math.round(manager.level * 100)}%${manager.charging ? " charging" : ""}`,
+        `${Math.round(manager.level * 100)}%${
+          manager.charging ? ` ${t("readerContent.charging")}` : ""
+        }`,
       );
     };
     void nav
@@ -487,7 +488,7 @@ function ReaderContentInner(
       manager?.removeEventListener?.("levelchange", update);
       manager?.removeEventListener?.("chargingchange", update);
     };
-  }, [general.showBatteryAndTime]);
+  }, [general.showBatteryAndTime, t]);
 
   useEffect(() => {
     if (!general.keepScreenOn) return;
@@ -734,7 +735,7 @@ function ReaderContentInner(
           </span>
           <span>
             {general.showBatteryAndTime
-              ? [battery, formatClock(now)].filter(Boolean).join(" | ")
+              ? [battery, formatClock(now, locale)].filter(Boolean).join(" | ")
               : ""}
           </span>
         </Box>

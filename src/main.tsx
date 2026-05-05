@@ -17,6 +17,7 @@ import { isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
 import { useAppearanceStore } from "./store/appearance";
 import { makeMantineColorScale, resolveMd3Palette } from "./theme/md3";
+import { translate } from "./i18n";
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -38,10 +39,21 @@ function showErrorToast(title: string, error: unknown): void {
  */
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
-    onError: (error) => showErrorToast("Load failed", error),
+    onError: (error) =>
+      showErrorToast(
+        translate(useAppearanceStore.getState().appLocale, "common.loadFailed"),
+        error,
+      ),
   }),
   mutationCache: new MutationCache({
-    onError: (error) => showErrorToast("Action failed", error),
+    onError: (error) =>
+      showErrorToast(
+        translate(
+          useAppearanceStore.getState().appLocale,
+          "common.actionFailed",
+        ),
+        error,
+      ),
   }),
   defaultOptions: {
     queries: {
@@ -102,6 +114,7 @@ function useResolvedColorScheme(): "light" | "dark" {
 }
 
 function AppProviders() {
+  const appLocale = useAppearanceStore((state) => state.appLocale);
   const appThemeId = useAppearanceStore((state) => state.appThemeId);
   const amoledBlack = useAppearanceStore((state) => state.amoledBlack);
   const customAccentColor = useAppearanceStore(
@@ -154,6 +167,7 @@ function AppProviders() {
 
   useEffect(() => {
     const root = document.documentElement;
+    root.lang = appLocale;
     root.style.setProperty("--lnr-background", palette.background);
     root.style.setProperty("--lnr-on-background", palette.onBackground);
     root.style.setProperty("--lnr-surface", palette.surface);
@@ -168,7 +182,7 @@ function AppProviders() {
     root.style.setProperty("--lnr-on-primary", palette.onPrimary);
     document.body.style.background = palette.background;
     document.body.style.color = palette.onBackground;
-  }, [palette]);
+  }, [appLocale, palette]);
 
   return (
     <MantineProvider theme={theme} forceColorScheme={colorScheme}>

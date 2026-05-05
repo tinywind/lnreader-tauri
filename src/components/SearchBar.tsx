@@ -1,4 +1,5 @@
 import { Button, CloseButton, Group, TextInput } from "@mantine/core";
+import { useTranslation } from "../i18n";
 
 interface SearchBarProps {
   value: string;
@@ -18,6 +19,7 @@ export function SearchBar({
   onSubmit,
   placeholder,
 }: SearchBarProps) {
+  const { t } = useTranslation();
   const input = (
     <TextInput
       value={value}
@@ -32,14 +34,14 @@ export function SearchBar({
             }
           : undefined
       }
-      placeholder={placeholder ?? "Search library..."}
+      placeholder={placeholder ?? t("searchBar.defaultPlaceholder")}
       size="sm"
       style={{ flex: 1, maxWidth: 480 }}
       rightSection={
         value.length > 0 ? (
           <CloseButton
             size="sm"
-            aria-label="Clear search"
+            aria-label={t("searchBar.clear")}
             onClick={() => onChange("")}
           />
         ) : null
@@ -53,7 +55,7 @@ export function SearchBar({
     <Group gap="xs" wrap="nowrap" style={{ flex: 1, maxWidth: 600 }}>
       {input}
       <Button size="sm" onClick={onSubmit}>
-        Search
+        {t("common.search")}
       </Button>
     </Group>
   );

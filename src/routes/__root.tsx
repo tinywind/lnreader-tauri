@@ -7,6 +7,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { SiteBrowserOverlay } from "../components/SiteBrowserOverlay";
+import { useTranslation, type TranslationKey } from "../i18n";
 import { startDeepLinkListener } from "../lib/deep-link";
 import { useAppearanceStore } from "../store/appearance";
 import { useBrowseStore } from "../store/browse";
@@ -18,34 +19,39 @@ import { SettingsPage } from "./settings";
 import { UpdatesPage } from "./updates";
 
 type NavItem = {
-  compact: string;
+  compactKey: TranslationKey;
   icon: "library" | "browse" | "updates" | "history" | "settings";
-  label: string;
+  labelKey: TranslationKey;
   to: "/" | "/browse" | "/updates" | "/history" | "/settings";
   visibleWhen?: "updates" | "history";
 };
 
 const NAV_ITEMS: readonly NavItem[] = [
-  { to: "/", label: "Library", compact: "Library", icon: "library" },
-  { to: "/browse", label: "Browse", compact: "Browse", icon: "browse" },
+  { to: "/", labelKey: "nav.library", compactKey: "nav.library", icon: "library" },
+  {
+    to: "/browse",
+    labelKey: "nav.browse",
+    compactKey: "nav.browse",
+    icon: "browse",
+  },
   {
     to: "/updates",
-    label: "Updates",
-    compact: "Updates",
+    labelKey: "nav.updates",
+    compactKey: "nav.updates",
     icon: "updates",
     visibleWhen: "updates",
   },
   {
     to: "/history",
-    label: "History",
-    compact: "History",
+    labelKey: "nav.history",
+    compactKey: "nav.history",
     icon: "history",
     visibleWhen: "history",
   },
   {
     to: "/settings",
-    label: "Settings",
-    compact: "Settings",
+    labelKey: "nav.settings",
+    compactKey: "nav.settings",
     icon: "settings",
   },
 ] as const;
@@ -178,10 +184,10 @@ function AppNavLink({
     <Anchor
       activeOptions={{ exact: item.to === "/" }}
       activeProps={{ className: `${className} ${activeClassName}` }}
-      aria-label={item.label}
+      aria-label={label}
       className={className}
       component={Link}
-      title={item.label}
+      title={label}
       to={item.to}
       underline="never"
     >
@@ -194,6 +200,7 @@ function AppNavLink({
 }
 
 export function RootLayout() {
+  const { t } = useTranslation();
   const showHistoryTab = useAppearanceStore((s) => s.showHistoryTab);
   const showUpdatesTab = useAppearanceStore((s) => s.showUpdatesTab);
   const fullScreenReader = useReaderStore((s) => s.general.fullScreen);
@@ -295,14 +302,14 @@ export function RootLayout() {
           <span className="lnr-rail-mark">L</span>
           <span className="lnr-rail-title">LNReader</span>
         </Anchor>
-        <nav className="lnr-rail-nav" aria-label="Primary">
+        <nav className="lnr-rail-nav" aria-label={t("nav.primary")}>
           {navItems.map((item) => (
             <AppNavLink
               activeClassName="lnr-rail-link--active"
               className="lnr-rail-link"
               item={item}
               key={item.to}
-              label={item.label}
+              label={t(item.labelKey)}
             />
           ))}
         </nav>
@@ -345,14 +352,14 @@ export function RootLayout() {
         {activePersistentPage === null ? <Outlet /> : null}
       </AppShell.Main>
       {hideShellNav ? null : (
-        <nav className="lnr-mobile-nav" aria-label="Primary">
+        <nav className="lnr-mobile-nav" aria-label={t("nav.primary")}>
           {navItems.map((item) => (
             <AppNavLink
               activeClassName="lnr-mobile-nav-link--active"
               className="lnr-mobile-nav-link"
               item={item}
               key={item.to}
-              label={item.label}
+              label={t(item.compactKey)}
             />
           ))}
         </nav>
