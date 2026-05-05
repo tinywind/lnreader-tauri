@@ -20,7 +20,12 @@
     },
     {
       "identifier": "shell:allow-open",
-      "allow": [{ "url": "https://github.com/**" }]
+      "allow": [
+        { "url": "https://**" },
+        { "url": "http://**" },
+        { "url": "https://**:*/**" },
+        { "url": "http://**:*/**" }
+      ]
     }
   ]
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
+  Anchor,
   Badge,
   Button,
   Container,
@@ -15,6 +16,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
   addRepository,
   listRepositories,
@@ -316,6 +318,10 @@ interface InstalledSectionProps {
   uninstalling: boolean;
 }
 
+function openSite(url: string): void {
+  void openExternal(url);
+}
+
 function InstalledSection({
   query,
   onUninstall,
@@ -336,19 +342,37 @@ function InstalledSection({
                       ({plugin.lang} · v{plugin.version})
                     </Text>
                   </Text>
-                  <Text size="xs" c="dimmed" truncate>
+                  <Anchor
+                    size="xs"
+                    c="dimmed"
+                    truncate
+                    onClick={(event) => {
+                      event.preventDefault();
+                      openSite(plugin.site);
+                    }}
+                    title="Open site in default browser"
+                  >
                     {plugin.site}
-                  </Text>
+                  </Anchor>
                 </Stack>
-                <Button
-                  size="xs"
-                  color="red"
-                  variant="subtle"
-                  loading={uninstalling}
-                  onClick={() => onUninstall(plugin.id)}
-                >
-                  Uninstall
-                </Button>
+                <Group gap="xs" wrap="nowrap">
+                  <Button
+                    size="xs"
+                    variant="default"
+                    onClick={() => openSite(plugin.site)}
+                  >
+                    Open site
+                  </Button>
+                  <Button
+                    size="xs"
+                    color="red"
+                    variant="subtle"
+                    loading={uninstalling}
+                    onClick={() => onUninstall(plugin.id)}
+                  >
+                    Uninstall
+                  </Button>
+                </Group>
               </Group>
             </Paper>
           ))}
@@ -420,19 +444,37 @@ function AvailableSection({
                         ({item.lang} · v{item.version})
                       </Text>
                     </Text>
-                    <Text size="xs" c="dimmed" truncate>
+                    <Anchor
+                      size="xs"
+                      c="dimmed"
+                      truncate
+                      onClick={(event) => {
+                        event.preventDefault();
+                        openSite(item.site);
+                      }}
+                      title="Open site in default browser"
+                    >
                       {item.site}
-                    </Text>
+                    </Anchor>
                   </Stack>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    disabled={isInstalled}
-                    loading={installing}
-                    onClick={() => onInstall(item)}
-                  >
-                    {isInstalled ? "Installed" : "Install"}
-                  </Button>
+                  <Group gap="xs" wrap="nowrap">
+                    <Button
+                      size="xs"
+                      variant="default"
+                      onClick={() => openSite(item.site)}
+                    >
+                      Open site
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      disabled={isInstalled}
+                      loading={installing}
+                      onClick={() => onInstall(item)}
+                    >
+                      {isInstalled ? "Installed" : "Install"}
+                    </Button>
+                  </Group>
                 </Group>
               </Paper>
             );
