@@ -12,3 +12,48 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 cargo check --manifest-path src-tauri/Cargo.toml
+
+if [ "${LNR_ANDROID_PRE_PUSH:-0}" = "1" ]; then
+  if ! command -v rustup >/dev/null 2>&1; then
+    echo "rustup is required for Android pre-push builds."
+    exit 1
+  fi
+  if ! command -v sdkmanager >/dev/null 2>&1; then
+    echo "sdkmanager is required for Android pre-push builds."
+    exit 1
+  fi
+
+  ANDROID_SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+  if [ -z "$ANDROID_SDK_DIR" ]; then
+    echo "ANDROID_HOME or ANDROID_SDK_ROOT is required for Android pre-push builds."
+    exit 1
+  fi
+
+  if [ -z "${NDK_HOME:-}" ] && [ -n "${ANDROID_NDK_HOME:-}" ]; then
+    export NDK_HOME="$ANDROID_NDK_HOME"
+  fi
+  if [ -z "${NDK_HOME:-}" ] && [ -d "$ANDROID_SDK_DIR/ndk" ]; then
+    NDK_HOME=$(find "$ANDROID_SDK_DIR/ndk" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)
+    export NDK_HOME
+  fi
+  if [ -z "${NDK_HOME:-}" ]; then
+    echo "NDK_HOME or ANDROID_NDK_HOME is required for Android pre-push builds."
+    exit 1
+  fi
+  export ANDROID_HOME="$ANDROID_SDK_DIR"
+  export ANDROID_SDK_ROOT="$ANDROID_SDK_DIR"
+  export ANDROID_NDK_HOME="$NDK_HOME"
+
+  rustup target add \
+    aarch64-linux-android \
+    armv7-linux-androideabi \
+    i686-linux-android \
+    x86_64-linux-android
+
+  if [ ! -d src-tauri/gen/android ]; then
+    pnpm tauri android init --ci --skip-targets-install
+  fi
+  pnpm tauri android build --debug --apk
+else
+  echo "Skipping Android debug APK build. Set LNR_ANDROID_PRE_PUSH=1 to run it."
+fi
