@@ -19,8 +19,8 @@ compatibility constraints.
 
 | Sprint | Theme | Status |
 |---|---|---|
-| 0 | Toolchain, scaffold, fresh DB schema | not started |
-| 1 | Library tab end-to-end | not started |
+| 0 | Toolchain, scaffold, fresh DB schema | **done** ✅ Win desktop build green; Hello DB row smoke verified |
+| 1 | Library tab end-to-end | in progress |
 | 2 | Plugin scraping + Cloudflare hidden webview | not started |
 | 3 | Reader (paged + scroll) | not started |
 | 4 | Background download (Android foreground service) | not started |
