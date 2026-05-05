@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "sql:default",
+    "sql:allow-execute",
     "deep-link:default",
     "dialog:default",
     {
