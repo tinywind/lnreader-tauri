@@ -11,6 +11,10 @@
     {
       "identifier": "http:default",
       "allow": [{ "url": "https://**" }, { "url": "http://**" }]
+    },
+    {
+      "identifier": "shell:allow-open",
+      "allow": [{ "url": "https://github.com/**" }]
     }
   ]
 }
