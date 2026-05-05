@@ -38,7 +38,7 @@ function asPositiveId(raw: unknown): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-const readerRoute = createRoute({
+export const readerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/reader",
   validateSearch: (search: Record<string, unknown>) => ({

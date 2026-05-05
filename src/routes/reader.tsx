@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   ActionIcon,
+  Alert,
   Container,
   Divider,
   Group,
@@ -17,6 +19,8 @@ import {
   type ClickZone,
   type ReaderContentHandle,
 } from "../components/ReaderContent";
+import { getChapterById } from "../db/queries/chapter";
+import { readerRoute } from "../router";
 import { useReaderStore, type ReaderTheme } from "../store/reader";
 
 const SAMPLE_CHAPTER_HTML = `
@@ -90,6 +94,13 @@ const SAMPLE_CHAPTER_HTML = `
 `;
 
 export function ReaderPage() {
+  const { chapterId } = readerRoute.useSearch();
+  const chapterQuery = useQuery({
+    queryKey: ["chapter", "detail", chapterId] as const,
+    queryFn: () => getChapterById(chapterId),
+    enabled: chapterId > 0,
+  });
+
   const paged = useReaderStore((s) => s.paged);
   const fontSize = useReaderStore((s) => s.fontSize);
   const lineHeight = useReaderStore((s) => s.lineHeight);
@@ -264,11 +275,28 @@ export function ReaderPage() {
         </>
       ) : null}
 
-      <ReaderContent
-        ref={contentRef}
-        html={SAMPLE_CHAPTER_HTML}
-        onClickZone={handleClickZone}
-      />
+      {chapterId > 0 && chapterQuery.data === null ? (
+        <Container size="lg" py="md">
+          <Alert color="orange" title="Chapter not found">
+            No chapter row with id {chapterId} exists in the local DB.
+          </Alert>
+        </Container>
+      ) : chapterId > 0 &&
+        chapterQuery.data &&
+        !chapterQuery.data.isDownloaded ? (
+        <Container size="lg" py="md">
+          <Alert color="blue" title="Not downloaded yet">
+            Open this chapter from the novel detail screen and tap
+            "Download" to fetch its body before reading offline.
+          </Alert>
+        </Container>
+      ) : (
+        <ReaderContent
+          ref={contentRef}
+          html={chapterQuery.data?.content ?? SAMPLE_CHAPTER_HTML}
+          onClickZone={handleClickZone}
+        />
+      )}
     </Stack>
   );
 }
