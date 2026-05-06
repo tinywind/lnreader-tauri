@@ -38,6 +38,9 @@ Thumbs.db
 # Local Claude
 .claude/
 
+# Local Serena
+.serena/
+
 # Temp scratch
 .tmp/
 .playwright-mcp/
