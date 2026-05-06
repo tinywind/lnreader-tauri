@@ -11,7 +11,7 @@
 
 .lnr-updates-title-description {
   color: var(--lnr-design-ink-subtle);
-  font-family: var(--lnr-font-body);
+  font-family: var(--lnr-font-ui);
   font-size: 0.5em;
   font-weight: 400;
   line-height: 1.25;
@@ -209,7 +209,7 @@
 
 .lnr-updates-failure-footer {
   align-items: center;
-  background: rgba(154, 106, 26, 0.08);
+  background: var(--lnr-design-warn-soft);
   border-top: 1px solid var(--lnr-design-rule);
   display: flex;
   gap: 12px;
@@ -248,7 +248,7 @@
 
   .lnr-updates-check-button {
     background: var(--lnr-design-surface);
-    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
+    box-shadow: var(--lnr-design-shadow-floating);
     position: fixed;
     right: 12px;
     top: calc(var(--lnr-safe-area-top) + 12px);

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="norea-app-icon-title">
+  <title id="norea-app-icon-title">Norea webtoon reader app icon</title>
+  <defs>
+    <linearGradient id="norea-bg" x1="96" y1="56" x2="416" y2="456" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#17343A" />
+      <stop offset="0.58" stop-color="#1D5A4E" />
+      <stop offset="1" stop-color="#12282E" />
+    </linearGradient>
+    <linearGradient id="norea-paper" x1="168" y1="80" x2="336" y2="432" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF7DB" />
+      <stop offset="1" stop-color="#F2D99B" />
+    </linearGradient>
+    <clipPath id="norea-strip-clip">
+      <rect x="160" y="80" width="192" height="352" rx="34" />
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#norea-bg)" />
+  <path d="M74 174h364M56 292h400M100 60l340 392M446 92 94 448" fill="none" stroke="#FFF6D8" stroke-width="7" stroke-linecap="round" opacity="0.1" />
+  <circle cx="393" cy="107" r="82" fill="#6EF0B4" opacity="0.13" />
+  <circle cx="121" cy="414" r="68" fill="#FFB15F" opacity="0.14" />
+  <g transform="rotate(-5 256 256)">
+    <rect x="138" y="78" width="224" height="368" rx="49" fill="#07181D" opacity="0.35" />
+    <rect x="146" y="64" width="220" height="384" rx="50" fill="#0C2228" />
+    <rect x="160" y="80" width="192" height="352" rx="34" fill="url(#norea-paper)" />
+    <g clip-path="url(#norea-strip-clip)">
+      <rect x="160" y="80" width="192" height="112" fill="#FFB15F" />
+      <path d="M183 166c21-34 49-39 80-15 25-24 54-20 74 18v23H183z" fill="#FFF2C5" opacity="0.75" />
+      <circle cx="213" cy="123" r="17" fill="#FFE7A3" />
+      <rect x="160" y="192" width="192" height="16" fill="#0C2228" />
+      <rect x="160" y="208" width="192" height="112" fill="#79D6B7" />
+      <path d="M211 238h76c16 0 28 11 28 25 0 15-12 26-28 26h-30l-24 23 6-23h-28c-16 0-28-11-28-26 0-14 12-25 28-25z" fill="#FFF9E8" />
+      <path d="M216 263h72M216 281h43" fill="none" stroke="#17343A" stroke-width="8" stroke-linecap="round" opacity="0.85" />
+      <rect x="160" y="320" width="192" height="16" fill="#0C2228" />
+      <rect x="160" y="336" width="192" height="96" fill="#16363C" />
+      <path d="M190 390c30-48 58-48 84 0 14-24 30-27 50 0v42H190z" fill="#F6DC97" />
+      <path d="M194 363h116" fill="none" stroke="#FFF3C9" stroke-width="12" stroke-linecap="round" opacity="0.9" />
+    </g>
+    <rect x="160" y="80" width="192" height="352" rx="34" fill="none" stroke="#0C2228" stroke-width="12" />
+    <path d="M315 79c24 5 39 22 38 48l-64-40c8-8 17-10 26-8z" fill="#FF6F59" />
+    <path d="M291 88c23 4 42 18 60 38-26-8-45-19-60-38z" fill="#FFF3C9" opacity="0.55" />
+  </g>
+</svg>

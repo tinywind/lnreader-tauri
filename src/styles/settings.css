@@ -87,7 +87,7 @@
 
 .lnr-settings-nav-item:hover,
 .lnr-settings-nav-item:focus-visible {
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--lnr-design-hover-overlay);
   color: var(--lnr-design-ink);
 }
 

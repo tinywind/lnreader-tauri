@@ -40,14 +40,15 @@ import {
 import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
 import {
   DEFAULT_APPEARANCE,
-  type AppThemeMode,
+  normalizeAppThemeId,
+  normalizeAppThemeMode,
   useAppearanceStore,
 } from "../store/appearance";
 import {
   DEFAULT_USER_AGENT,
   useUserAgentStore,
 } from "../store/user-agent";
-import { APP_THEME_OPTIONS, type AppThemeId } from "../theme/md3";
+import { APP_THEME_OPTIONS } from "../theme/md3";
 import "../styles/settings.css";
 
 type Status =
@@ -179,7 +180,7 @@ function AppSettingsSection() {
             ]}
             value={appearance.themeMode}
             onChange={(themeMode) =>
-              appearance.setThemeMode((themeMode ?? "system") as AppThemeMode)
+              appearance.setThemeMode(normalizeAppThemeMode(themeMode))
             }
           />
         </SettingsFieldRow>
@@ -191,7 +192,7 @@ function AppSettingsSection() {
             data={APP_THEME_OPTIONS}
             value={appearance.appThemeId}
             onChange={(appThemeId) =>
-              appearance.setAppThemeId((appThemeId ?? "default") as AppThemeId)
+              appearance.setAppThemeId(normalizeAppThemeId(appThemeId))
             }
           />
         </SettingsFieldRow>

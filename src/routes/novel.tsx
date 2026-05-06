@@ -1,4 +1,10 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -46,6 +52,15 @@ import { useSiteBrowserStore } from "../store/site-browser";
 import "../styles/novel.css";
 
 const FINISHED_PROGRESS = 100;
+const NOVEL_TITLE_FONT_SIZES = [
+  "1.55rem",
+  "1.42rem",
+  "1.3rem",
+  "1.18rem",
+  "1.05rem",
+] as const;
+
+type NovelTitleFontSize = (typeof NOVEL_TITLE_FONT_SIZES)[number];
 
 function novelKey(id: number) {
   return ["novel", "detail", id] as const;
@@ -69,6 +84,74 @@ function splitGenres(genres: string | null): string[] {
     .split(/[|,]/)
     .map((genre) => genre.trim())
     .filter(Boolean);
+}
+
+function useAutoFitNovelTitle(title: string) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [fontSize, setFontSize] = useState<NovelTitleFontSize>(
+    NOVEL_TITLE_FONT_SIZES[0],
+  );
+
+  useEffect(() => {
+    const element = titleRef.current;
+    if (!element || typeof window === "undefined") return;
+
+    let frame = 0;
+
+    const overflows = () =>
+      element.scrollHeight > element.clientHeight + 1 ||
+      element.scrollWidth > element.clientWidth + 1;
+
+    const fitTitle = () => {
+      let nextFontSize =
+        NOVEL_TITLE_FONT_SIZES[NOVEL_TITLE_FONT_SIZES.length - 1];
+
+      for (const size of NOVEL_TITLE_FONT_SIZES) {
+        element.style.setProperty("--lnr-novel-title-font-size", size);
+        if (!overflows()) {
+          nextFontSize = size;
+          break;
+        }
+      }
+
+      element.style.setProperty(
+        "--lnr-novel-title-font-size",
+        nextFontSize,
+      );
+      setFontSize((currentFontSize) =>
+        currentFontSize === nextFontSize ? currentFontSize : nextFontSize,
+      );
+    };
+
+    const scheduleFit = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(fitTitle);
+    };
+
+    scheduleFit();
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scheduleFit);
+
+    resizeObserver?.observe(element);
+    if (element.parentElement) resizeObserver?.observe(element.parentElement);
+    window.addEventListener("resize", scheduleFit);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleFit);
+    };
+  }, [title]);
+
+  return {
+    titleRef,
+    titleStyle: {
+      "--lnr-novel-title-font-size": fontSize,
+    } as CSSProperties,
+  };
 }
 
 function getChapterReadingProgress(chapter: ChapterRow): number {
@@ -518,6 +601,7 @@ function NovelWorkspace({
   toggleBusy,
 }: NovelWorkspaceProps) {
   const { t } = useTranslation();
+  const { titleRef, titleStyle } = useAutoFitNovelTitle(novel.name);
   const genres = splitGenres(novel.genres);
   const firstChapter = findFirstChapter(chapters);
   const lastReadChapter = findLastReadChapter(chapters, lastReadChapterId);
@@ -536,15 +620,31 @@ function NovelWorkspace({
     </ConsolePanel>
   );
 
-  const renderInfoPanel = () => (
+  const renderGenreTags = () =>
+    genres.length > 0 ? (
+      <div className="lnr-novel-tags-row" aria-label={t("library.tags.title")}>
+        {genres.map((genre) => (
+          <span className="lnr-novel-genre-chip" key={genre}>
+            <ConsoleChip>{genre}</ConsoleChip>
+          </span>
+        ))}
+      </div>
+    ) : null;
+
+  const renderInfoPanel = (isDesktop: boolean) => (
     <ConsolePanel className="lnr-novel-info-panel">
       <div className="lnr-novel-title-row">
         <BackIconButton className="lnr-novel-icon-button" onClick={onBack} />
         <div className="lnr-novel-title-copy">
-          <Title className="lnr-novel-title" order={1}>
+          <Title
+            className="lnr-novel-title"
+            order={1}
+            ref={isDesktop ? titleRef : undefined}
+            style={isDesktop ? titleStyle : undefined}
+          >
             {novel.name}
           </Title>
-          <Group gap="xs" mt={6} wrap="wrap">
+          <Group className="lnr-novel-meta-row" gap="xs" mt={6} wrap="wrap">
             {novel.author ? (
               <Text className="lnr-novel-meta">
                 {t("novel.author", { name: novel.author })}
@@ -615,16 +715,6 @@ function NovelWorkspace({
             </NovelReadButton>
           </div>
         </div>
-
-        {genres.length > 0 ? (
-          <div className="lnr-novel-tags-scroll" aria-label={t("library.tags.title")}>
-            {genres.map((genre) => (
-              <span className="lnr-novel-genre-chip" key={genre}>
-                <ConsoleChip>{genre}</ConsoleChip>
-              </span>
-            ))}
-          </div>
-        ) : null}
       </div>
     </ConsolePanel>
   );
@@ -634,11 +724,14 @@ function NovelWorkspace({
       className="lnr-novel-summary-panel"
       title={t("common.summary")}
     >
-      {novel.summary ? (
-        <Text className="lnr-novel-summary-text">{novel.summary}</Text>
-      ) : (
-        <Text className="lnr-novel-empty-copy">{t("novel.noSummary")}</Text>
-      )}
+      <div className="lnr-novel-summary-content">
+        {novel.summary ? (
+          <Text className="lnr-novel-summary-text">{novel.summary}</Text>
+        ) : (
+          <Text className="lnr-novel-empty-copy">{t("novel.noSummary")}</Text>
+        )}
+        {renderGenreTags()}
+      </div>
     </ConsolePanel>
   );
 
@@ -646,12 +739,12 @@ function NovelWorkspace({
     <div className="lnr-novel-workspace">
       <div className="lnr-novel-hero-desktop">
         {renderCoverPanel()}
-        {renderInfoPanel()}
+        {renderInfoPanel(true)}
         {renderSummaryPanel()}
       </div>
 
       <div className="lnr-novel-hero-mobile">
-        {renderInfoPanel()}
+        {renderInfoPanel(false)}
         <div className="lnr-novel-cover-summary-card">
           {renderCoverPanel()}
           {renderSummaryPanel()}

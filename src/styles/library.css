@@ -93,7 +93,7 @@
 }
 
 .lnr-library-category:hover {
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--lnr-design-hover-overlay);
   color: var(--lnr-design-ink);
 }
 
@@ -516,7 +516,7 @@
 }
 
 .lnr-library-selection-icon:hover {
-  background: rgba(255, 255, 255, 0.55);
+  background: var(--lnr-design-selection-hover-overlay);
   opacity: 1;
 }
 

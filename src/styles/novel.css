@@ -53,19 +53,27 @@
 }
 
 .lnr-novel-title-row {
-  align-items: start;
+  align-items: stretch;
   display: grid;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   gap: 10px;
   grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 0;
 }
 
 .lnr-novel-title-copy {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 7.25rem;
   min-width: 0;
+  overflow: hidden;
 }
 
 .lnr-novel-title-actions {
   align-items: center;
+  align-self: start;
   display: inline-flex;
   gap: 6px;
   justify-content: flex-end;
@@ -73,12 +81,20 @@
 
 .lnr-novel-title {
   color: var(--lnr-design-ink);
+  flex: 0 1 auto;
   font-family: var(--lnr-font-display);
-  font-size: 1.55rem;
+  font-size: var(--lnr-novel-title-font-size, 1.55rem);
   font-weight: 650;
   letter-spacing: 0;
   line-height: 1.12;
   margin: 0;
+  min-height: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.lnr-novel-meta-row {
+  flex: 0 0 auto;
 }
 
 .lnr-novel-meta,
@@ -97,9 +113,10 @@
 
 .lnr-novel-status-block {
   display: flex;
-  flex: 1 1 0;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 10px;
+  margin-top: auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -116,15 +133,13 @@
   padding: 0;
 }
 
-.lnr-novel-tags-scroll {
+.lnr-novel-tags-row {
   align-content: flex-start;
   display: flex;
-  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 10px;
   min-height: 0;
-  overflow-y: auto;
-  padding: 0 4px 2px 0;
 }
 
 .lnr-novel-genre-chip {
@@ -132,7 +147,7 @@
   max-width: 100%;
 }
 
-.lnr-novel-tags-scroll .lnr-console-chip {
+.lnr-novel-tags-row .lnr-console-chip {
   max-width: 100%;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -211,16 +226,19 @@
   overflow: hidden;
 }
 
-.lnr-novel-summary-text,
-.lnr-novel-empty-copy {
-  color: var(--lnr-design-ink-muted);
+.lnr-novel-summary-content {
   flex: 1;
-  font-size: 0.8125rem;
-  line-height: 1.55;
-  margin: 0;
   min-height: 0;
   overflow: auto;
   padding: 12px 14px 14px;
+}
+
+.lnr-novel-summary-text,
+.lnr-novel-empty-copy {
+  color: var(--lnr-design-ink-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  margin: 0;
   white-space: pre-wrap;
 }
 
@@ -516,6 +534,26 @@
     padding: 14px 16px;
   }
 
+  .lnr-novel-title-row {
+    align-items: start;
+    flex: 0 0 auto;
+    min-height: auto;
+  }
+
+  .lnr-novel-title-copy {
+    align-self: auto;
+    display: block;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .lnr-novel-title {
+    flex: initial;
+    font-size: 1.55rem;
+    overflow: visible;
+  }
+
   .lnr-novel-cover-panel {
     align-items: flex-start;
     flex-direction: column;
@@ -535,8 +573,7 @@
     min-height: 0;
   }
 
-  .lnr-novel-summary-text,
-  .lnr-novel-empty-copy {
+  .lnr-novel-summary-content {
     padding: 0;
   }
 
@@ -556,6 +593,7 @@
     flex-direction: row;
     flex-wrap: wrap;
     gap: 6px 8px;
+    margin-top: 0;
     min-height: auto;
     overflow: visible;
     padding: 8px 10px;
@@ -568,13 +606,6 @@
 
   .lnr-novel-status-block button.lnr-console-chip {
     padding-inline: 9px;
-  }
-
-  .lnr-novel-tags-scroll {
-    flex: 0 1 100%;
-    max-height: min(32vh, 160px);
-    min-height: 32px;
-    padding-top: 2px;
   }
 
   .lnr-novel-genre-chip {

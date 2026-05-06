@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { normalizeAppLocale, type AppLocale } from "../i18n/locales";
-import type { AppThemeId } from "../theme/md3";
+import { APP_THEMES, type AppThemeId } from "../theme/md3";
 
 export type AppThemeMode = "system" | "light" | "dark";
 
@@ -14,8 +14,8 @@ interface AppearanceState {
   showHistoryTab: boolean;
   showUpdatesTab: boolean;
   showLabelsInNav: boolean;
-  setThemeMode: (themeMode: AppThemeMode) => void;
-  setAppThemeId: (appThemeId: AppThemeId) => void;
+  setThemeMode: (themeMode: unknown) => void;
+  setAppThemeId: (appThemeId: unknown) => void;
   setAmoledBlack: (amoledBlack: boolean) => void;
   setCustomAccentColor: (customAccentColor: string) => void;
   setAppLocale: (appLocale: string) => void;
@@ -36,12 +36,33 @@ export const DEFAULT_APPEARANCE = {
   showLabelsInNav: true,
 };
 
+const APP_THEME_IDS = new Set<string>(APP_THEMES.map((theme) => theme.id));
+
+export function normalizeAppThemeMode(themeMode: unknown): AppThemeMode {
+  switch (themeMode) {
+    case "system":
+    case "light":
+    case "dark":
+      return themeMode;
+    default:
+      return DEFAULT_APPEARANCE.themeMode;
+  }
+}
+
+export function normalizeAppThemeId(appThemeId: unknown): AppThemeId {
+  return typeof appThemeId === "string" && APP_THEME_IDS.has(appThemeId)
+    ? (appThemeId as AppThemeId)
+    : DEFAULT_APPEARANCE.appThemeId;
+}
+
 export const useAppearanceStore = create<AppearanceState>()(
   persist(
     (set) => ({
       ...DEFAULT_APPEARANCE,
-      setThemeMode: (themeMode) => set({ themeMode }),
-      setAppThemeId: (appThemeId) => set({ appThemeId }),
+      setThemeMode: (themeMode) =>
+        set({ themeMode: normalizeAppThemeMode(themeMode) }),
+      setAppThemeId: (appThemeId) =>
+        set({ appThemeId: normalizeAppThemeId(appThemeId) }),
       setAmoledBlack: (amoledBlack) => set({ amoledBlack }),
       setCustomAccentColor: (customAccentColor) =>
         set({ customAccentColor: customAccentColor.trim() }),
@@ -72,6 +93,8 @@ export const useAppearanceStore = create<AppearanceState>()(
         return {
           ...currentState,
           ...persisted,
+          themeMode: normalizeAppThemeMode(persisted.themeMode),
+          appThemeId: normalizeAppThemeId(persisted.appThemeId),
           appLocale: normalizeAppLocale(persisted.appLocale),
         };
       },

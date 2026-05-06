@@ -11,7 +11,6 @@ import { useTranslation, type TranslationKey } from "../i18n";
 import { startDeepLinkListener } from "../lib/deep-link";
 import { useAppearanceStore } from "../store/appearance";
 import { useBrowseStore } from "../store/browse";
-import { useReaderStore } from "../store/reader";
 import { BrowsePage } from "./browse";
 import { HistoryPage } from "./history";
 import { LibraryPage } from "./library";
@@ -201,9 +200,9 @@ function AppNavLink({
 
 export function RootLayout() {
   const { t } = useTranslation();
+  const showLabelsInNav = useAppearanceStore((s) => s.showLabelsInNav);
   const showHistoryTab = useAppearanceStore((s) => s.showHistoryTab);
   const showUpdatesTab = useAppearanceStore((s) => s.showUpdatesTab);
-  const fullScreenReader = useReaderStore((s) => s.general.fullScreen);
   const location = useRouterState({
     select: (state) => ({
       pathname: state.location.pathname,
@@ -213,7 +212,6 @@ export function RootLayout() {
   const pathname = location.pathname;
   const search = asSearchRecord(location.search);
   const navigate = useNavigate();
-  const hideShellNav = fullScreenReader && pathname === "/reader";
   const activePersistentPage = getPersistentPage(pathname);
   const [visitedPages, setVisitedPages] = useState<ReadonlySet<PersistentPage>>(
     () =>
@@ -289,20 +287,35 @@ export function RootLayout() {
   );
 
   return (
-    <AppShell
-      navbar={{
-        width: { sm: 56, lg: 184 },
+      <AppShell
+        navbar={{
+        width: showLabelsInNav ? { sm: 56, "1201px": 184 } : 56,
         breakpoint: "sm",
-        collapsed: { mobile: true, desktop: hideShellNav },
+        collapsed: { mobile: true },
       }}
       padding={0}
     >
-      <AppShell.Navbar className="lnr-app-rail">
-        <Anchor className="lnr-rail-brand" component={Link} to="/" underline="never">
-          <span className="lnr-rail-mark">L</span>
+      <AppShell.Navbar className="lnr-app-rail" data-show-labels={showLabelsInNav}>
+        <Anchor
+          aria-label="Norea"
+          className="lnr-rail-brand"
+          component={Link}
+          to="/"
+          underline="never"
+        >
+          <img
+            alt=""
+            aria-hidden="true"
+            className="lnr-rail-mark"
+            src="/app-icon.svg"
+          />
           <span className="lnr-rail-title">Norea</span>
         </Anchor>
-        <nav className="lnr-rail-nav" aria-label={t("nav.primary")}>
+        <nav
+          className="lnr-rail-nav"
+          data-show-labels={showLabelsInNav}
+          aria-label={t("nav.primary")}
+        >
           {navItems.map((item) => (
             <AppNavLink
               activeClassName="lnr-rail-link--active"
@@ -351,19 +364,21 @@ export function RootLayout() {
         ) : null}
         {activePersistentPage === null ? <Outlet /> : null}
       </AppShell.Main>
-      {hideShellNav ? null : (
-        <nav className="lnr-mobile-nav" aria-label={t("nav.primary")}>
-          {navItems.map((item) => (
-            <AppNavLink
-              activeClassName="lnr-mobile-nav-link--active"
-              className="lnr-mobile-nav-link"
-              item={item}
-              key={item.to}
-              label={t(item.compactKey)}
-            />
-          ))}
-        </nav>
-      )}
+      <nav
+        className="lnr-mobile-nav"
+        data-show-labels={showLabelsInNav}
+        aria-label={t("nav.primary")}
+      >
+        {navItems.map((item) => (
+          <AppNavLink
+            activeClassName="lnr-mobile-nav-link--active"
+            className="lnr-mobile-nav-link"
+            item={item}
+            key={item.to}
+            label={t(item.compactKey)}
+          />
+        ))}
+      </nav>
       <SiteBrowserOverlay />
     </AppShell>
   );
