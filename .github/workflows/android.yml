@@ -56,8 +56,6 @@ jobs:
         run: |
           rustup target add \
             aarch64-linux-android \
-            armv7-linux-androideabi \
-            i686-linux-android \
             x86_64-linux-android
 
       - uses: Swatinem/rust-cache@v2
@@ -112,7 +110,7 @@ jobs:
             echo "::warning::Android release signing secrets are not configured; using the committed public test release key."
           fi
 
-      - name: Build universal and split release APKs
+      - name: Build arm64 and x86_64 release APKs
         run: pnpm android:apk:release
 
       - name: Collect signed release APKs
@@ -122,7 +120,7 @@ jobs:
           release_apk_root="src-tauri/gen/android/app/build/outputs/apk"
           mkdir -p "$RELEASE_SIGNED_APK_DIR"
 
-          mapfile -t release_apks < <(find "$release_apk_root" -type f -path "*/release/*.apk" ! -name "*-aligned.apk" | sort)
+          mapfile -t release_apks < <(find "$release_apk_root" -type f -path "*/release/*.apk" ! -name "*-aligned.apk" ! -name "*-unsigned.apk" | sort)
           if [ "${#release_apks[@]}" -eq 0 ]; then
             echo "No release APKs found under $release_apk_root."
             exit 1
@@ -141,13 +139,31 @@ jobs:
             (cd "$RELEASE_SIGNED_APK_DIR" && sha256sum "$(basename "$collected_apk")") >> "$checksum_file"
           done
 
-      - name: Upload signed release APKs
+      - name: Upload arm64 signed release APK
         uses: actions/upload-artifact@v7
         with:
-          name: lnreader-tauri-signed-release-apks
-          path: |
-            ${{ env.RELEASE_SIGNED_APK_DIR }}/*.apk
-            ${{ env.RELEASE_SIGNED_APK_DIR }}/SHA256SUMS.txt
+          name: lnreader-tauri-arm64-signed-release-apk
+          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/lnreader-tauri-arm64-*.apk
+          if-no-files-found: error
+          archive: false
+          compression-level: 0
+          retention-days: 3
+
+      - name: Upload x86_64 signed release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: lnreader-tauri-x86_64-signed-release-apk
+          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/lnreader-tauri-x86_64-*.apk
+          if-no-files-found: error
+          archive: false
+          compression-level: 0
+          retention-days: 3
+
+      - name: Upload signed release APK checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: lnreader-tauri-signed-release-apk-checksums
+          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/SHA256SUMS.txt
           if-no-files-found: error
           archive: false
           compression-level: 0
