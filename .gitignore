@@ -45,7 +45,15 @@ Thumbs.db
 .env.*.local
 
 # Local Claude
-.claude/
+.claude/settings.local.json
+.claude/settings.local.*.json
+.claude/**/settings.local.json
+.claude/**/settings.local.*.json
+.claude/worktrees/
+.claude/.tmp/
+.claude/tmp/
+.claude/cache/
+.claude/logs/
 
 # Local Serena
 .serena/

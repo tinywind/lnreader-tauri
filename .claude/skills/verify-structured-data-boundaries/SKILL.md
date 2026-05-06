@@ -1,0 +1,16 @@
+---
+name: verify-structured-data-boundaries
+description: Verify stable Norea app data uses named types while plugin/raw external data stays at explicit opaque boundaries.
+---
+
+# Verify Structured Data Boundaries
+
+Use after editing app data models, plugin runtime payloads, IPC DTOs, backup manifests, repository metadata, or parser boundaries.
+
+## Rules
+
+- Stable app data must use named TypeScript, Rust, or domain types instead of `any`, broad `Record<string, unknown>`, `serde_json::Value`, or ad hoc maps.
+- Drizzle rows, IPC inputs/outputs, backup manifests, repository metadata, reader settings, library/category/chapter data should stay schema-backed.
+- Plugin-owned dynamic data may remain opaque only at explicit boundaries: plugin settings, plugin contract payloads, raw HTML, repository source JSON before validation, and external site response passthrough.
+- Do not widen opaque boundaries into app-owned state. Normalize or validate before storing in SQLite, passing through IPC, or rendering.
+- Plugin-owned fetch boundary changes should also run `verify-plugin-fetch-contract`.
