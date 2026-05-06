@@ -2,12 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { load } from "cheerio";
 import dayjs from "dayjs";
 import { Parser } from "htmlparser2";
+import { androidWebviewExtract } from "../android-scraper";
 import {
   createPluginFetch,
   createPluginFetchText,
   pluginFetch,
   pluginFetchText,
 } from "../http";
+import { isAndroidRuntime } from "../tauri-runtime";
 import { NovelStatus } from "./types";
 
 interface WebViewFetchOptions {
@@ -33,6 +35,14 @@ async function webViewFetch(
   url: string,
   options: WebViewFetchOptions = {},
 ): Promise<string> {
+  if (isAndroidRuntime()) {
+    return androidWebviewExtract(
+      url,
+      options.beforeContentScript ?? null,
+      options.timeoutMs ?? 30_000,
+    );
+  }
+
   return invoke<string>("webview_extract", {
     url,
     beforeScript: options.beforeContentScript ?? null,

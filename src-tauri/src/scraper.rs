@@ -1,6 +1,6 @@
-//! Scraper WebView: single persistent Tauri child Webview embedded
-//! in the main window that owns the per-host cookie jar for plugin
-//! fetches.
+//! Desktop scraper WebView: single persistent Tauri child Webview
+//! embedded in the main window that owns the per-host cookie jar for
+//! plugin fetches.
 //!
 //! Architecture:
 //!
@@ -42,9 +42,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 #[cfg(desktop)]
-use tauri::{
-    LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
-};
+use tauri::{LogicalPosition, LogicalSize, Webview, WebviewBuilder};
+#[cfg(desktop)]
+use tauri::{Manager, Url, WebviewUrl};
 #[cfg(desktop)]
 use tokio::sync::oneshot;
 #[cfg(desktop)]
@@ -113,6 +113,9 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
 })();
 "##;
 
+#[cfg(desktop)]
+type ScraperWebview = Webview<tauri::Wry>;
+
 /// Inbound JSON shape from `webview_fetch` callers (matches the
 /// browser `RequestInit` subset our pluginFetch surfaces).
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -155,7 +158,7 @@ pub struct ScraperState;
 const HIDDEN_SIZE: f64 = 1.0;
 
 #[cfg(desktop)]
-fn scraper_handle(app: &AppHandle) -> Result<Webview<tauri::Wry>, String> {
+fn scraper_handle(app: &AppHandle) -> Result<ScraperWebview, String> {
     app.get_webview(SCRAPER_LABEL)
         .ok_or_else(|| "scraper: child webview not yet attached".to_string())
 }
@@ -324,7 +327,19 @@ pub async fn scraper_navigate(
     Ok(())
 }
 
-#[cfg(not(desktop))]
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn scraper_navigate(
+    _app: AppHandle,
+    _state: tauri::State<'_, ScraperState>,
+    url: String,
+) -> Result<(), String> {
+    Err(format!(
+        "scraper_navigate is handled by the Android native scraper bridge: {url}"
+    ))
+}
+
+#[cfg(not(any(desktop, target_os = "android")))]
 #[tauri::command]
 pub async fn scraper_navigate(
     _app: AppHandle,
@@ -349,7 +364,7 @@ struct WebviewFetchScriptResult {
 
 #[cfg(desktop)]
 async fn eval_json<T: DeserializeOwned>(
-    scraper: &Webview<tauri::Wry>,
+    scraper: &ScraperWebview,
     script: String,
 ) -> Result<T, String> {
     let (tx, rx) = oneshot::channel::<String>();
@@ -390,7 +405,7 @@ fn same_origin(left: &Url, right: &Url) -> bool {
 }
 
 #[cfg(desktop)]
-fn scraper_is_at_origin(scraper: &Webview<tauri::Wry>, target: &Url) -> bool {
+fn scraper_is_at_origin(scraper: &ScraperWebview, target: &Url) -> bool {
     scraper
         .url()
         .map(|current| same_origin(&current, target))
@@ -398,7 +413,7 @@ fn scraper_is_at_origin(scraper: &Webview<tauri::Wry>, target: &Url) -> bool {
 }
 
 #[cfg(desktop)]
-async fn document_is_ready(scraper: &Webview<tauri::Wry>) -> bool {
+async fn document_is_ready(scraper: &ScraperWebview) -> bool {
     let ready = eval_json::<String>(
         scraper,
         r#"(function () { return document.readyState || "loading"; })()"#
@@ -410,7 +425,7 @@ async fn document_is_ready(scraper: &Webview<tauri::Wry>) -> bool {
 
 #[cfg(desktop)]
 async fn prepare_fetch_context(
-    scraper: &Webview<tauri::Wry>,
+    scraper: &ScraperWebview,
     context_url: Option<&str>,
 ) -> Result<(), String> {
     let Some(context_url) = context_url else {

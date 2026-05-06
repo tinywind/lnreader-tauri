@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { androidWebviewFetch } from "./android-scraper";
+import { isAndroidRuntime } from "./tauri-runtime";
 
 export interface HttpInit {
   method?: string;
@@ -100,11 +102,15 @@ export async function pluginFetch(
   url: string,
   init: HttpInit = {},
 ): Promise<Response> {
-  const result = await invoke<FetchResultWire>("webview_fetch", {
-    url,
-    init: toWireInit(init),
-    contextUrl: init.contextUrl ?? null,
-  });
+  const wireInit = toWireInit(init);
+  const contextUrl = init.contextUrl ?? null;
+  const result = isAndroidRuntime()
+    ? await androidWebviewFetch(url, wireInit, contextUrl)
+    : await invoke<FetchResultWire>("webview_fetch", {
+        url,
+        init: wireInit,
+        contextUrl,
+      });
   const response = new Response(result.body, {
     status: result.status,
     statusText: result.statusText,
