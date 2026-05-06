@@ -1,68 +1,72 @@
 # Plugin Scraper Contract
 
-> Tier 1.4. The exact JS module shape that source plugins must export.
-> Reproduced verbatim so the **existing plugin ecosystem** at
-> [lnreader/lnreader-plugins](https://github.com/lnreader/lnreader-plugins)
-> continues to work in the Tauri rewrite. Sourced from upstream
-> `src/plugins/types/index.ts`, `src/plugins/types/filterTypes.ts`,
-> `src/plugins/pluginManager.ts`, and `src/plugins/helpers/*` at
-> commit `639a2538`.
+This is the living compatibility reference for LNReaderTauri source plugins.
+It is based on the upstream lnreader plugin shape at commit `639a2538`, but the
+local implementation is the source of truth for host behavior:
 
-The economic case for keeping this contract identical: hundreds of
-community-authored plugins already exist. If the new app re-uses this
-contract, users get continuity on day one and the lnreader-plugins
-repository becomes the shared catalog. Breaking the contract is only
-acceptable as a last resort.
+- `src/lib/plugins/types.ts` - TypeScript contract used by app code.
+- `src/lib/plugins/manager.ts` - repository fetch, install, rehydrate, uninstall.
+- `src/lib/plugins/sandbox.ts` - plugin module evaluation.
+- `src/lib/plugins/shims.ts` - supported `require()` modules.
+- `src/lib/plugins/inputs.ts` - app-managed plugin input storage helpers.
+- `src/lib/http.ts` and `src-tauri/src/scraper.rs` - plugin fetch path.
 
-## 1. Plugin module shape
+The goal is compatibility with common `lnreader-plugins` sources without
+binding the whole app to upstream React Native internals.
 
-A plugin is a CommonJS module evaluated through `Function('require', 'module', code)(_require, {})`. It must populate `module.exports.default` with an object satisfying the `Plugin` interface:
+## Module Shape
+
+A source plugin is a CommonJS module evaluated in a sandbox. It must assign the
+plugin object to `module.exports.default`.
 
 ```ts
 export interface PluginItem {
   id: string;
   name: string;
-  site: string;       // canonical URL, e.g. "https://boxnovel.com"
-  lang: string;       // ISO 639 code, e.g. "en", "ko", "zh"
-  version: string;    // semver
-  url: string;        // raw source URL of this index.js (used for updates)
+  site: string;
+  lang: string;
+  version: string;
+  url: string;
   iconUrl: string;
-  customJS?: string;  // optional override URL injected into reader
+  customJS?: string;
   customCSS?: string;
   hasUpdate?: boolean;
   hasSettings?: boolean;
 }
 
 export interface Plugin extends PluginItem {
-  imageRequestInit: {
+  imageRequestInit?: {
     method?: string;
-    headers: Record<string, string>; // must include User-Agent (filled if missing)
+    headers: Record<string, string>;
     body?: string;
   };
-  filters?: Filters;          // see §3
-  pluginSettings?: PluginSettings; // see §4
+  filters?: Filters;
+  pluginInputs?: PluginInputSchema;
+  pluginSettings?: PluginInputSchema | Record<string, unknown>;
   popularNovels: (
     pageNo: number,
     options?: { showLatestNovels?: boolean; filters?: FilterToValues<Filters> },
   ) => Promise<NovelItem[]>;
   parseNovel: (novelPath: string) => Promise<SourceNovel>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
-  parseChapter: (chapterPath: string) => Promise<string>;  // returns HTML
+  parseChapter: (chapterPath: string) => Promise<string>;
   searchNovels: (searchTerm: string, pageNo: number) => Promise<NovelItem[]>;
   resolveUrl?: (path: string, isNovel?: boolean) => string;
   webStorageUtilized?: boolean;
 }
 ```
 
-The host always **enforces** `imageRequestInit.headers['User-Agent']`. If the plugin omits one, the host injects the device UA before any image fetch. This stops broken plugins from leaking the underlying engine's UA.
+The repository index supplies `PluginItem` metadata. The installed plugin source
+may omit some metadata; `PluginManager` falls back to the repository item before
+persisting the installed plugin.
 
-## 2. Domain types
+## Domain Types
 
 ```ts
 export interface NovelItem {
-  id: undefined;        // server-side id; the host assigns the local DB id
+  id?: undefined;
   name: string;
-  path: string;         // plugin-specific identifier; passed back as-is
+  path: string;
   cover?: string;
 }
 
@@ -70,28 +74,28 @@ export interface ChapterItem {
   name: string;
   path: string;
   chapterNumber?: number;
-  releaseTime?: string; // ISO8601 preferred; UI does best-effort parse
-  page?: string;        // pagination cursor for parsePage()
+  releaseTime?: string;
+  page?: string;
 }
 
 export enum NovelStatus {
-  Unknown = 'Unknown',
-  Ongoing = 'Ongoing',
-  Completed = 'Completed',
-  Licensed = 'Licensed',
-  PublishingFinished = 'Publishing Finished',
-  Cancelled = 'Cancelled',
-  OnHiatus = 'On Hiatus',
+  Unknown = "Unknown",
+  Ongoing = "Ongoing",
+  Completed = "Completed",
+  Licensed = "Licensed",
+  PublishingFinished = "Publishing Finished",
+  Cancelled = "Cancelled",
+  OnHiatus = "On Hiatus",
 }
 
 export interface SourceNovel extends NovelItem {
-  genres?: string;       // comma- or pipe-delimited; UI splits/normalizes
+  genres?: string;
   summary?: string;
   author?: string;
   artist?: string;
   status?: NovelStatus;
   chapters: ChapterItem[];
-  totalPages?: number;   // for novels with paginated chapter lists
+  totalPages?: number;
 }
 
 export interface SourcePage {
@@ -99,251 +103,272 @@ export interface SourcePage {
 }
 ```
 
-## 3. Filters (`Filters`)
+The host assigns local database ids. Plugin `path` values are opaque and must be
+passed back to the same plugin.
 
-`Filters` is `Record<string, { label: string } & FilterShape>`. The host renders these as form controls in the source's filter sheet.
+## Filters
 
-```ts
-enum FilterTypes {
-  TextInput              = 'Text',
-  Picker                 = 'Picker',
-  CheckboxGroup          = 'Checkbox',
-  Switch                 = 'Switch',
-  ExcludableCheckboxGroup = 'XCheckbox',
-}
-```
+`Filters` is a record keyed by filter id. The host renders each filter as a
+form control and passes resolved values to `popularNovels`.
 
-| `type` | Value type | UI |
-|---|---|---|
+| Type | Value | UI |
+| --- | --- | --- |
 | `Text` | `string` | text input |
-| `Picker` | `string` (one of `options.value`) | radio / dropdown |
-| `Checkbox` | `string[]` | multi-select |
+| `Picker` | `string` | single-select control |
+| `Checkbox` | `string[]` | multi-select control |
 | `Switch` | `boolean` | toggle |
-| `XCheckbox` | `{ include?: string[]; exclude?: string[] }` | tri-state checkbox |
+| `XCheckbox` | `{ include?: string[]; exclude?: string[] }` | include/exclude control |
 
-`popularNovels` receives the resolved values via `options.filters`. The
-helper guards `isPickerValue`, `isCheckboxValue`, `isSwitchValue`,
-`isTextValue`, `isXCheckboxValue` are exported from
-`@libs/filterInputs` for narrowing inside plugins.
+The local enum values live in `src/lib/plugins/filterTypes.ts` and are exported
+to plugins through `@libs/filterInputs`.
 
-## 4. Plugin settings (`PluginSettings`)
+## App-Managed Plugin Inputs
 
-Plugins that need user-configurable values (login tokens, region, etc.)
-declare:
+Use `pluginInputs` when a source needs user-provided values such as a
+self-hosted server URL, username, password, token, or feature toggle. The host
+renders the schema, stores values under the installed plugin id, and exposes
+the saved values through `@libs/pluginInputs`.
+
+`pluginSettings` remains supported as a compatibility alias for upstream plugin
+setting declarations. New LNReaderTauri-specific plugins should prefer
+`pluginInputs`.
 
 ```ts
-type PluginSetting =
-  | { type?: 'Text'; value: string; label: string }
-  | { type: 'Switch'; value: boolean; label: string }
-  | { type: 'Select'; value: string; label: string; options: { label: string; value: string }[] }
-  | { type: 'CheckboxGroup'; value: string[]; label: string; options: { label: string; value: string }[] }
+type PluginInputValue = string | boolean;
 
-type PluginSettings = Record<string, PluginSetting>;
+interface PluginInputDefinition {
+  value?: PluginInputValue;
+  label?: string;
+  type?: "Text" | "Password" | "Switch" | "Url" | string;
+  placeholder?: string;
+  required?: boolean;
+  private?: boolean;
+}
+
+type PluginInputSchema = Record<string, PluginInputDefinition>;
 ```
 
-`hasSettings: true` opts the plugin into a "Plugin Settings" entry on
-its tile in More → Browse settings. The host persists current values
-under `@libs/storage`.
-
-## 5. Module sandbox & `require()` whitelist
-
-The host evaluates the plugin source with a custom `_require` that
-exposes only these modules:
-
-| Import | Provides |
-|---|---|
-| `htmlparser2` | `{ Parser }` from `htmlparser2` |
-| `cheerio` | `{ load }` from `cheerio` |
-| `dayjs` | the `dayjs` default export |
-| `urlencode` | `{ encode, decode }` from `urlencode` |
-| `@libs/novelStatus` | `{ NovelStatus }` |
-| `@libs/fetch` | `{ fetchApi, fetchText, fetchProto }` (see §6) |
-| `@libs/isAbsoluteUrl` | `{ isUrlAbsolute }` |
-| `@libs/filterInputs` | `{ FilterTypes }` |
-| `@libs/defaultCover` | `{ defaultCover }` |
-| `@libs/aes` | `{ gcm }` from `@noble/ciphers/aes.js` |
-| `@libs/utils` | `{ utf8ToBytes, bytesToUtf8 }` |
-| `@libs/cookies` | `{ cookies }` (see §7) |
-| `@libs/webView` | `{ webViewFetch }` (see §8) |
-| `@libs/storage` | `{ storage, localStorage, sessionStorage }` (per-plugin scoped MMKV) |
-
-No other node/browser globals are guaranteed. Plugins that touch
-`window`, `document`, or unsupported APIs will fail.
-
-The new Tauri host must reproduce this same `require` shape. Plugins
-should **not** notice the runtime change.
-
-## 6. `@libs/fetch`
-
-Three exports, all `Promise`-returning:
+Example:
 
 ```ts
-fetchApi(url: string, init?: FetchInit): Promise<Response>;
-fetchText(url: string, init?: FetchInit, encoding?: string): Promise<string>;
-fetchProto(protoInit: ProtoRequestInit, url: string, init?: FetchInit): Promise<unknown>;
-
-type FetchInit = {
-  method?: string;
-  headers?: Record<string, string> | Headers;
-  body?: FormData | string;
+pluginInputs = {
+  url: {
+    value: "",
+    label: "Server URL",
+    type: "Url",
+    required: true,
+  },
+  password: {
+    value: "",
+    label: "Password",
+    type: "Password",
+    private: true,
+  },
 };
 ```
 
-`fetchApi` semantics — exactly what the rewrite must reproduce:
+Saved values are strings. `Switch` values are stored as `"true"` or `"false"`.
+Empty string values are deleted and fall back to the schema default.
 
-1. Always merge a default header set: `Connection: keep-alive`, `Accept: */*`, `Accept-Language: *`, `Sec-Fetch-Mode: cors`, `Accept-Encoding: gzip, deflate`, `Cache-Control: max-age=0`, `User-Agent: getUserAgent()`. Caller-provided headers override these by key.
-2. Run the network fetch.
-3. **Cloudflare detection** — only if the response status is 403 or 503 AND the content-type is `text/html`. Read the body once; check the regex `Just a moment\.\.\.|cf_chl_opt|challenge-platform|cf-mitigated`. If any match, escalate to the WebView fallback. The v0.1 implementation lives in `src-tauri/src/scraper.rs` (cookie jar via the embedded scraper Webview) and `src/lib/http.ts` (`pluginFetch` / `pluginFetchText`). Otherwise return the original response.
+## Sandbox Whitelist
 
-`fetchText` is the same merge-headers wrapper but reads the body as
-text via `FileReader.readAsText(blob, encoding)` so legacy non-UTF8
-sites can be decoded (Korean cp949, Japanese sjis, etc.).
+Plugins may only import modules exposed by `createShimResolver`:
 
-`fetchProto` builds a length-prefixed gRPC-web body from a protobufjs
-schema, POSTs it, and decodes the response. Used by the very small
-number of sources that speak gRPC-web. Implementation detail; copy as
-is.
+| Import | Provides |
+| --- | --- |
+| `htmlparser2` | `{ Parser }` |
+| `cheerio` | `{ load }` |
+| `dayjs` | `dayjs` |
+| `urlencode` | `{ encode, decode }` |
+| `@libs/fetch` | `{ fetchApi, fetchText, fetchProto }` |
+| `@libs/novelStatus` | `{ NovelStatus }` |
+| `@libs/filterInputs` | `{ FilterTypes }` |
+| `@libs/defaultCover` | `{ defaultCover }` |
+| `@libs/isAbsoluteUrl` | `{ isUrlAbsolute }` |
+| `@libs/utils` | `{ utf8ToBytes, bytesToUtf8 }` |
+| `@libs/archive` | `{ listZipEntries, readZipFile, readZipText }` |
+| `@libs/csv` | `{ parseCsv }` |
+| `@libs/storage` | `{ storage, localStorage, sessionStorage }` |
+| `@libs/pluginInputs` | `{ inputs, pluginInputs }` |
+| `@libs/webView` | `{ webViewFetch }` |
 
-## 7. `@libs/cookies`
+Unsupported imports throw during plugin evaluation or method execution. Raw
+`window` and `document` access is not guaranteed.
 
-Wraps `@preeternal/react-native-cookie-manager` in upstream:
+Current compatibility gaps:
 
-```ts
-cookies.get(url: string, useWebKit?: boolean): Promise<Record<string, { value: string }>>
-cookies.set(
-  url: string,
-  cookie: { name: string; value: string; domain?: string; path?: string; secure?: boolean },
-  useWebKit?: boolean,
-): Promise<void>
-cookies.clearByName(url: string, name: string, useWebKit?: boolean): Promise<void>
-```
+- `fetchProto` is present but rejects because protobuf/gRPC-web support is not
+  implemented.
+- `@libs/cookies` and `@libs/aes` are not exposed yet.
+- `customJS` and `customCSS` metadata is accepted but not downloaded into a
+  plugin-specific reader injection path.
 
-In the rewrite, this maps to Tauri 2's `Webview::cookies_for_url()` for
-reads, and the (upcoming) cookie-set API or a manual `Set-Cookie`
-header injection in the HTTP plugin's cookie store for writes. The
-two-store sync rule from `prd.md §6.1` applies: webview store is the
-authoritative source, mirror writes into the `reqwest` store before
-HTTP requests.
+## Host Capabilities
 
-`useWebKit` is iOS-only (toggles the WebKit cookie store vs the
-default `WKHTTPCookieStore`). On Android it is ignored. The new app
-can ignore it on desktop too.
+Plugins should prefer host capabilities over bundling general-purpose
+dependencies. The sandbox still rejects unlisted imports such as `jszip`; use
+the explicit host contracts below instead.
 
-## 8. `@libs/webView`
+### `@libs/archive`
 
-```ts
-webViewFetch(url: string, options?: {
-  beforeContentScript?: string;
-  afterContentScript?: string;
-  userAgent?: string;
-  timeoutMs?: number; // default 30000
-}): Promise<string>;
-```
-
-The host opens a hidden WebView, navigates to `url`, injects the
-provided JS, and resolves with whatever the page calls
-`window.ReactNativeWebView.postMessage(...)` with.
-
-The v0.1 implementation diverges: instead of an opt-in hidden
-WebView per call, a single persistent embedded scraper Webview
-(`src-tauri/src/scraper.rs`) holds the cookie jar, and
-`webview_fetch` in Rust + `src/lib/http.ts` issues the request
-through reqwest with those cookies attached. The visible
-"Open site" overlay reuses the same Webview for manual
-challenge-clearing; cookies persist across requests.
-
-## 9. `@libs/storage`
-
-Each plugin gets its own scope by `plugin.id`:
+`@libs/archive` exposes ZIP helpers backed by the native host. Plugins pass ZIP
+bytes that they already fetched through `fetchApi`, and the host returns entries
+without exposing filesystem access.
 
 ```ts
-import { storage, localStorage, sessionStorage } from '@libs/storage';
+type PluginByteInput = ArrayBuffer | Uint8Array | number[];
 
-storage.set('foo', 'bar');
-storage.get('foo'); // 'bar'
+interface PluginZipEntryInfo {
+  name: string;
+  compressedSize: number;
+  uncompressedSize: number;
+  isFile: boolean;
+}
+
+interface PluginZipReadOptions {
+  path?: string;
+  extension?: string;
+  encoding?: string;
+  maxBytes?: number;
+}
+
+listZipEntries(input: PluginByteInput): Promise<PluginZipEntryInfo[]>;
+readZipFile(
+  input: PluginByteInput,
+  options?: PluginZipReadOptions,
+): Promise<Uint8Array>;
+readZipText(
+  input: PluginByteInput,
+  options?: PluginZipReadOptions,
+): Promise<string>;
 ```
 
-`storage` persists across launches. `localStorage` is the same in
-upstream (treat as alias). `sessionStorage` is in-memory and clears
-when the app process exits.
+Limits:
 
-## 10. Lifecycle & install
+- Archives larger than 25 MiB are rejected.
+- Entries larger than 8 MiB are rejected by default.
+- `maxBytes` can raise the per-entry limit up to 32 MiB.
+- Absolute paths, parent traversal, and null-byte entry names are not considered
+  readable files.
+- The host does not write extracted files to disk.
 
-Implemented in `src/plugins/pluginManager.ts`:
+### `@libs/csv`
 
-- **fetchPlugins** — for every `repository` row in DB, GET `repository.url`, parse JSON as `PluginItem[]`, dedup by `id` (last write wins).
-- **installPlugin(item)**:
-  1. GET `item.url` with `pragma: no-cache` and `cache-control: no-cache` headers.
-  2. Evaluate the body (sandboxed `Function`).
-  3. If the in-memory `plugins[plugin.id]` is missing or older (semver `compareVersion`), persist:
-     - Write `index.js` to `${PLUGIN_STORAGE}/${plugin.id}/index.js`.
-     - If `customJS`, download to `custom.js` next to it; else delete any existing `custom.js`.
-     - Same for `customCSS` → `custom.css`.
-- **uninstallPlugin(item)** — drop in-memory entry, remove all
-  storage keys starting with `plugin.id`, delete `index.js`.
-- **getPlugin(id)** — in-memory lookup with disk fallback. Returns
-  `undefined` for `LOCAL_PLUGIN_ID = 'local'` (the local-files
-  pseudo-plugin).
-- **updatePlugin** — same code path as install.
+`@libs/csv` provides a small RFC-4180-style parser for source catalogs.
 
-## 11. The `local` pseudo-plugin
+```ts
+interface CsvParseOptions {
+  header?: boolean;
+  delimiter?: string;
+}
 
-`pluginId === 'local'` is reserved for novels imported from a local
-EPUB or HTML directory. It does not have a JS module — the host's
-local-import path produces `Novel` rows directly. Plugin-aware code
-must treat `'local'` specially (no scrape, no update check, no
-unfollow → uninstall).
+parseCsv(text: string, options?: CsvParseOptions):
+  | string[][]
+  | Record<string, string>[];
+```
 
-## 12. Repository registry
+Use `header: true` when the first row contains field names. Missing cells become
+empty strings.
 
-Plugin sources are organized into "repositories" — JSON files hosted
-at any URL that contain `PluginItem[]`. The user adds a repository
-URL in **More → Browse settings → Repositories**. The DB table is
-`Repository(id, url)` with a uniqueness constraint on `url`.
+## Fetch Behavior
 
-The default repository is the user's choice (commit `0bda5fd0` removed
-the bundled default — the user must add at least one). The most common
-choice is the [official lnreader-plugins repo](https://github.com/lnreader/lnreader-plugins).
+`@libs/fetch.fetchApi` and `fetchText` route through the plugin fetch path.
+Plugin-owned site traffic should use this path instead of bare browser `fetch`.
 
-## 13. Required vs. optional methods checklist
+The current flow:
 
-When porting the plugin runtime, the host MUST tolerate plugins that:
+1. The frontend calls `pluginFetch` or `pluginFetchText` in `src/lib/http.ts`.
+2. The request is sent to the Rust `webview_fetch` command.
+3. `src-tauri/src/scraper.rs` executes browser fetch inside the persistent
+   scraper WebView with credentials included, so the WebView cookie jar and
+   browser user agent are used.
+4. The frontend rebuilds a `Response` object for plugin code.
 
-- Throw on any of the optional methods (`parsePage`, `resolveUrl`).
-- Return cover URLs that are relative (the host should `resolveUrl()` them).
-- Return chapter lists with duplicate `path` values (the DB unique
-  index dedupes; the runtime should not crash).
-- Return `releaseTime` in any string format (the UI uses dayjs with
-  best-effort parsing).
-- Return giant `summary` blocks (no length limit specified).
+If a protected site needs a browser challenge or login, the user opens that site
+in the in-app site browser overlay. The scraper WebView keeps the resulting
+session cookies for later plugin fetches.
 
-## 14. Versioning & update prompt
+`@libs/webView.webViewFetch` is reserved for pages that must be rendered by a
+real WebView before content can be extracted. On desktop it invokes
+`webview_extract`; on Android it uses the Android scraper bridge.
 
-`hasUpdate` is set on the in-memory `PluginItem` when fetched
-repository version > installed version (`compareVersion.newer`). The
-Browse settings tile shows an "Update" CTA. The plugin auto-update
-runner does not exist — updates are user-initiated.
+## Storage
 
-## 15. Testing a plugin port
+`@libs/pluginInputs` is the preferred read path for user-provided values declared
+by `pluginInputs`:
 
-Smoke test recipe:
+```ts
+import { inputs } from "@libs/pluginInputs";
 
-1. Pick the simplest upstream plugin (suggested: BoxNovel — pure
-   cheerio HTML scraping, no protobuf, no cookies).
-2. Place it at `<plugin_storage>/boxnovel/index.js`.
-3. Insert a row into `Repository(url)` pointing at the upstream raw
-   index URL.
-4. Call `popularNovels(1)` → expect non-empty `NovelItem[]`.
-5. Call `parseNovel(item.path)` for one item → expect `chapters.length > 0`.
-6. Call `parseChapter(chapter.path)` → expect HTML string.
-7. Repeat against a Cloudflare-protected source (e.g.
-   `Boxnovel.club` historically) and confirm `webViewFetch` engages.
+inputs.get("url");      // string | null
+inputs.require("url");  // string, throws if missing or blank
+inputs.has("url");      // boolean
+inputs.getAll();        // Record<string, string>
+```
 
-## 16. References
+The host persists values under `plugin:<pluginId>:<key>` in app-origin local
+storage. These values are local app data, not plugin source code. They are not
+logged by the host and are cleared by the app's plugin storage cleanup action.
+`private: true` and `type: "Password"` mask the UI control, but this is not an
+OS keychain or encryption boundary. Do not place real tokens or passwords in
+plugin source, docs, repository indexes, screenshots, or sample output.
 
-- Plugin types: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/types/index.ts>
-- Filter types: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/types/filterTypes.ts>
-- Plugin manager: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/pluginManager.ts>
-- fetch helpers: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/helpers/fetch.ts>
-- WebView fetch: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/helpers/webViewFetch.ts>
-- Plugins repository: <https://github.com/lnreader/lnreader-plugins>
+`@libs/storage` remains available for upstream compatibility and plugin-owned
+state. It uses the same plugin namespace:
+
+```ts
+storage.set("key", "value");
+storage.get("key");
+storage.delete("key");
+storage.getAllKeys();
+storage.clearAll();
+```
+
+`storage` and `localStorage` persist through browser local storage.
+`sessionStorage` clears with the app session.
+
+## Lifecycle
+
+`PluginManager` owns runtime lifecycle:
+
+1. `fetchRepository(url)` downloads a repository JSON index and keeps only valid
+   `PluginItem` entries.
+2. `installPlugin(item)` downloads `item.url`, evaluates the plugin, verifies
+   the loaded id, registers it in memory, and stores source code plus metadata in
+   SQLite.
+3. `loadInstalledFromDb()` rehydrates installed plugins from SQLite on startup.
+4. `uninstallPlugin(id)` removes the in-memory plugin and deletes the persisted
+   SQLite row.
+
+`pluginId === "local"` is reserved for novels imported from local files. It is
+not backed by a JavaScript plugin.
+
+## Compatibility Checklist
+
+The host should tolerate plugins that:
+
+- Omit optional methods such as `parsePage` and `resolveUrl`.
+- Return relative cover URLs.
+- Return duplicate chapter paths.
+- Return `releaseTime` in inconsistent string formats.
+- Return long summaries.
+- Throw from one source operation without breaking unrelated installed plugins.
+
+## Smoke Test Recipe
+
+1. Add a repository URL that returns `PluginItem[]`.
+2. Install one simple plugin.
+3. Call `popularNovels(1)` and expect at least one `NovelItem`.
+4. Call `parseNovel(item.path)` and expect at least one chapter.
+5. Call `parseChapter(chapter.path)` and expect HTML.
+6. For protected sites, open the site browser overlay first, then repeat the
+   fetch path.
+
+## References
+
+- Upstream plugin types: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/types/index.ts>
+- Upstream filter types: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/types/filterTypes.ts>
+- Upstream plugin manager: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/pluginManager.ts>
+- Upstream fetch helpers: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/helpers/fetch.ts>
+- Upstream WebView fetch: <https://github.com/lnreader/lnreader/blob/639a2538/src/plugins/helpers/webViewFetch.ts>
+- Plugin catalog: <https://github.com/lnreader/lnreader-plugins>

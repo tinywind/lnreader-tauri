@@ -1,270 +1,166 @@
-# CLAUDE.md — guide for AI agents working in this repo
+# CLAUDE.md - agent guide for this repo
 
-> Read this top-to-bottom before touching code or docs. Keep it
-> short. Anything not here is in [`prd.md`](./prd.md).
+Read this before touching code or docs. Keep changes narrow, current, and tied
+to the user's request.
 
-> **🌐 Language policy — non-negotiable.**
->
-> - **Every file committed to this repo is written in English.** That
->   includes Markdown, Rust and TypeScript source, inline comments,
->   JSDoc / Rust-doc, commit messages, identifiers, log strings,
->   `TODO:` notes.
-> - **The only place Korean (or any non-English natural language) may
->   appear is `strings/languages/<locale>/` translation files.**
-> - **The user prefers Korean for chat replies. That preference does
->   not extend to artifacts.** Reply summaries to the user can be
->   Korean; everything written to a file or to git stays English.
-> - When importing reference material from upstream lnreader that
->   contains non-English strings or comments, **translate to English**
->   on the way in.
+## Language Policy
 
-## 1. What this project is
+- Every committed file in this repo is written in English.
+- The only place Korean or other non-English UI text may appear is under
+  `strings/languages/<locale>/`.
+- User-facing chat summaries may be Korean.
+- Translate upstream reference comments or strings to English when importing
+  them into this repo.
 
-**LNReaderTauri** is a **Tauri 2 light-novel reader** running on
-**Windows, Linux, and Android** from one Rust + TypeScript codebase.
+## Project Shape
 
-The project is **inspired by** upstream
-[`lnreader/lnreader`](https://github.com/lnreader/lnreader) (a
-React-Native + Expo + Fabric reader) but is **a separate, independent
-project** — not a port, not compatibility-targeted. Upstream is
-**reference material only** for behaviors and edge cases; nothing in
-this repo is bound by an upstream contract.
+LNReaderTauri is a Tauri 2 light-novel reader for Windows, Linux, and Android.
+It uses a Rust host plus a React/TypeScript UI. The project is inspired by
+upstream `lnreader/lnreader`, but it is not a compatibility port. Upstream is
+reference material for behavior and edge cases only.
 
-The project is currently in the **Sprint 0 phase** (toolchain +
-scaffold).
+Pinned upstream reference:
 
-## 2. Source-of-truth documents
-
-1. [`prd.md`](./prd.md) — product + engineering plan (canonical).
-2. [`CLAUDE.md`](./CLAUDE.md) — this file.
-3. [`docs/`](./docs/) — **upstream behavioral reference** captured
-   from `lnreader/lnreader@639a2538`. Use as inspiration, not as a
-   contract. See [`docs/HANDOFF.md`](./docs/HANDOFF.md) for which
-   documents in that tree are still useful and which are superseded.
-
-## 3. Repo layout
-
+```text
+https://github.com/lnreader/lnreader/tree/639a2538
 ```
+
+## Living Documentation
+
+- `README.md` - public overview, current status, and common commands.
+- `CLAUDE.md` - repo rules for agents and contributors.
+- `docs/plugins/contract.md` - plugin runtime compatibility reference.
+
+Do not recreate removed planning snapshots unless the user explicitly asks for
+an archive or roadmap document.
+
+## Current Scope
+
+Targets:
+
+- Windows desktop.
+- Linux desktop.
+- Android sideload APK.
+
+Out of scope unless the user changes direction:
+
+- macOS and iOS builds.
+- Upstream backup zip round-trip compatibility.
+- Upstream MMKV/settings shape compatibility.
+- Strict pixel parity with upstream React Native UI.
+- TTS, volume-button page turn, Google Drive backup, and tracker integrations.
+- In-app auto-update.
+
+Release notes:
+
+- Android APKs are built by GitHub Actions and kept as short-lived workflow
+  artifacts for tester download.
+- Do not track keystores, signing properties, passwords, or generated APKs.
+- Repository secrets, not files in the worktree, provide release signing inputs.
+
+## Repo Layout
+
+```text
 lnreader-tauri/
-├── CLAUDE.md            ← this file
-├── README.md
-├── prd.md               ← product + engineering plan
-├── docs/                ← v0.1 status (HANDOFF.md) + plugin contract reference
-├── src/                 ← TypeScript code lands here in Sprint 0
-├── src-tauri/           ← Rust core (lands in Sprint 0)
-├── assets/              ← icons + splash (sourced from upstream — fine to use)
-└── strings/             ← i18n base (sourced from upstream — fine to use)
+  README.md
+  CLAUDE.md
+  docs/
+    plugins/contract.md
+  src/
+  src-tauri/
+  assets/
+  strings/
 ```
 
-`assets/` and `strings/` started life as upstream copies; upstream is
-MIT, so they are licensed compatibly and acceptable to keep. They are
-**not** binding — replace freely if the new app needs different
-content.
+`assets/` and `strings/` started from upstream-compatible MIT material. They
+are acceptable to keep, but they are not binding.
 
-## 4. Pinned upstream reference
-
-When `docs/` references upstream code it is pinned to commit
-`639a2538` (HEAD as of 2026-05-04). URL pattern:
-
-```
-https://github.com/lnreader/lnreader/blob/639a2538/<path>
-```
-
-That commit is a **frozen reference snapshot**; we are free to diverge
-at any point.
-
-## 5. Out of scope (intentional cuts in v0.1)
-
-Items below may revisit in v0.2. Issues / PRs that try to add them in
-v0.1 are closed `wontfix`:
-
-| Cut | Reason |
-|---|---|
-| **macOS desktop builds** | No Apple Developer Program, no macOS hardware available for testing. |
-| **iOS builds** | Same as above. |
-| **Code signing on Windows / Linux / Android** | Unsigned debug builds only for v0.1. |
-| **In-app auto-update** (`tauri-plugin-updater`) | Requires signing. v0.1 users get a "Latest release" link in More that opens GitHub Releases via `tauri-plugin-shell`. |
-| **Upstream backup `.zip` round-trip compatibility** | Separate project; we design our own format. |
-| **Upstream MMKV / settings shape compatibility** | Separate project; we design our own keys. |
-| **Strict upstream plugin contract compatibility** | We aim for *most* community plugins to work, but invent our own contract where simpler. |
-| **TTS reading + lockscreen media controls** | Niche, large platform-specific surface. |
-| **Volume-button page turn** | Niche; needs Android keyevent plugin. |
-| **Google Drive backup** | OAuth + Drive plumbing not worth carrying. |
-| **Tracker integrations** (MAL, AniList, MangaUpdates, Kitsu) | OAuth × 4, multi-vendor; minority feature. |
-| **Default-category settings sub-page** | Upstream stub never worked. Default category stays id=1. |
-
-## 6. Coding & doc standards
-
-- All code and docs in English.
-- Self-documenting code; comments only for: public API JSDoc / Rust
-  doc, intent explanations, justified lint-disables, `TODO:` with
-  reference.
-- No partial features, mock data, stubs, or speculative code (YAGNI).
-- No marketing language. State trade-offs honestly.
-- Surgical changes: every changed line should trace to a stated
-  request. No drive-by refactor.
-- One coherent purpose per commit; split mixed Rust+TS+docs commits.
-- Commit subject: `<type>(<module>): <imperative summary>`, ≤72 chars.
-  Types: `feat | fix | chore | docs | style | refactor | test`.
-- Branches: **`main` only** for v0.1 (per user direction). No feature
-  branches, no PRs.
-- Prohibited commit metadata: `Co-Authored-By: Claude` trailers,
-  `🤖 Generated with` footers.
-- `git push` is **handled manually by the user** — agents do not
-  push.
-
-## 7. Tech stack (v0.1)
+## Tech Stack
 
 | Layer | Choice |
-|---|---|
-| Native shell | Tauri 2.x |
-| Frontend framework | React 19 |
-| **UI** | **Mantine** (`@mantine/core`, `@mantine/hooks`, `@mantine/notifications`, `@mantine/modals`, `@mantine/dates` as needed) — batteries-included React UI library |
-| Routing | TanStack Router (type-safe) |
-| State | Zustand + TanStack Query |
-| Animation | Framer Motion + CSS — never animate layout-bound props (`width`, `height`, `top`, `left`); only `transform`, `opacity`, `clip-path`, `filter` |
-| ORM | drizzle-orm + `drizzle-orm/sqlite-proxy` calling `tauri-plugin-sql` |
-| DB | SQLite via `tauri-plugin-sql` (sqlx underneath) |
-| HTTP | `tauri-plugin-http` for app/repository fetches; scraper WebView for plugin-owned site fetches |
-| EPUB | Rust `rbook` crate |
-| Zip | Rust `zip` crate |
+| --- | --- |
+| Native shell | Tauri 2 |
+| Frontend | React 19 |
+| UI | Mantine |
+| Routing | TanStack Router |
+| State | Zustand and TanStack Query |
+| Database | SQLite through `tauri-plugin-sql` and drizzle proxy |
+| HTTP | `tauri-plugin-http`, Rust-side fetch commands, and scraper WebView |
 | Package manager | pnpm |
 | Node | 22 LTS |
 
-### 7.1 Plugin fetch invariant
+## Plugin Fetch Invariant
 
-There are two different fetch paths:
+Plugin-owned site traffic must preserve browser-like session behavior.
 
-1. App/repository fetches may use ordinary app-side HTTP utilities.
-   This includes repository JSON and plugin JavaScript source
-   downloads.
-2. Plugin-owned site fetches must go through the persistent scraper
-   WebView. This includes source browsing/search/listing, novel
-   metadata/detail parsing, library update checks, and chapter body
-   downloads.
+- App and repository fetches may use ordinary app-side HTTP helpers.
+- Plugin-owned source browsing, search, novel parsing, library update checks,
+  and chapter downloads must go through the plugin fetch path in `src/lib/http.ts`
+  and `src-tauri/src/scraper.rs`.
+- The scraper WebView owns browser session state. When a protected site needs
+  manual challenge clearing, use the site browser overlay instead of replacing
+  plugin traffic with raw app-origin fetches.
+- Do not switch plugin-owned site fetches to bare `fetch`, `reqwest`, copied
+  cookies, or unrelated HTTP helpers without updating the plugin contract and
+  tests.
 
-Do not replace plugin-owned site fetches with Rust `reqwest`,
-`tauri-plugin-http`, copied-cookie host HTTP, or raw window fetch from
-the app origin. Cloudflare, login sessions, CORS, and TLS/browser
-fingerprinting depend on the scraper WebView network stack.
+## Coding Standards
 
-Before a plugin-owned site fetch runs, the scraper WebView must first
-navigate to that plugin's representative `site` URL so the request
-executes from the plugin origin. The scraper WebView is single
-instance state, so context navigation and WebView fetches must be
-serialized with the scraper navigation lock.
+- Keep changes surgical. Do not refactor adjacent code unless required.
+- Match the existing style before introducing a new pattern.
+- Use self-documenting code. Add comments only for public API docs, intent that
+  is hard to infer, justified lint disables, or actionable TODOs.
+- Do not add mock data, partial features, speculative options, or unused
+  abstractions.
+- Keep visible UI strings in the existing i18n files.
+- Do not write generated artifacts, screenshots, logs, or temporary outputs into
+  the repo. Use the project-root `.tmp/` directory and clean it up when done.
 
-## 8. Sprint structure (`prd.md §8`)
+## Verification
 
-| Sprint | Theme |
-|---|---|
-| 0 | Toolchain, scaffold, fresh DB schema, drizzle bridge |
-| 1 | Library tab end-to-end |
-| 2 | Plugin scraping + Cloudflare hidden-WebView (gated) |
-| 3 | Reader (paged + scroll, single chapter) |
-| 4 | Background download (Android foreground service) |
-| 5 | Backup & restore (local + self-hosted) — our own format |
-| 6 | Remaining UI surface + polish |
+Do not run build, compile, test, or git-mutating commands unless the user
+explicitly requests them in the current message.
 
-Each sprint is one focused week. Don't work on Sprint N+1 until
-Sprint N's acceptance is met. Sprint 2 (CF bypass) is the
-load-bearing gate.
+When verification is allowed, choose the smallest relevant loop:
 
-## 9. Testing methodology
+| Change | Check |
+| --- | --- |
+| TypeScript or React | `pnpm tsc`, `pnpm test` |
+| Rust host | `cargo check`, `cargo test --lib` from `src-tauri` |
+| Desktop native integration | `pnpm tauri build --debug` |
+| Android APK/release workflow | `pnpm android:apk:release` plus device smoke when behavior is Android-only |
+| Docs only | Link/reference scan and `git diff --check` when requested |
 
-**Default test target: desktop** (Windows / Linux). Mobile is Android
-only — no iOS hardware.
+## Git Workflow
 
-### 9.1 Test matrix
+- Work on `main` unless the user asks for another branch.
+- Do not bypass hooks.
+- Commit subject format: `<type>(<module>): <imperative summary>`.
+- Types: `feat | fix | chore | docs | style | refactor | test`.
+- Keep one coherent purpose per commit.
+- Do not add `Co-Authored-By`, `Generated`, or AI-tool trailers.
+- Do not push unless the user explicitly asks in the current message.
+- If a push is rejected as non-fast-forward, stop and ask.
 
-| Layer | Tool | Frequency |
-|---|---|---|
-| TS unit | Vitest | Every commit (`pnpm test`) |
-| Rust unit | `cargo test` | Every commit on Rust changes |
-| Type check | `pnpm tsc --noEmit` + `cargo check` | Every commit |
-| TS+Rust IPC | Vitest with mocked `invoke` + `tauri::test` | Sprint boundaries |
-| Plugin sandbox | Vitest fixtures running real upstream plugins | Sprint 2+ |
-| Backup round-trip | Rust integration test | Sprint 5 |
-| E2E desktop | WebdriverIO + `tauri-driver` (preferred) | Sprint boundaries |
-| Manual smoke (desktop) | Run on Windows + Linux | Pre-release |
-| Manual smoke (Android) | adb on real device or emulator | Sprint 4 + pre-release |
+## Ask vs. Do
 
-Mobile-only verification (Android only):
-- **Android freeform / DeX window resize** — the bug class that
-  motivated the rewrite must be gone by construction.
-- **Android foreground service for downloads** (Sprint 4).
-- **Cloudflare hidden WebView on Android Chromium** (Sprint 2).
-- **Deep link `lnreader://`**.
-- **Touch gestures** — paged-mode swipe.
+Ask before:
 
-### 9.2 Per-sprint test minimum
+- Adding a third-party Tauri plugin or changing the stack.
+- Renaming top-level paths or route structure.
+- Using paid certificates, OAuth secrets, or other credentials.
+- Running destructive filesystem or git operations.
 
-| Sprint | Required before "done" |
-|---|---|
-| 0 | Type check, `cargo check`, smoke launch on Windows + Linux. |
-| 1 | + Vitest covers Library DB queries through drizzle proxy. |
-| 2 | + Plugin sandbox Vitest passes; CF hidden-webview Rust integration test on a real CF site. |
-| 3 | + Reader Vitest for paged-mode page-count math; E2E read-chapter on desktop. |
-| 4 | + Foreground-service Rust unit test (mocked); manual smoke 50-chapter download on real Android. |
-| 5 | + Backup round-trip Rust integration test (lnreader-tauri → file → lnreader-tauri lossless). |
-| 6 | + Full acceptance journey list on desktop + Android DeX. |
+Do without extra ceremony:
 
-### 9.3 AI agent test loops
+- Keep docs aligned with the current repo.
+- Fix broken references caused by your own edits.
+- Remove imports, variables, and files orphaned by your change.
 
-| Loop | Mode | Use when |
-|---|---|---|
-| **A. Frontend-only browser** | `pnpm dev` + Playwright MCP + mocked `invoke()` | Default for UI work. ~80 % of bugs. Sub-second iteration. |
-| **B. Tauri desktop E2E** | WebdriverIO + `tauri-driver` (`cargo install tauri-driver`) | When the change crosses into Rust commands (Sprint 2/4/5). |
-| **C. Android device / emulator** | `adb` via Bash (install / launch / `screencap` / `uiautomator dump`) | Mobile-only items in §9.1. |
-| **D. Unit / type checks** | `pnpm tsc --noEmit && pnpm test`, `cargo check && cargo test` | Every commit. |
+## References
 
-Default loop is **A**. Move to B when IPC is exercised. Move to C
-only for the mobile-only items.
-
-## 10. When you make changes
-
-- Don't bypass git hooks (no `--no-verify`).
-- Don't push (the user handles `git push`).
-- Don't add a `Co-Authored-By: Claude` footer.
-- Don't write Korean or other-language source/doc comments.
-- Don't keep dead code "just in case." Remove imports/variables/files
-  your changes orphaned.
-
-## 11. Ask vs. do
-
-Use judgment, but err on **ask** for:
-- Adopting a third-party Tauri plugin not listed in `prd.md §6`.
-- Changing the §7 tech stack picks.
-- Renaming repo top-level paths or `src/` subdirectories.
-- Anything that requires a paid certificate, OAuth secret, or other
-  credential.
-- Destructive Bash (`rm -rf`, `git reset --hard`, etc.) — even when
-  the user pre-authorized auto-commits.
-
-Err on **do** for:
-- Implementing planned sprint deliverables.
-- Filling in or correcting docs.
-- Adding `UNKNOWN: <what>` markers when behavior is unclear.
-- Auto-committing per the agreed cadence (one coherent purpose per
-  commit, English message, no AI footers).
-
-## 12. Communication
-
-Korean replies are preferred for user-facing summaries; code,
-comments, commits, and docs remain in English.
-
-When the user asks for analysis or a multi-step task and parallel
-sub-agents help, use them — the original upstream `docs/screens/`
-and `docs/acceptance/` trees (now removed once v0.1 was complete)
-were authored by 10 parallel sub-agents.
-
-## 13. References
-
-- Upstream repo (pinned `639a2538`, **reference only**):
-  <https://github.com/lnreader/lnreader/tree/639a2538>
-- Upstream issue that triggered the rewrite:
-  <https://github.com/lnreader/lnreader/issues/1835>
-- lnreader-plugins (community plugin catalog we may consume):
-  <https://github.com/lnreader/lnreader-plugins>
+- Upstream repo: <https://github.com/lnreader/lnreader/tree/639a2538>
+- Trigger issue for the rewrite: <https://github.com/lnreader/lnreader/issues/1835>
+- Plugin catalog: <https://github.com/lnreader/lnreader-plugins>
 - Tauri 2 docs: <https://v2.tauri.app/>
 - This repo: <https://github.com/tinywind/lnreader-tauri>
