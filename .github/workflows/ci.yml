@@ -1,13 +1,7 @@
-# CI for LNReaderTauri.
+# CI for Norea.
 #
-# Two jobs:
-#   1. frontend         Ubuntu, fast: tsc + drizzle-drift check.
-#   2. desktop-build    Ubuntu + Windows matrix: full `pnpm tauri
-#                          build --debug` to catch Rust/native breakage.
-#
-# macOS and iOS are intentionally absent because this repo targets
-# Windows, Linux, and Android. Release artifacts live in
-# `.github/workflows/android.yml` and `.github/workflows/windows.yml`.
+# Fast quality gate for TypeScript, unit tests, and drizzle migration drift.
+# Release artifact workflows perform the platform-specific Tauri builds.
 
 name: CI
 
@@ -57,45 +51,3 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
-
-  desktop-build:
-    name: Desktop debug build (${{ matrix.os }})
-    needs: frontend
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install Linux Tauri 2 deps
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Install JS dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: tauri build --debug
-        run: pnpm tauri build --debug
