@@ -1,13 +1,13 @@
-# CI for LNReaderTauri (Sprint 0).
+# CI for LNReaderTauri.
 #
 # Two jobs:
 #   1. frontend         Ubuntu, fast: tsc + drizzle-drift check.
 #   2. desktop-build    Ubuntu + Windows matrix: full `pnpm tauri
 #                          build --debug` to catch Rust/native breakage.
 #
-# macOS and iOS are intentionally absent (no Apple hardware for
-# testing; see `prd.md` v0.1 scope cuts). Android debug APK builds
-# live in `.github/workflows/android.yml`.
+# macOS and iOS are intentionally absent because this repo targets
+# Windows, Linux, and Android. Android APK builds live in
+# `.github/workflows/android.yml`.
 
 name: CI
 

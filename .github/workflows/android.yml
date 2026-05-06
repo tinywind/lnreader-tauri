@@ -86,10 +86,7 @@ jobs:
             pnpm tauri android init --ci --skip-targets-install
           fi
 
-      - name: Build universal and split release APKs
-        run: pnpm android:apk:release
-
-      - name: Sign release APKs
+      - name: Configure Android release signing secrets
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
@@ -98,66 +95,50 @@ jobs:
         run: |
           set -euo pipefail
 
-          unsigned_apk_root="src-tauri/gen/android/app/build/outputs/apk"
           signing_dir=".tmp/android-release-signing"
-          mkdir -p "$RELEASE_SIGNED_APK_DIR" "$signing_dir"
 
-          mapfile -t unsigned_apks < <(find "$unsigned_apk_root" -type f -path "*/release/*-release-unsigned.apk" | sort)
-          if [ "${#unsigned_apks[@]}" -eq 0 ]; then
-            echo "No unsigned release APKs found under $unsigned_apk_root."
+          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ] &&
+             [ -n "$ANDROID_RELEASE_KEY_ALIAS" ] &&
+             [ -n "$ANDROID_RELEASE_STORE_PASSWORD" ] &&
+             [ -n "$ANDROID_RELEASE_KEY_PASSWORD" ]; then
+            mkdir -p "$signing_dir"
+            keystore="$(pwd)/$signing_dir/release.jks"
+            printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            echo "ANDROID_RELEASE_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_RELEASE_KEY_ALIAS=$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_RELEASE_STORE_PASSWORD=$ANDROID_RELEASE_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_RELEASE_KEY_PASSWORD=$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Android release signing secrets are not configured; using the committed public test release key."
+          fi
+
+      - name: Build universal and split release APKs
+        run: pnpm android:apk:release
+
+      - name: Collect signed release APKs
+        run: |
+          set -euo pipefail
+
+          release_apk_root="src-tauri/gen/android/app/build/outputs/apk"
+          mkdir -p "$RELEASE_SIGNED_APK_DIR"
+
+          mapfile -t release_apks < <(find "$release_apk_root" -type f -path "*/release/*.apk" ! -name "*-aligned.apk" | sort)
+          if [ "${#release_apks[@]}" -eq 0 ]; then
+            echo "No release APKs found under $release_apk_root."
             exit 1
           fi
 
-          keystore="$signing_dir/release.jks"
-          key_alias="$ANDROID_RELEASE_KEY_ALIAS"
-          store_password="$ANDROID_RELEASE_STORE_PASSWORD"
-          key_password="$ANDROID_RELEASE_KEY_PASSWORD"
-          signing_suffix="release-signed"
-
-          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ] &&
-             [ -n "$key_alias" ] &&
-             [ -n "$store_password" ] &&
-             [ -n "$key_password" ]; then
-            printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
-          else
-            echo "::warning::Android release signing secrets are not configured; using an ephemeral CI debug key for installable tester artifacts."
-            keystore="$signing_dir/ci-debug.jks"
-            key_alias="androiddebugkey"
-            store_password="android"
-            key_password="android"
-            signing_suffix="ci-debug-signed"
-            keytool -genkeypair \
-              -keystore "$keystore" \
-              -storetype JKS \
-              -storepass "$store_password" \
-              -keypass "$key_password" \
-              -alias "$key_alias" \
-              -keyalg RSA \
-              -keysize 4096 \
-              -validity 10000 \
-              -dname "CN=LNReaderTauri CI, OU=Android Testing, O=tinywind, L=CI, S=CI, C=US"
-          fi
-
-          zipalign="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/zipalign"
           apksigner="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
           checksum_file="$RELEASE_SIGNED_APK_DIR/SHA256SUMS.txt"
           : > "$checksum_file"
 
-          for unsigned_apk in "${unsigned_apks[@]}"; do
-            abi="$(basename "$(dirname "$(dirname "$unsigned_apk")")")"
-            aligned_apk="$signing_dir/lnreader-tauri-${abi}-aligned.apk"
-            signed_apk="$RELEASE_SIGNED_APK_DIR/lnreader-tauri-${abi}-${signing_suffix}.apk"
+          for release_apk in "${release_apks[@]}"; do
+            variant="$(basename "$(dirname "$(dirname "$release_apk")")")"
+            collected_apk="$RELEASE_SIGNED_APK_DIR/lnreader-tauri-${variant}-$(basename "$release_apk")"
 
-            "$zipalign" -p -f 4 "$unsigned_apk" "$aligned_apk"
-            "$apksigner" sign \
-              --ks "$keystore" \
-              --ks-key-alias "$key_alias" \
-              --ks-pass "pass:$store_password" \
-              --key-pass "pass:$key_password" \
-              --out "$signed_apk" \
-              "$aligned_apk"
-            "$apksigner" verify --verbose "$signed_apk"
-            (cd "$RELEASE_SIGNED_APK_DIR" && sha256sum "$(basename "$signed_apk")") >> "$checksum_file"
+            "$apksigner" verify --verbose "$release_apk"
+            cp "$release_apk" "$collected_apk"
+            (cd "$RELEASE_SIGNED_APK_DIR" && sha256sum "$(basename "$collected_apk")") >> "$checksum_file"
           done
 
       - name: Upload signed release APKs
