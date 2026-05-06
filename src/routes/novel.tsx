@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -9,6 +9,7 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
+import { DownloadGlyph, DownloadedGlyph } from "../components/ActionGlyphs";
 import {
   ConsoleChip,
   ConsoleCover,
@@ -149,6 +150,7 @@ interface ChapterListItemProps {
   isCurrent: boolean;
   status: DownloadStatus | undefined;
   deleteBusy: boolean;
+  opening: boolean;
   onOpen: () => void;
   onDownload: () => void;
   onDeleteDownload: () => void;
@@ -161,6 +163,7 @@ function ChapterListItem({
   isCurrent,
   status,
   deleteBusy,
+  opening,
   onOpen,
   onDownload,
   onDeleteDownload,
@@ -170,7 +173,9 @@ function ChapterListItem({
   const isRunning = status?.kind === "running";
   const failedMessage = status?.kind === "failed" ? status.error : null;
   const showDownloadButton =
-    !chapter.isDownloaded && !isQueued && !isRunning;
+    !chapter.isDownloaded && !opening && !isQueued && !isRunning;
+  const showOpeningSpinner =
+    opening && !chapter.isDownloaded && !isQueued && !isRunning;
   const progressStatus = chapterProgressStatus(chapter);
 
   return (
@@ -180,7 +185,9 @@ function ChapterListItem({
       }`}
       role="button"
       tabIndex={0}
+      aria-busy={opening || isRunning}
       aria-label={t("novel.openChapter", { name: chapter.name })}
+      data-opening={opening}
       onClick={onOpen}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -230,7 +237,12 @@ function ChapterListItem({
         ) : null}
         {chapter.isDownloaded ? (
           <ChapterFlag label={t("novel.downloaded")} tone="done">
-            <CachedIcon />
+            <DownloadedGlyph />
+          </ChapterFlag>
+        ) : null}
+        {showOpeningSpinner ? (
+          <ChapterFlag label={t("common.downloading")}>
+            <SpinnerIcon />
           </ChapterFlag>
         ) : null}
         {status ? <ChapterDownloadStatusIcon status={status} /> : null}
@@ -264,7 +276,7 @@ function ChapterListItem({
                 onDownload();
               }}
             >
-              <DownloadIcon />
+              <DownloadGlyph />
             </UnstyledButton>
           </Tooltip>
         ) : null}
@@ -323,7 +335,7 @@ function ChapterFlag({
 function ChapterDownloadStatusIcon({ status }: { status: DownloadStatus }) {
   const { t } = useTranslation();
 
-  if (status.kind === "done") return null;
+  if (status.kind === "done" || status.kind === "cancelled") return null;
 
   if (status.kind === "failed") {
     return (
@@ -437,26 +449,6 @@ function ReadIcon() {
   );
 }
 
-function CachedIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v10" />
-      <path d="m8 10 4 4 4-4" />
-      <path d="M5 19h14" />
-    </svg>
-  );
-}
-
-function DownloadIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v10" />
-      <path d="m8 10 4 4 4-4" />
-      <path d="M5 19h14" />
-    </svg>
-  );
-}
-
 function TrashIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -502,7 +494,7 @@ interface NovelWorkspaceProps {
   novel: NovelDetailRecord;
   onBack: () => void;
   onOpenSource: () => void;
-  onRead: (chapterId: number) => void;
+  onRead: (chapter: ChapterRow) => void;
   onToggleLibrary: () => void;
   sourceUrl: string | null;
   toggleBusy: boolean;
@@ -530,130 +522,148 @@ function NovelWorkspace({
   const libraryLabel = novel.inLibrary
     ? t("novel.removeFromLibrary")
     : t("novel.addToLibrary");
+  const renderCoverPanel = () => (
+    <ConsolePanel className="lnr-novel-cover-panel">
+      <ConsoleCover
+        alt={novel.name}
+        height={204}
+        src={novel.cover}
+        width={136}
+      />
+    </ConsolePanel>
+  );
 
-  return (
-    <div className="lnr-novel-workspace">
-      <ConsolePanel className="lnr-novel-info-panel">
-        <div className="lnr-novel-action-bar">
-          <BackIconButton className="lnr-novel-icon-button" onClick={onBack} />
-          <div className="lnr-novel-action-cluster">
-            <NovelActionButton
-              disabled={!readableChapter}
-              label={readLabel}
-              onClick={() => readableChapter && onRead(readableChapter.id)}
-              tone="accent"
-            >
-              <ReadForwardIcon />
-            </NovelActionButton>
-            <NovelActionButton
-              label={libraryLabel}
-              loading={toggleBusy}
-              onClick={onToggleLibrary}
-              tone={novel.inLibrary ? "danger" : "accent"}
-            >
-              {novel.inLibrary ? <LibraryRemoveIcon /> : <LibraryAddIcon />}
-            </NovelActionButton>
-            <NovelActionButton
-              disabled={!sourceUrl}
-              label={t("novel.openSource")}
-              onClick={onOpenSource}
-            >
-              <ExternalLinkIcon />
-            </NovelActionButton>
-          </div>
+  const renderInfoPanel = () => (
+    <ConsolePanel className="lnr-novel-info-panel">
+      <div className="lnr-novel-action-bar">
+        <BackIconButton className="lnr-novel-icon-button" onClick={onBack} />
+        <div className="lnr-novel-action-cluster">
+          <NovelActionButton
+            disabled={!readableChapter}
+            label={readLabel}
+            onClick={() => readableChapter && onRead(readableChapter)}
+            tone="accent"
+          >
+            <ReadForwardIcon />
+          </NovelActionButton>
+          <NovelActionButton
+            label={libraryLabel}
+            loading={toggleBusy}
+            onClick={onToggleLibrary}
+            tone={novel.inLibrary ? "danger" : "accent"}
+          >
+            {novel.inLibrary ? <LibraryRemoveIcon /> : <LibraryAddIcon />}
+          </NovelActionButton>
+          <NovelActionButton
+            disabled={!sourceUrl}
+            label={t("novel.openSource")}
+            onClick={onOpenSource}
+          >
+            <ExternalLinkIcon />
+          </NovelActionButton>
         </div>
+      </div>
 
-        <Text className="lnr-console-kicker">/novel/{novel.id}</Text>
-        <div className="lnr-novel-title-row">
-          <div className="lnr-novel-title-copy">
-            <Title className="lnr-novel-title" order={1}>
-              {novel.name}
-            </Title>
-            <Group gap="xs" mt={6} wrap="wrap">
-              {novel.author ? (
-                <Text className="lnr-novel-meta">
-                  {t("novel.author", { name: novel.author })}
-                </Text>
-              ) : null}
-              {novel.artist && novel.artist !== novel.author ? (
-                <Text className="lnr-novel-meta">
-                  {t("novel.artist", { name: novel.artist })}
-                </Text>
-              ) : null}
+      <Text className="lnr-console-kicker">/novel/{novel.id}</Text>
+      <div className="lnr-novel-title-row">
+        <div className="lnr-novel-title-copy">
+          <Title className="lnr-novel-title" order={1}>
+            {novel.name}
+          </Title>
+          <Group gap="xs" mt={6} wrap="wrap">
+            {novel.author ? (
               <Text className="lnr-novel-meta">
-                {t("novel.source", { name: novel.pluginId })}
+                {t("novel.author", { name: novel.author })}
               </Text>
-            </Group>
-          </div>
-        </div>
-
-        <Group gap="xs" mt="sm" wrap="wrap">
-          {novel.status ? (
-            <ConsoleChip tone="accent">{novel.status}</ConsoleChip>
-          ) : null}
-          {novel.isLocal ? <ConsoleChip>{t("common.local")}</ConsoleChip> : null}
-          {novel.inLibrary ? (
-            <ConsoleChip tone="success">{t("novel.inLibrary")}</ConsoleChip>
-          ) : (
-            <ConsoleChip>{t("novel.notInLibrary")}</ConsoleChip>
-          )}
-          {genres.slice(0, 5).map((genre) => (
-            <ConsoleChip key={genre}>{genre}</ConsoleChip>
-          ))}
-        </Group>
-
-        <div className="lnr-novel-progress-block">
-          <div className="lnr-novel-progress-line">
-            <ConsoleProgress
-              value={readPercent}
-              status={readPercent >= 100 ? "done" : "active"}
-            />
-            <span>{t("novel.percentRead", { progress: readPercent })}</span>
-          </div>
-          <Group gap="md" mt={6} wrap="wrap">
+            ) : null}
+            {novel.artist && novel.artist !== novel.author ? (
+              <Text className="lnr-novel-meta">
+                {t("novel.artist", { name: novel.artist })}
+              </Text>
+            ) : null}
             <Text className="lnr-novel-meta">
-              {t("novel.lastRead", {
-                date: formatDate(novel.lastReadAt, locale, t),
-              })}
-            </Text>
-            <Text className="lnr-novel-meta">
-              {t("novel.updated", {
-                date: formatDate(novel.updatedAt, locale, t),
-              })}
-            </Text>
-            <Text className="lnr-novel-meta">
-              {t("novel.unreadCount", { count: unreadCount })}
+              {t("novel.source", { name: novel.pluginId })}
             </Text>
           </Group>
         </div>
-      </ConsolePanel>
+      </div>
 
-      <div className="lnr-novel-cover-summary-card">
-        <ConsolePanel className="lnr-novel-cover-panel">
-          <ConsoleCover
-            alt={novel.name}
-            height={204}
-            src={novel.cover}
-            width={136}
+      <Group gap="xs" mt="sm" wrap="wrap">
+        {novel.status ? (
+          <ConsoleChip tone="accent">{novel.status}</ConsoleChip>
+        ) : null}
+        {novel.isLocal ? <ConsoleChip>{t("common.local")}</ConsoleChip> : null}
+        {novel.inLibrary ? (
+          <ConsoleChip tone="success">{t("novel.inLibrary")}</ConsoleChip>
+        ) : (
+          <ConsoleChip>{t("novel.notInLibrary")}</ConsoleChip>
+        )}
+        {genres.slice(0, 5).map((genre) => (
+          <ConsoleChip key={genre}>{genre}</ConsoleChip>
+        ))}
+      </Group>
+
+      <div className="lnr-novel-progress-block">
+        <div className="lnr-novel-progress-line">
+          <ConsoleProgress
+            value={readPercent}
+            status={readPercent >= 100 ? "done" : "active"}
           />
-        </ConsolePanel>
-
-      <ConsolePanel className="lnr-novel-summary-panel" title={t("common.summary")}>
-          {novel.summary ? (
-            <Text className="lnr-novel-summary-text">{novel.summary}</Text>
-          ) : (
-          <Text className="lnr-novel-empty-copy">
-            {t("novel.noSummary")}
+          <span>{t("novel.percentRead", { progress: readPercent })}</span>
+        </div>
+        <Group gap="md" mt={6} wrap="wrap">
+          <Text className="lnr-novel-meta">
+            {t("novel.lastRead", {
+              date: formatDate(novel.lastReadAt, locale, t),
+            })}
           </Text>
-          )}
-          {genres.length > 5 ? (
-            <Group gap="xs" mt="sm" wrap="wrap">
-              {genres.slice(5).map((genre) => (
-                <ConsoleChip key={genre}>{genre}</ConsoleChip>
-              ))}
-            </Group>
-          ) : null}
-        </ConsolePanel>
+          <Text className="lnr-novel-meta">
+            {t("novel.updated", {
+              date: formatDate(novel.updatedAt, locale, t),
+            })}
+          </Text>
+          <Text className="lnr-novel-meta">
+            {t("novel.unreadCount", { count: unreadCount })}
+          </Text>
+        </Group>
+      </div>
+    </ConsolePanel>
+  );
+
+  const renderSummaryPanel = () => (
+    <ConsolePanel
+      className="lnr-novel-summary-panel"
+      title={t("common.summary")}
+    >
+      {novel.summary ? (
+        <Text className="lnr-novel-summary-text">{novel.summary}</Text>
+      ) : (
+        <Text className="lnr-novel-empty-copy">{t("novel.noSummary")}</Text>
+      )}
+      {genres.length > 5 ? (
+        <Group gap="xs" mt="sm" wrap="wrap">
+          {genres.slice(5).map((genre) => (
+            <ConsoleChip key={genre}>{genre}</ConsoleChip>
+          ))}
+        </Group>
+      ) : null}
+    </ConsolePanel>
+  );
+
+  return (
+    <div className="lnr-novel-workspace">
+      <div className="lnr-novel-hero-desktop">
+        {renderCoverPanel()}
+        {renderInfoPanel()}
+        {renderSummaryPanel()}
+      </div>
+
+      <div className="lnr-novel-hero-mobile">
+        {renderInfoPanel()}
+        <div className="lnr-novel-cover-summary-card">
+          {renderCoverPanel()}
+          {renderSummaryPanel()}
+        </div>
       </div>
     </div>
   );
@@ -706,12 +716,18 @@ export function NovelDetailPage() {
   const [statuses, setStatuses] = useState<
     ReadonlyMap<number, DownloadStatus>
   >(() => new Map());
+  const [openingChapterId, setOpeningChapterId] = useState<number | null>(null);
+  const openRequestRef = useRef(0);
 
   useEffect(() => {
     return downloadQueue.subscribe((event) => {
       setStatuses((prev) => {
         const next = new Map(prev);
-        next.set(event.job.id, event.status);
+        if (event.status.kind === "cancelled") {
+          next.delete(event.job.id);
+        } else {
+          next.set(event.job.id, event.status);
+        }
         return next;
       });
       if (event.status.kind === "done") {
@@ -731,8 +747,38 @@ export function NovelDetailPage() {
     void navigate({ to: "/" });
   }
 
-  function openChapter(chapterId: number) {
-    void navigate({ to: "/reader", search: { chapterId } });
+  async function openChapter(chapter: ChapterRow): Promise<void> {
+    const requestId = openRequestRef.current + 1;
+    openRequestRef.current = requestId;
+
+    if (chapter.isDownloaded) {
+      void navigate({ to: "/reader", search: { chapterId: chapter.id } });
+      return;
+    }
+
+    const novel = novelQuery.data;
+    if (!novel) return;
+
+    setOpeningChapterId(chapter.id);
+    try {
+      await downloadQueue.downloadNow({
+        id: chapter.id,
+        pluginId: novel.pluginId,
+        chapterPath: chapter.path,
+      });
+      if (openRequestRef.current !== requestId) return;
+      await queryClient.invalidateQueries({
+        queryKey: chaptersKey(id),
+      });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+      void navigate({ to: "/reader", search: { chapterId: chapter.id } });
+    } catch {
+      // The queue emits the failed status; the row renders that state.
+    } finally {
+      if (openRequestRef.current === requestId) {
+        setOpeningChapterId(null);
+      }
+    }
   }
 
   function openSourceNovel(url: string | null) {
@@ -862,7 +908,10 @@ export function NovelDetailPage() {
                   clearDownload.isPending &&
                   clearDownload.variables === chapter.id
                 }
-                onOpen={() => openChapter(chapter.id)}
+                opening={openingChapterId === chapter.id}
+                onOpen={() => {
+                  void openChapter(chapter);
+                }}
                 onDownload={() => downloadChapter(chapter)}
                 onDeleteDownload={() =>
                   clearDownload.mutate(chapter.id)

@@ -5,6 +5,12 @@
 
 .lnr-novel-workspace {
   --lnr-novel-hero-height: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lnr-novel-hero-desktop {
   align-items: stretch;
   display: grid;
   gap: 12px;
@@ -18,8 +24,12 @@
   min-height: 0;
 }
 
+.lnr-novel-hero-mobile {
+  display: none;
+}
+
 .lnr-novel-cover-summary-card {
-  display: contents;
+  display: none;
 }
 
 .lnr-novel-cover-panel {
@@ -145,6 +155,14 @@
 .lnr-novel-chapter-row:hover,
 .lnr-novel-chapter-row--current {
   background: var(--lnr-design-accent-soft);
+}
+
+.lnr-novel-chapter-row[data-opening="true"] {
+  cursor: wait;
+}
+
+.lnr-novel-chapter-row[data-opening="true"] .lnr-novel-chapter-main {
+  opacity: 0.68;
 }
 
 .lnr-novel-chapter-row:focus-visible {
@@ -289,22 +307,19 @@
 
 @media (max-width: 980px) {
   .lnr-novel-workspace {
-    --lnr-novel-hero-height: 236px;
-    grid-template-columns: 150px minmax(0, 1fr);
-  }
-
-  .lnr-novel-summary-panel {
-    grid-column: 1 / -1;
-    height: 220px;
-  }
-}
-
-@media (max-width: 768px) {
-  .lnr-novel-workspace {
     --lnr-novel-hero-height: auto;
-    --lnr-novel-mobile-cover-height: 150px;
+    --lnr-novel-mobile-cover-height: 204px;
+    --lnr-novel-mobile-cover-width: 136px;
+  }
+
+  .lnr-novel-hero-desktop {
+    display: none;
+  }
+
+  .lnr-novel-hero-mobile {
     display: flex;
     flex-direction: column;
+    gap: 12px;
   }
 
   .lnr-novel-cover-summary-card {
@@ -313,7 +328,7 @@
     border-radius: 5px;
     display: grid;
     gap: 12px;
-    grid-template-columns: 100px minmax(0, 1fr);
+    grid-template-columns: var(--lnr-novel-mobile-cover-width) minmax(0, 1fr);
     min-height: 0;
     overflow: hidden;
     padding: 12px;
@@ -331,6 +346,7 @@
   }
 
   .lnr-novel-info-panel {
+    grid-column: auto;
     height: auto;
   }
 
@@ -344,7 +360,7 @@
 
   .lnr-novel-cover-panel .lnr-console-cover {
     height: var(--lnr-novel-mobile-cover-height) !important;
-    width: 100px !important;
+    width: var(--lnr-novel-mobile-cover-width) !important;
   }
 
   .lnr-novel-summary-panel {
@@ -356,6 +372,13 @@
   .lnr-novel-summary-text,
   .lnr-novel-empty-copy {
     padding: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .lnr-novel-workspace {
+    --lnr-novel-mobile-cover-height: 150px;
+    --lnr-novel-mobile-cover-width: 100px;
   }
 
   .lnr-novel-title-row {

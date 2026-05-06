@@ -16,6 +16,7 @@ import {
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { PageFrame, StateView } from "../components/AppFrame";
+import { DownloadedGlyph } from "../components/ActionGlyphs";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
 import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
 import { LibraryGrid } from "../components/LibraryGrid";
@@ -639,7 +640,7 @@ function LibraryScopeFilters({
           onClick={() => onDownloadedOnlyChange(!downloadedOnly)}
           title={t("library.downloadedOnly")}
         >
-          <DownloadFilterIcon />
+          <DownloadedGlyph />
         </UnstyledButton>
       </Tooltip>
       <Tooltip label={t("library.unreadOnly")} openDelay={350} withArrow>
@@ -1059,17 +1060,6 @@ function SlidersIcon() {
       <path d="M10 17h10" />
       <circle cx="16" cy="7" r="2" />
       <circle cx="8" cy="17" r="2" />
-    </svg>
-  );
-}
-
-function DownloadFilterIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v10" />
-      <path d="m8 10 4 4 4-4" />
-      <path d="M5 18h14" />
-      <path d="M8 21h8" />
     </svg>
   );
 }

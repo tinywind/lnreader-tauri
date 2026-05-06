@@ -3,7 +3,7 @@
   color: var(--lnr-design-ink);
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--lnr-mobile-nav-height));
+  height: var(--lnr-app-content-height);
   min-height: 0;
   overflow: hidden;
 }

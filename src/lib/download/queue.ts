@@ -12,6 +12,7 @@ export type DownloadStatus =
   | { kind: "queued" }
   | { kind: "running" }
   | { kind: "done" }
+  | { kind: "cancelled" }
   | { kind: "failed"; error: string };
 
 export interface DownloadEvent {
@@ -62,6 +63,21 @@ export class DownloadQueue {
     return true;
   }
 
+  downloadNow(job: DownloadJob): Promise<void> {
+    this.cancelWaitingExcept(job.id);
+
+    const current = this.statusById.get(job.id);
+    if (current?.kind === "running") {
+      return this.waitForTerminalStatus(job.id);
+    }
+
+    this.removeWaiting(job.id);
+    const completion = this.waitForTerminalStatus(job.id);
+    this.active.add(job.id);
+    void this.runJob(job);
+    return completion;
+  }
+
   status(chapterId: number): DownloadStatus | undefined {
     return this.statusById.get(chapterId);
   }
@@ -82,6 +98,46 @@ export class DownloadQueue {
     for (const listener of this.listeners) {
       listener({ job, status });
     }
+  }
+
+  private cancelWaitingExcept(chapterId: number): void {
+    const retained: DownloadJob[] = [];
+    for (const waitingJob of this.waiting) {
+      if (waitingJob.id === chapterId) {
+        retained.push(waitingJob);
+        continue;
+      }
+      this.setStatus(waitingJob, { kind: "cancelled" });
+    }
+    this.waiting.length = 0;
+    this.waiting.push(...retained);
+  }
+
+  private removeWaiting(chapterId: number): void {
+    const index = this.waiting.findIndex((job) => job.id === chapterId);
+    if (index >= 0) this.waiting.splice(index, 1);
+  }
+
+  private waitForTerminalStatus(chapterId: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const unsubscribe = this.subscribe((event) => {
+        if (event.job.id !== chapterId) return;
+        if (event.status.kind === "done") {
+          unsubscribe();
+          resolve();
+          return;
+        }
+        if (event.status.kind === "failed") {
+          unsubscribe();
+          reject(new Error(event.status.error));
+          return;
+        }
+        if (event.status.kind === "cancelled") {
+          unsubscribe();
+          reject(new Error("Download was cancelled."));
+        }
+      });
+    });
   }
 
   private drain(): void {

@@ -507,7 +507,7 @@
   "reader.chapterNotFound": "챕터를 찾을 수 없음",
   "reader.chapterNotFoundMessage": "로컬 DB에 id {id} 챕터 행이 없습니다.",
   "reader.notDownloadedYet": "아직 다운로드되지 않음",
-  "reader.notDownloadedMessage": "오프라인으로 읽기 전에 소설 상세 화면에서 이 챕터를 열고 \"Download\"를 눌러 본문을 가져오세요.",
+  "reader.notDownloadedMessage": "오프라인으로 읽기 전에 소설 상세 화면에서 이 챕터를 열어 본문을 가져오세요.",
   "reader.sample": "샘플",
   "reader.next": "다음",
   "novel.never": "없음",

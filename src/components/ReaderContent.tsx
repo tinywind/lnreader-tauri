@@ -266,7 +266,10 @@ function ReaderContentInner(
   );
 
   const viewportHeight =
-    requestedViewportHeight ?? (general.fullScreen ? "100vh" : "calc(100vh - 56px)");
+    requestedViewportHeight ??
+    (general.fullScreen
+      ? "var(--lnr-app-content-height)"
+      : "calc(var(--lnr-app-content-height) - 56px)");
   const overlayBottom = bottomOverlayOffset ?? 8;
 
   const scrollByPage = useCallback(

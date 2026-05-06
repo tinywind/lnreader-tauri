@@ -14,6 +14,7 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
+import { DownloadGlyph, DownloadedGlyph } from "../components/ActionGlyphs";
 import {
   ConsoleCover,
   ConsolePanel,
@@ -391,7 +392,9 @@ function UpdateDownloadStatusFlag({
 }) {
   const { t } = useTranslation();
 
-  if (!status || status.kind === "done") return null;
+  if (!status || status.kind === "done" || status.kind === "cancelled") {
+    return null;
+  }
 
   if (status.kind === "failed") {
     return (
@@ -495,7 +498,7 @@ function UpdateRow({
             </UpdateFlag>
             {entry.isDownloaded ? (
               <UpdateFlag label={t("novel.downloaded")} tone="done">
-                <CachedIcon />
+                <DownloadedGlyph />
               </UpdateFlag>
             ) : null}
             <UpdateDownloadStatusFlag status={downloadStatus} />
@@ -524,7 +527,7 @@ function UpdateRow({
             ) : isQueued ? (
               <ClockIcon />
             ) : (
-              <DownloadIcon />
+              <DownloadGlyph />
             )}
           </UpdateIconButton>
         ) : null}
@@ -542,26 +545,6 @@ function ReadForwardIcon() {
       <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
       <path d="M9 9h5" />
       <path d="M9 13h4" />
-    </svg>
-  );
-}
-
-function DownloadIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v10" />
-      <path d="m8 10 4 4 4-4" />
-      <path d="M5 19h14" />
-    </svg>
-  );
-}
-
-function CachedIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v10" />
-      <path d="m8 10 4 4 4-4" />
-      <path d="M5 19h14" />
     </svg>
   );
 }
@@ -726,7 +709,11 @@ export function UpdatesPage() {
     return downloadQueue.subscribe((event) => {
       setDownloadStatuses((current) => {
         const next = new Map(current);
-        next.set(event.job.id, event.status);
+        if (event.status.kind === "cancelled") {
+          next.delete(event.job.id);
+        } else {
+          next.set(event.job.id, event.status);
+        }
         return next;
       });
       if (event.status.kind === "done") {
@@ -749,6 +736,10 @@ export function UpdatesPage() {
       const next = new Map(current);
       for (const entry of updates) {
         const status = downloadQueue.status(entry.chapterId);
+        if (status?.kind === "cancelled") {
+          if (next.delete(entry.chapterId)) changed = true;
+          continue;
+        }
         if (status && next.get(entry.chapterId) !== status) {
           next.set(entry.chapterId, status);
           changed = true;

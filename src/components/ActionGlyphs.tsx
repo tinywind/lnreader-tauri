@@ -35,6 +35,25 @@ export function ClockGlyph({ className }: ActionGlyphProps) {
   );
 }
 
+export function DownloadGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 20h14" />
+    </svg>
+  );
+}
+
+export function DownloadedGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5h14v14H5z" />
+      <path d="m8 12 3 3 5-6" />
+    </svg>
+  );
+}
+
 export function ExternalLinkGlyph({ className }: ActionGlyphProps) {
   return (
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">

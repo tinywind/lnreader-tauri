@@ -297,7 +297,7 @@
     height: 34px;
     position: fixed;
     right: 12px;
-    top: calc(env(safe-area-inset-top, 0px) + 12px);
+    top: calc(var(--lnr-safe-area-top) + 12px);
     width: 34px;
     z-index: 30;
   }

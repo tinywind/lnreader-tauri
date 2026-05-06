@@ -3,7 +3,7 @@
   --lnr-page-gutter: 0;
   --lnr-page-max-width: none;
   background: var(--lnr-design-bg);
-  height: calc(100vh - var(--lnr-mobile-nav-height));
+  height: var(--lnr-app-content-height);
   overflow: hidden;
   padding: 0;
 }
@@ -921,13 +921,13 @@
 @media (max-width: 760px) {
   .lnr-library-page {
     height: auto;
-    min-height: calc(100vh - var(--lnr-mobile-nav-height));
+    min-height: var(--lnr-app-content-height);
     overflow: visible;
   }
 
   .lnr-library-page > :where(div),
   .lnr-library-shell {
-    min-height: calc(100vh - var(--lnr-mobile-nav-height));
+    min-height: var(--lnr-app-content-height);
   }
 
   .lnr-library-main-header {

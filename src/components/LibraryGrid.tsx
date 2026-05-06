@@ -17,6 +17,7 @@ import {
   ConsoleProgress,
   ConsoleStatusDot,
 } from "./ConsolePrimitives";
+import { DownloadedGlyph } from "./ActionGlyphs";
 
 const LONG_PRESS_MS = 500;
 
@@ -234,7 +235,7 @@ function LibraryTableRow({
         data-downloaded={downloadProgress > 0}
         title={status.label}
       >
-        <DownloadIcon />
+        <DownloadedGlyph />
       </span>
     </LibraryInteractiveItem>
   );
@@ -332,16 +333,6 @@ function getCreatorLabel(
   t: (key: TranslationKey) => string,
 ) {
   return novel.author?.trim() || getSourceLabel(novel, t);
-}
-
-function DownloadIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 4v11" />
-      <path d="m8 11 4 4 4-4" />
-      <path d="M5 20h14" />
-    </svg>
-  );
 }
 
 function getNovelStatus(

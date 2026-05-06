@@ -1,5 +1,18 @@
 :root {
-  --lnr-mobile-nav-height: 52px;
+  --lnr-safe-area-top: env(safe-area-inset-top, 0px);
+  --lnr-safe-area-right: env(safe-area-inset-right, 0px);
+  --lnr-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --lnr-safe-area-left: env(safe-area-inset-left, 0px);
+  --lnr-viewport-height: 100vh;
+  --lnr-mobile-nav-content-height: 52px;
+  --lnr-mobile-nav-height: calc(
+    var(--lnr-mobile-nav-content-height) + var(--lnr-safe-area-bottom)
+  );
+  --lnr-app-bottom-inset: var(--lnr-mobile-nav-height);
+  --lnr-app-content-height: calc(
+    var(--lnr-viewport-height) - var(--lnr-safe-area-top) -
+      var(--lnr-app-bottom-inset)
+  );
   --lnr-page-max-width: 1180px;
   --lnr-page-gutter: clamp(16px, 3vw, 32px);
   --lnr-page-block: clamp(18px, 3vw, 36px);
@@ -23,9 +36,17 @@
   --lnr-focus-ring: 0 0 0 2px var(--lnr-design-bg), 0 0 0 4px var(--lnr-design-accent);
 }
 
+@supports (height: 100dvh) {
+  :root {
+    --lnr-viewport-height: 100dvh;
+  }
+}
+
 @media (min-width: 768px) {
   :root {
+    --lnr-mobile-nav-content-height: 0px;
     --lnr-mobile-nav-height: 0px;
+    --lnr-app-bottom-inset: var(--lnr-safe-area-bottom);
   }
 }
 
@@ -56,7 +77,10 @@ a {
 .lnr-app-rail {
   background: var(--lnr-design-panel);
   border-color: var(--lnr-design-rule);
+  box-sizing: border-box;
   color: var(--lnr-design-ink-muted);
+  padding-left: var(--lnr-safe-area-left);
+  padding-top: var(--lnr-safe-area-top);
 }
 
 .lnr-rail-brand {
@@ -158,8 +182,20 @@ a {
 }
 
 .lnr-app-main {
-  min-height: 100vh;
-  padding-bottom: var(--lnr-mobile-nav-height);
+  box-sizing: border-box;
+  min-height: var(--lnr-viewport-height);
+  padding-block-start: calc(
+    var(--app-shell-header-offset, 0rem) + var(--lnr-safe-area-top)
+  );
+  padding-block-end: calc(
+    var(--app-shell-footer-offset, 0rem) + var(--lnr-app-bottom-inset)
+  );
+  padding-inline-start: calc(
+    var(--app-shell-navbar-offset, 0rem) + var(--lnr-safe-area-left)
+  );
+  padding-inline-end: calc(
+    var(--app-shell-aside-offset, 0rem) + var(--lnr-safe-area-right)
+  );
 }
 
 .lnr-mobile-nav {
@@ -172,7 +208,9 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   height: var(--lnr-mobile-nav-height);
   left: 0;
-  padding: 6px 10px calc(6px + env(safe-area-inset-bottom));
+  padding: 6px calc(10px + var(--lnr-safe-area-right))
+    calc(6px + var(--lnr-safe-area-bottom))
+    calc(10px + var(--lnr-safe-area-left));
   position: fixed;
   right: 0;
   z-index: 200;

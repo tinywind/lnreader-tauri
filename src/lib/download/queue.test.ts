@@ -153,4 +153,49 @@ describe("DownloadQueue.enqueue + drain", () => {
       true,
     );
   });
+
+  it("downloadNow cancels queued jobs and runs the requested job immediately", async () => {
+    const manager = makeManager([
+      makePlugin("a", async () => "first"),
+      makePlugin("b", async () => "second"),
+      makePlugin("c", async () => "urgent"),
+    ]);
+    const queue = new DownloadQueue({ manager, save, concurrency: 1 });
+    const events: DownloadEvent[] = [];
+    queue.subscribe((event) => events.push(event));
+
+    queue.enqueue({ id: 1, pluginId: "a", chapterPath: "/c/1" });
+    queue.enqueue({ id: 2, pluginId: "b", chapterPath: "/c/2" });
+    await queue.downloadNow({ id: 3, pluginId: "c", chapterPath: "/c/3" });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          job: expect.objectContaining({ id: 2 }),
+          status: { kind: "cancelled" },
+        }),
+        expect.objectContaining({
+          job: expect.objectContaining({ id: 3 }),
+          status: { kind: "done" },
+        }),
+      ]),
+    );
+    expect(queue.status(2)?.kind).toBe("cancelled");
+    expect(queue.status(3)?.kind).toBe("done");
+    expect(save).toHaveBeenCalledWith(3, "urgent");
+  });
+
+  it("downloadNow rejects when the requested job fails", async () => {
+    const manager = makeManager([
+      makePlugin("p", async () => {
+        throw new Error("urgent failed");
+      }),
+    ]);
+    const queue = new DownloadQueue({ manager, save, concurrency: 1 });
+
+    await expect(
+      queue.downloadNow({ id: 8, pluginId: "p", chapterPath: "/c/8" }),
+    ).rejects.toThrow("urgent failed");
+    expect(queue.status(8)?.kind).toBe("failed");
+  });
 });

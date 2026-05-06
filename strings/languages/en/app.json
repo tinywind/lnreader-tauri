@@ -507,7 +507,7 @@
   "reader.chapterNotFound": "Chapter not found",
   "reader.chapterNotFoundMessage": "No chapter row with id {id} exists in the local DB.",
   "reader.notDownloadedYet": "Not downloaded yet",
-  "reader.notDownloadedMessage": "Open this chapter from the novel detail screen and tap \"Download\" to fetch its body before reading offline.",
+  "reader.notDownloadedMessage": "Open this chapter from the novel detail screen to fetch its body before reading offline.",
   "reader.sample": "Sample",
   "reader.next": "Next",
   "novel.never": "Never",

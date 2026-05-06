@@ -3,7 +3,7 @@
   --lnr-page-gutter: 0;
   --lnr-page-max-width: none;
   background: var(--lnr-design-bg);
-  height: calc(100vh - var(--lnr-mobile-nav-height));
+  height: var(--lnr-app-content-height);
   overflow: hidden;
   padding: 0;
 }
@@ -313,13 +313,13 @@
 @media (max-width: 767px) {
   .lnr-settings-page {
     height: auto;
-    min-height: calc(100vh - var(--lnr-mobile-nav-height));
+    min-height: var(--lnr-app-content-height);
     overflow: visible;
   }
 
   .lnr-settings-page > :where(div),
   .lnr-settings-shell {
-    min-height: calc(100vh - var(--lnr-mobile-nav-height));
+    min-height: var(--lnr-app-content-height);
   }
 
   .lnr-settings-shell {
@@ -368,7 +368,7 @@
 
   .lnr-settings-detail,
   .lnr-settings-detail-inner {
-    min-height: calc(100vh - var(--lnr-mobile-nav-height));
+    min-height: var(--lnr-app-content-height);
   }
 
   .lnr-settings-mobile-back {
