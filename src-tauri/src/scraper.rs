@@ -1,12 +1,12 @@
-//! Desktop scraper WebView: single persistent Tauri child Webview
-//! embedded in the main window that owns the per-host cookie jar for
-//! plugin fetches.
+//! Desktop scraper WebViews: per-site persistent Tauri child Webviews
+//! embedded in the main window. Each site owns its own browser cookie
+//! jar and fetch context.
 //!
 //! Architecture:
 //!
-//! - The scraper webview lives at `scraper.html` (a stable
-//!   tauri://localhost origin) and is never destroyed. It exists
-//!   for two reasons:
+//! - Each scraper webview starts at `scraper.html` (a stable
+//!   tauri://localhost origin) and is created lazily per plugin site.
+//!   It exists for two reasons:
 //!     1. It owns a real-browser cookie jar. When the user opens
 //!        the in-app site browser overlay and navigates to a plugin
 //!        site, every cookie the site sets (CF clearance, login
@@ -14,7 +14,7 @@
 //!     2. It is the surface React's `SiteBrowserOverlay` paints
 //!        into when the user wants to interact with a site.
 //!
-//! - Plugin HTTP fetches run inside the scraper WebView's JavaScript
+//! - Plugin HTTP fetches run inside that site's scraper WebView
 //!   context. This covers source browsing/search/listing, novel
 //!   metadata/detail parsing, update checks, and chapter body
 //!   downloads. That keeps the request on the browser network stack
@@ -27,6 +27,10 @@
 //!   polls a page-local result slot through `eval_with_callback`.
 
 use std::collections::HashMap;
+#[cfg(desktop)]
+use std::collections::hash_map::DefaultHasher;
+#[cfg(desktop)]
+use std::hash::{Hash, Hasher};
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(desktop)]
@@ -42,7 +46,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 #[cfg(desktop)]
-use tauri::{LogicalPosition, LogicalSize, Webview, WebviewBuilder};
+use tauri::{LogicalPosition, LogicalSize, Rect, Webview, WebviewBuilder};
 #[cfg(desktop)]
 use tauri::{Manager, Url, WebviewUrl};
 #[cfg(desktop)]
@@ -110,11 +114,171 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
       }
     }
   } catch (e) {}
+
+  function installNoreaControls() {
+    try {
+      if (window.top !== window.self) return;
+    } catch (e) {
+      return;
+    }
+    if (window.__noreaScraperControlsInstalled) return;
+    window.__noreaScraperControlsInstalled = true;
+
+    function applyStyle(node, styles) {
+      for (var key in styles) node.style.setProperty(key, styles[key], "important");
+    }
+
+    function publish(action) {
+      window.__noreaScraperControlMessage = {
+        action: action,
+        sequence: Date.now()
+      };
+    }
+
+    function mount() {
+      if (!document.body) return;
+      var host = document.getElementById("__norea_scraper_controls");
+      if (!host) {
+        host = document.createElement("div");
+        host.id = "__norea_scraper_controls";
+
+        var url = document.createElement("span");
+        url.id = "__norea_scraper_controls_url";
+        var move = document.createElement("button");
+        move.id = "__norea_scraper_controls_move";
+        move.type = "button";
+        var close = document.createElement("button");
+        close.id = "__norea_scraper_controls_close";
+        close.type = "button";
+        close.textContent = "Close";
+
+        host.appendChild(url);
+        host.appendChild(move);
+        host.appendChild(close);
+        document.body.appendChild(host);
+
+        var edge = "top";
+        var lastActivation = 0;
+
+        function setEdge(nextEdge) {
+          edge = nextEdge === "bottom" ? "bottom" : "top";
+          host.style.setProperty("top", edge === "top" ? "12px" : "auto", "important");
+          host.style.setProperty("bottom", edge === "bottom" ? "12px" : "auto", "important");
+          move.textContent = edge === "top" ? "Move bottom" : "Move top";
+        }
+
+        function activate(event, handler) {
+          if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+          }
+          var now = Date.now();
+          if (now - lastActivation < 150) return;
+          lastActivation = now;
+          handler();
+        }
+
+        function bind(button, handler) {
+          var events = ["pointerdown", "mousedown", "touchstart", "click"];
+          for (var i = 0; i < events.length; i += 1) {
+            button.addEventListener(events[i], function (event) {
+              activate(event, handler);
+            }, true);
+          }
+        }
+
+        bind(move, function () {
+          setEdge(edge === "top" ? "bottom" : "top");
+        });
+        bind(close, function () {
+          publish("close");
+        });
+
+        setEdge(edge);
+      }
+
+      var urlNode = document.getElementById("__norea_scraper_controls_url");
+      applyStyle(host, {
+        "position": "fixed",
+        "left": "50%",
+        "right": "auto",
+        "width": "calc(100vw - 24px)",
+        "max-width": "720px",
+        "height": "40px",
+        "transform": "translateX(-50%)",
+        "z-index": "2147483647",
+        "display": "flex",
+        "align-items": "center",
+        "gap": "8px",
+        "box-sizing": "border-box",
+        "padding": "7px 8px",
+        "border": "1px solid rgba(255,255,255,.22)",
+        "border-radius": "12px",
+        "background": "rgba(22,22,24,.94)",
+        "box-shadow": "0 10px 30px rgba(0,0,0,.35)",
+        "color": "#fff",
+        "font": "13px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+        "pointer-events": "auto"
+      });
+      if (urlNode) {
+        urlNode.textContent = location.href;
+        applyStyle(urlNode, {
+          "flex": "1",
+          "min-width": "0",
+          "overflow": "hidden",
+          "text-overflow": "ellipsis",
+          "white-space": "nowrap",
+          "color": "rgba(255,255,255,.82)"
+        });
+      }
+      var buttons = [
+        document.getElementById("__norea_scraper_controls_move"),
+        document.getElementById("__norea_scraper_controls_close")
+      ];
+      for (var index = 0; index < buttons.length; index += 1) {
+        if (!buttons[index]) continue;
+        applyStyle(buttons[index], {
+          "border": "1px solid rgba(255,255,255,.25)",
+          "border-radius": "8px",
+          "background": "rgba(255,255,255,.12)",
+          "color": "#fff",
+          "font": "inherit",
+          "padding": "5px 9px",
+          "cursor": "pointer"
+        });
+      }
+      if (host.parentNode !== document.body || document.body.lastElementChild !== host) {
+        document.body.appendChild(host);
+      }
+    }
+
+    function mountSoon() {
+      try {
+        mount();
+      } catch (e) {}
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", mountSoon, { once: true });
+    } else {
+      mountSoon();
+    }
+    window.setInterval(mountSoon, 500);
+  }
+
+  installNoreaControls();
 })();
 "##;
 
 #[cfg(desktop)]
 type ScraperWebview = Webview<tauri::Wry>;
+
+#[cfg(desktop)]
+#[derive(Clone, Debug)]
+struct ScraperEntry {
+    label: String,
+}
 
 /// Inbound JSON shape from `webview_fetch` callers (matches the
 /// browser `RequestInit` subset our pluginFetch surfaces).
@@ -138,15 +302,20 @@ pub struct FetchResult {
     pub final_url: String,
 }
 
-/// Per-target navigation lock so two `scraper_navigate` calls don't
-/// race the visible overlay into the wrong page. Most callers only
-/// hit `webview_fetch` (which does not navigate), so this is rarely
-/// contended.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScraperControlMessage {
+    pub action: String,
+    pub sequence: Option<u64>,
+}
+
+/// Lazily-created scraper WebViews keyed by plugin site origin.
 #[cfg(desktop)]
 #[derive(Default)]
 pub struct ScraperState {
-    nav_lock: tokio::sync::Mutex<()>,
-    /// Last URL the visible overlay navigated to, for diagnostics.
+    webviews: Mutex<HashMap<String, ScraperEntry>>,
+    visible_key: Mutex<Option<String>>,
+    /// Last URL the visible site browser navigated to, for diagnostics.
     last_navigated: Mutex<Option<String>>,
 }
 
@@ -156,43 +325,138 @@ pub struct ScraperState;
 
 #[cfg(desktop)]
 const HIDDEN_SIZE: f64 = 1.0;
+#[cfg(desktop)]
+const HIDDEN_POSITION: f64 = -10_000.0;
 
 #[cfg(desktop)]
-fn scraper_handle(app: &AppHandle) -> Result<ScraperWebview, String> {
-    app.get_webview(SCRAPER_LABEL)
-        .ok_or_else(|| "scraper: child webview not yet attached".to_string())
+fn scraper_key_from_url(url: &Url) -> String {
+    let host = url.host_str().unwrap_or("local");
+    match url.port_or_known_default() {
+        Some(port) => format!("{}://{}:{}", url.scheme(), host, port),
+        None => format!("{}://{}", url.scheme(), host),
+    }
 }
 
-/// Eagerly attach the scraper child Webview to the main window at
-/// app setup. Idempotent; re-running is a no-op once attached.
 #[cfg(desktop)]
-pub fn init_scraper(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview(SCRAPER_LABEL).is_some() {
-        return Ok(());
+fn scraper_label_from_key(key: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    format!("{SCRAPER_LABEL}-{:016x}", hasher.finish())
+}
+
+#[cfg(desktop)]
+fn parse_scraper_key(url: &str, context: &str) -> Result<String, String> {
+    let parsed: Url = url
+        .parse()
+        .map_err(|err| format!("scraper: invalid {context} url '{url}': {err}"))?;
+    Ok(scraper_key_from_url(&parsed))
+}
+
+#[cfg(desktop)]
+fn scraper_handle_for_key(
+    app: &AppHandle,
+    state: &ScraperState,
+    key: &str,
+) -> Result<ScraperWebview, String> {
+    if let Some(existing) = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .get(key)
+        .cloned()
+    {
+        if let Some(webview) = app.get_webview(&existing.label) {
+            return Ok(webview);
+        }
     }
+
+    let label = scraper_label_from_key(key);
+    if let Some(webview) = app.get_webview(&label) {
+        state
+            .webviews
+            .lock()
+            .expect("scraper webviews mutex")
+            .insert(key.to_string(), ScraperEntry { label });
+        return Ok(webview);
+    }
+
     let main_window = app
         .get_window("main")
-        .ok_or_else(|| "scraper: main window missing at setup".to_string())?;
-
+        .ok_or_else(|| "scraper: main window missing".to_string())?;
     let builder = WebviewBuilder::new(
-        SCRAPER_LABEL,
+        label.clone(),
         WebviewUrl::App(PathBuf::from(SCRAPER_HOMEPAGE_PATH)),
     )
     .initialization_script(SCRAPER_INIT_SCRIPT);
-
-    let scraper = main_window
+    let webview = main_window
         .add_child(
             builder,
-            LogicalPosition::new(0.0, 0.0),
+            LogicalPosition::new(HIDDEN_POSITION, HIDDEN_POSITION),
             LogicalSize::new(HIDDEN_SIZE, HIDDEN_SIZE),
         )
-        .map_err(|err| format!("scraper: add_child: {err}"))?;
+        .map_err(|err| format!("scraper: add_child for {key}: {err}"))?;
+    webview
+        .hide()
+        .map_err(|err| format!("scraper: hide after init for {key}: {err}"))?;
+    state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .insert(key.to_string(), ScraperEntry { label });
+    Ok(webview)
+}
 
-    #[cfg(debug_assertions)]
-    {
-        scraper.open_devtools();
-    }
-    let _ = scraper;
+#[cfg(desktop)]
+fn scraper_handle_for_url(
+    app: &AppHandle,
+    state: &ScraperState,
+    url: &str,
+    context: &str,
+) -> Result<(String, ScraperWebview), String> {
+    let key = parse_scraper_key(url, context)?;
+    let webview = scraper_handle_for_key(app, state, &key)?;
+    Ok((key, webview))
+}
+
+#[cfg(desktop)]
+fn set_webview_bounds(
+    webview: &ScraperWebview,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    context: &str,
+) -> Result<(), String> {
+    webview
+        .set_bounds(Rect {
+            position: LogicalPosition::new(x, y).into(),
+            size: LogicalSize::new(width, height).into(),
+        })
+        .map_err(|err| format!("scraper: set {context} bounds: {err}"))
+}
+
+#[cfg(desktop)]
+fn hide_scraper_webview(webview: &ScraperWebview) -> Result<(), String> {
+    set_webview_bounds(
+        webview,
+        HIDDEN_POSITION,
+        HIDDEN_POSITION,
+        HIDDEN_SIZE,
+        HIDDEN_SIZE,
+        "browser",
+    )?;
+    webview
+        .hide()
+        .map_err(|err| format!("scraper: hide: {err}"))
+}
+
+/// Verify the main window exists. Site scraper WebViews are created
+/// lazily per plugin site when fetch or browsing needs them.
+#[cfg(desktop)]
+pub fn init_scraper(app: &AppHandle) -> Result<(), String> {
+    app
+        .get_window("main")
+        .ok_or_else(|| "scraper: main window missing at setup".to_string())?;
     Ok(())
 }
 
@@ -205,7 +469,35 @@ pub fn init_scraper(_app: &AppHandle) -> Result<(), String> {
 #[cfg(all(debug_assertions, desktop))]
 #[tauri::command]
 pub fn scraper_open_devtools(app: AppHandle) -> Result<(), String> {
-    let scraper = scraper_handle(&app)?;
+    let state = app.state::<ScraperState>();
+    let visible_key = state
+        .visible_key
+        .lock()
+        .expect("scraper visible_key mutex")
+        .clone();
+    let label = visible_key
+        .as_ref()
+        .and_then(|key| {
+            state
+                .webviews
+                .lock()
+                .expect("scraper webviews mutex")
+                .get(key)
+                .map(|entry| entry.label.clone())
+        })
+        .or_else(|| {
+            state
+                .webviews
+                .lock()
+                .expect("scraper webviews mutex")
+                .values()
+                .next()
+                .map(|entry| entry.label.clone())
+        })
+        .ok_or_else(|| "scraper: no webview available for devtools".to_string())?;
+    let scraper = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("scraper: webview '{label}' missing"))?;
     scraper.open_devtools();
     Ok(())
 }
@@ -222,27 +514,48 @@ pub fn scraper_open_devtools(_app: AppHandle) -> Result<(), String> {
     Err("devtools only available in debug builds".to_string())
 }
 
-/// Reposition + resize the scraper child Webview. React passes the
-/// pixel rect of the placeholder div under its top chrome so the
-/// scraper paints exactly inside that area.
+/// Reposition + resize the scraper child Webview. Desktop controls
+/// live inside the scraper WebView so they remain in the main window.
 #[cfg(desktop)]
 #[tauri::command]
 pub fn scraper_set_bounds(
     app: AppHandle,
+    state: tauri::State<'_, ScraperState>,
+    url: String,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let scraper = scraper_handle(&app)?;
+    let (key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
+    let previous_key = state
+        .visible_key
+        .lock()
+        .expect("scraper visible_key mutex")
+        .clone();
+    if previous_key.as_deref() != Some(key.as_str()) {
+        if let Some(previous_key) = previous_key {
+            if let Some(previous) = state
+                .webviews
+                .lock()
+                .expect("scraper webviews mutex")
+                .get(&previous_key)
+                .cloned()
+                .and_then(|entry| app.get_webview(&entry.label))
+            {
+                hide_scraper_webview(&previous)?;
+            }
+        }
+    }
+    let safe_x = x.max(0.0);
+    let safe_y = y.max(0.0);
     let safe_w = width.max(HIDDEN_SIZE);
     let safe_h = height.max(HIDDEN_SIZE);
     scraper
-        .set_position(LogicalPosition::new(x, y))
-        .map_err(|err| format!("scraper: set_position: {err}"))?;
-    scraper
-        .set_size(LogicalSize::new(safe_w, safe_h))
-        .map_err(|err| format!("scraper: set_size: {err}"))?;
+        .show()
+        .map_err(|err| format!("scraper: show: {err}"))?;
+    set_webview_bounds(&scraper, safe_x, safe_y, safe_w, safe_h, "browser")?;
+    *state.visible_key.lock().expect("scraper visible_key mutex") = Some(key);
     Ok(())
 }
 
@@ -250,6 +563,8 @@ pub fn scraper_set_bounds(
 #[tauri::command]
 pub fn scraper_set_bounds(
     _app: AppHandle,
+    _state: tauri::State<'_, ScraperState>,
+    _url: String,
     _x: f64,
     _y: f64,
     _width: f64,
@@ -258,18 +573,29 @@ pub fn scraper_set_bounds(
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
 
-/// Collapse the scraper to its hidden 1x1 footprint when the modal
-/// closes. Cookies survive because the Webview is never destroyed.
+/// Collapse and hide the scraper when the modal closes.
 #[cfg(desktop)]
 #[tauri::command]
 pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
-    let scraper = scraper_handle(&app)?;
-    scraper
-        .set_position(LogicalPosition::new(0.0, 0.0))
-        .map_err(|err| format!("scraper: set_position: {err}"))?;
-    scraper
-        .set_size(LogicalSize::new(HIDDEN_SIZE, HIDDEN_SIZE))
-        .map_err(|err| format!("scraper: set_size: {err}"))?;
+    let state = app.state::<ScraperState>();
+    let visible_key = state
+        .visible_key
+        .lock()
+        .expect("scraper visible_key mutex")
+        .take();
+    let Some(visible_key) = visible_key else {
+        return Ok(());
+    };
+    if let Some(webview) = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .get(&visible_key)
+        .cloned()
+        .and_then(|entry| app.get_webview(&entry.label))
+    {
+        hide_scraper_webview(&webview)?;
+    }
     Ok(())
 }
 
@@ -279,19 +605,77 @@ pub fn scraper_hide(_app: AppHandle) -> Result<(), String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
 
+/// Poll the in-page scraper controls for user actions while the browser is open.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn scraper_poll_control_message(
+    app: AppHandle,
+) -> Result<Option<ScraperControlMessage>, String> {
+    let state = app.state::<ScraperState>();
+    let visible_key = state
+        .visible_key
+        .lock()
+        .expect("scraper visible_key mutex")
+        .clone();
+    let Some(visible_key) = visible_key else {
+        return Ok(None);
+    };
+    let Some(scraper) = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .get(&visible_key)
+        .cloned()
+        .and_then(|entry| app.get_webview(&entry.label))
+    else {
+        return Ok(None);
+    };
+    eval_json::<Option<ScraperControlMessage>>(
+        &scraper,
+        r#"(function () {
+  const message = window.__noreaScraperControlMessage || null;
+  window.__noreaScraperControlMessage = null;
+  return message;
+})()"#
+            .to_string(),
+    )
+    .await
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn scraper_poll_control_message(
+    _app: AppHandle,
+) -> Result<Option<ScraperControlMessage>, String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
 /// Delete all cookies held by the scraper WebView cookie jar.
 #[cfg(desktop)]
 #[tauri::command]
 pub async fn scraper_clear_cookies(app: AppHandle) -> Result<usize, String> {
-    let scraper = scraper_handle(&app)?;
-    let cookies = scraper
-        .cookies()
-        .map_err(|err| format!("scraper: read cookies: {err}"))?;
-    let count = cookies.len();
-    for cookie in cookies {
-        scraper
-            .delete_cookie(cookie)
-            .map_err(|err| format!("scraper: delete cookie: {err}"))?;
+    let state = app.state::<ScraperState>();
+    let labels: Vec<String> = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .values()
+        .map(|entry| entry.label.clone())
+        .collect();
+    let mut count = 0;
+    for label in labels {
+        let Some(scraper) = app.get_webview(&label) else {
+            continue;
+        };
+        let cookies = scraper
+            .cookies()
+            .map_err(|err| format!("scraper: read cookies for {label}: {err}"))?;
+        count += cookies.len();
+        for cookie in cookies {
+            scraper
+                .delete_cookie(cookie)
+                .map_err(|err| format!("scraper: delete cookie for {label}: {err}"))?;
+        }
     }
     Ok(count)
 }
@@ -312,8 +696,7 @@ pub async fn scraper_navigate(
     state: tauri::State<'_, ScraperState>,
     url: String,
 ) -> Result<(), String> {
-    let _guard = state.nav_lock.lock().await;
-    let scraper = scraper_handle(&app)?;
+    let (_key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
     let parsed: Url = url
         .parse()
         .map_err(|err| format!("scraper_navigate: invalid url '{url}': {err}"))?;
@@ -571,20 +954,16 @@ fn build_webview_fetch_cleanup_script(request_id: &str) -> Result<String, String
 /// Issue an HTTP request through the scraper WebView's own browser
 /// `fetch()`, preserving Cloudflare/browser-network behavior.
 #[cfg(desktop)]
-#[tauri::command]
-pub async fn webview_fetch(
-    app: AppHandle,
-    state: tauri::State<'_, ScraperState>,
+async fn webview_fetch_with_ready_scraper(
+    scraper: &ScraperWebview,
     url: String,
     init: Option<FetchInit>,
     context_url: Option<String>,
 ) -> Result<FetchResult, String> {
-    let _guard = state.nav_lock.lock().await;
-    let scraper = scraper_handle(&app)?;
     let _: Url = url
         .parse()
         .map_err(|err| format!("scraper: invalid url '{url}': {err}"))?;
-    prepare_fetch_context(&scraper, context_url.as_deref()).await?;
+    prepare_fetch_context(scraper, context_url.as_deref()).await?;
     let init = init.unwrap_or_default();
     let request_id = format!(
         "fetch-{}",
@@ -602,8 +981,7 @@ pub async fn webview_fetch(
     while started.elapsed() < deadline {
         tokio::time::sleep(poll_interval).await;
         let poll_script = build_webview_fetch_poll_script(&request_id)?;
-        let result: Option<WebviewFetchScriptResult> =
-            eval_json(&scraper, poll_script).await?;
+        let result: Option<WebviewFetchScriptResult> = eval_json(scraper, poll_script).await?;
         let Some(result) = result else {
             continue;
         };
@@ -634,6 +1012,20 @@ pub async fn webview_fetch(
         "scraper: browser fetch to {url} timed out after {}ms",
         deadline.as_millis()
     ))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn webview_fetch(
+    app: AppHandle,
+    state: tauri::State<'_, ScraperState>,
+    url: String,
+    init: Option<FetchInit>,
+    context_url: Option<String>,
+) -> Result<FetchResult, String> {
+    let scraper_url = context_url.as_deref().unwrap_or(&url);
+    let (_key, scraper) = scraper_handle_for_url(&app, &state, scraper_url, "fetch context")?;
+    webview_fetch_with_ready_scraper(&scraper, url, init, context_url).await
 }
 
 #[cfg(not(desktop))]
@@ -705,8 +1097,7 @@ fn decode_uri_component(input: &str) -> Result<String, String> {
 /// chapter HTML inside a closed shadow root that only a real Chromium
 /// session can read.
 ///
-/// Concurrency: serialized via `nav_lock` so chapter downloads do not
-/// race the visible site browser overlay.
+/// Uses the scraper WebView keyed by the target URL origin.
 #[cfg(desktop)]
 #[tauri::command]
 pub async fn webview_extract(
@@ -716,8 +1107,7 @@ pub async fn webview_extract(
     before_script: Option<String>,
     timeout_ms: Option<u64>,
 ) -> Result<String, String> {
-    let _guard = state.nav_lock.lock().await;
-    let scraper = scraper_handle(&app)?;
+    let (_key, scraper) = scraper_handle_for_url(&app, &state, &url, "extract")?;
 
     // Embed the before-content script in the URL fragment. The
     // browser does not send the fragment to the server, and the
