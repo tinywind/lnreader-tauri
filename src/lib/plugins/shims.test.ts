@@ -5,6 +5,7 @@ import {
   createShimResolver,
   defaultCover,
   isUrlAbsolute,
+  parseCsv,
   utf8ToBytes,
 } from "./shims";
 import { NovelStatus } from "./types";
@@ -56,6 +57,21 @@ describe("defaultCover", () => {
   });
 });
 
+describe("parseCsv", () => {
+  it("parses quoted CSV rows", () => {
+    expect(parseCsv('name,value\n"A, B","one ""two"""')).toEqual([
+      ["name", "value"],
+      ["A, B", 'one "two"'],
+    ]);
+  });
+
+  it("maps rows to records when header is enabled", () => {
+    expect(parseCsv("name,value\nA,1", { header: true })).toEqual([
+      { name: "A", value: "1" },
+    ]);
+  });
+});
+
 describe("createShimResolver", () => {
   const resolve = createShimResolver("test-plugin");
 
@@ -70,7 +86,10 @@ describe("createShimResolver", () => {
     expect(typeof resolve("@libs/defaultCover")).toBe("object");
     expect(typeof resolve("@libs/isAbsoluteUrl")).toBe("object");
     expect(typeof resolve("@libs/utils")).toBe("object");
+    expect(typeof resolve("@libs/archive")).toBe("object");
+    expect(typeof resolve("@libs/csv")).toBe("object");
     expect(typeof resolve("@libs/storage")).toBe("object");
+    expect(typeof resolve("@libs/pluginInputs")).toBe("object");
   });
 
   it("throws for any module outside the whitelist", () => {
@@ -88,5 +107,50 @@ describe("createShimResolver", () => {
     expect(typeof lib.fetchApi).toBe("function");
     expect(typeof lib.fetchText).toBe("function");
     expect(typeof lib.fetchProto).toBe("function");
+  });
+
+  it("@libs/pluginInputs reads app-managed plugin input values", () => {
+    const values = new Map<string, string>([
+      ["plugin:test-plugin:url", "https://komga.test/"],
+    ]);
+    const storage = {
+      get length() {
+        return values.size;
+      },
+      key(index: number) {
+        return [...values.keys()][index] ?? null;
+      },
+      getItem(key: string) {
+        return values.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        values.set(key, value);
+      },
+      removeItem(key: string) {
+        values.delete(key);
+      },
+    } as Storage;
+    const original = globalThis.localStorage;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: storage,
+    });
+    try {
+      const lib = resolve("@libs/pluginInputs") as {
+        inputs: {
+          get(key: string): string | null;
+          getAll(): Record<string, string>;
+          require(key: string): string;
+        };
+      };
+      expect(lib.inputs.get("url")).toBe("https://komga.test/");
+      expect(lib.inputs.getAll()).toEqual({ url: "https://komga.test/" });
+      expect(lib.inputs.require("url")).toBe("https://komga.test/");
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: original,
+      });
+    }
   });
 });

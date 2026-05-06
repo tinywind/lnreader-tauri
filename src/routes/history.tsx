@@ -10,20 +10,21 @@ import {
   Group,
   Loader,
   Paper,
-  SegmentedControl,
   Skeleton,
   Stack,
   Text,
-  TextInput,
   Title,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
 import {
   PageFrame,
   PageHeader,
 } from "../components/AppFrame";
+import { DetailsGlyph } from "../components/ActionGlyphs";
 import { ConsoleCover } from "../components/ConsolePrimitives";
+import { IconButton } from "../components/IconButton";
+import { SearchBar } from "../components/SearchBar";
+import { SegmentedToggle } from "../components/SegmentedToggle";
 import {
   clearNovelHistory,
   getAdjacentChapter,
@@ -241,22 +242,20 @@ function HistoryIconButton({
   }`;
 
   return (
-    <Tooltip label={label} openDelay={350} withArrow>
-      <UnstyledButton
-        aria-label={label}
-        className={classNames}
-        data-tone={tone}
-        disabled={disabled}
-        onClick={(event) => {
-          event.stopPropagation();
-          onClick();
-        }}
-        title={label}
-        type="button"
-      >
-        {children}
-      </UnstyledButton>
-    </Tooltip>
+    <IconButton
+      className={classNames}
+      disabled={disabled}
+      label={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      size="lg"
+      tone={tone}
+      type="button"
+    >
+      {children}
+    </IconButton>
   );
 }
 
@@ -305,16 +304,6 @@ function ReadForwardIcon() {
       <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
       <path d="M9 9h5" />
       <path d="M9 13h4" />
-    </svg>
-  );
-}
-
-function DetailsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 11v5" />
-      <path d="M12 8h.01" />
     </svg>
   );
 }
@@ -492,7 +481,7 @@ function HistoryRow({
               label={detailsLabel}
               onClick={onOpenNovel}
             >
-              <DetailsIcon />
+              <DetailsGlyph />
             </HistoryIconButton>
             <HistoryIconButton
               label={removeLabel}
@@ -574,7 +563,7 @@ function ResumePanel({
             label={detailsLabel}
             onClick={onOpenNovel}
           >
-            <DetailsIcon />
+            <DetailsGlyph />
           </HistoryIconButton>
         </Group>
       </Box>
@@ -650,27 +639,22 @@ function HistorySummaryPanel({
 
 function FilterBar({
   progressFilter,
-  search,
+  searchInput,
   onProgressFilterChange,
-  onSearchChange,
+  onSearchInputChange,
+  onSearchSubmit,
 }: {
   progressFilter: ProgressFilter;
-  search: string;
+  searchInput: string;
   onProgressFilterChange: (filter: ProgressFilter) => void;
-  onSearchChange: (search: string) => void;
+  onSearchInputChange: (search: string) => void;
+  onSearchSubmit: () => void;
 }) {
   const { t } = useTranslation();
 
   return (
-    <Group className="lnr-history-filter" gap="xs" wrap="wrap">
-      <TextInput
-        aria-label={t("history.filter.searchAria")}
-        className="lnr-history-search"
-        placeholder={t("history.filter.placeholder")}
-        value={search}
-        onChange={(event) => onSearchChange(event.currentTarget.value)}
-      />
-      <SegmentedControl
+    <div className="lnr-history-filter">
+      <SegmentedToggle
         className="lnr-history-segments"
         data={[
           { value: "all", label: t("history.filter.all") },
@@ -680,7 +664,15 @@ function FilterBar({
         onChange={(value) => onProgressFilterChange(value as ProgressFilter)}
         value={progressFilter}
       />
-    </Group>
+      <div className="lnr-history-search">
+        <SearchBar
+          value={searchInput}
+          onChange={onSearchInputChange}
+          onSubmit={onSearchSubmit}
+          placeholder={t("history.filter.placeholder")}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -794,6 +786,7 @@ export function HistoryPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [progressFilter, setProgressFilter] =
     useState<ProgressFilter>("all");
@@ -859,9 +852,22 @@ export function HistoryPage() {
   return (
     <PageFrame className="lnr-history-page" size="wide">
       <PageHeader
-        eyebrow="/history"
-        title={t("history.title")}
-        description={t("history.description")}
+        title={
+          <span className="lnr-history-header-title">
+            <span>{t("history.title")}</span>
+            <span className="lnr-history-header-description">
+              {t("history.description")}
+            </span>
+          </span>
+        }
+      />
+
+      <FilterBar
+        progressFilter={progressFilter}
+        searchInput={searchInput}
+        onProgressFilterChange={setProgressFilter}
+        onSearchInputChange={setSearchInput}
+        onSearchSubmit={() => setSearch(searchInput)}
       />
 
       {latestEntry ? (
@@ -886,13 +892,6 @@ export function HistoryPage() {
           <HistorySummaryPanel entries={visibleEntries} sections={sections} />
         </div>
       ) : null}
-
-      <FilterBar
-        progressFilter={progressFilter}
-        search={search}
-        onProgressFilterChange={setProgressFilter}
-        onSearchChange={setSearch}
-      />
 
       {query.isLoading ? (
         <HistoryLoadingState />

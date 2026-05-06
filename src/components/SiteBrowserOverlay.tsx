@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
-import { ActionIcon, Box, Group, Text } from "@mantine/core";
+import { Box, Group, Text } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
+import { CloseGlyph } from "./ActionGlyphs";
+import { IconButton } from "./IconButton";
 import { useTranslation } from "../i18n";
 import {
   androidScraperHide,
@@ -143,8 +145,13 @@ export function SiteBrowserOverlay() {
         inset: 0,
         zIndex: 1000,
         backgroundColor: "var(--mantine-color-body)",
+        boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
+        paddingTop: "var(--lnr-safe-area-top)",
+        paddingRight: "var(--lnr-safe-area-right)",
+        paddingBottom: "var(--lnr-safe-area-bottom)",
+        paddingLeft: "var(--lnr-safe-area-left)",
       }}
     >
       <Group
@@ -159,14 +166,9 @@ export function SiteBrowserOverlay() {
         <Text size="sm" c="dimmed" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
           {currentUrl ?? ""}
         </Text>
-        <ActionIcon
-          variant="subtle"
-          size="lg"
-          aria-label={t("siteBrowser.close")}
-          onClick={hide}
-        >
-          X
-        </ActionIcon>
+        <IconButton label={t("siteBrowser.close")} size="lg" onClick={hide}>
+          <CloseGlyph />
+        </IconButton>
       </Group>
       <div ref={placeholderRef} style={{ flex: 1, minHeight: 0 }} />
     </Box>

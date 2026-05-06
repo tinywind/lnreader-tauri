@@ -5,10 +5,10 @@
  * read by `pack.ts` and `unpack.ts` in later iterations. This
  * module owns the envelope: the JSON payload that lives in
  * `manifest.json` inside the zip. Keeping the format self-describing
- * lets v0.2 evolve without breaking older backups.
+ * lets future format versions evolve without breaking older backups.
  *
- * There is no upstream-compat constraint per `prd.md` sections 3
- * and 8 Sprint 5.
+ * The project intentionally uses its own backup format instead of
+ * preserving upstream backup zip compatibility.
  */
 
 export const BACKUP_FORMAT_VERSION = 1 as const;
@@ -49,6 +49,7 @@ export interface BackupChapter {
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number;
+  foundAt: number;
   updatedAt: number;
 }
 
@@ -142,7 +143,8 @@ function isChapter(value: unknown): value is BackupChapter {
     typeof value.progress === "number" &&
     typeof value.isDownloaded === "boolean" &&
     typeof value.updatedAt === "number" &&
-    (value.createdAt === undefined || typeof value.createdAt === "number")
+    (value.createdAt === undefined || typeof value.createdAt === "number") &&
+    (value.foundAt === undefined || typeof value.foundAt === "number")
   );
 }
 
@@ -154,9 +156,11 @@ function normalizeNovel(novel: BackupNovel): BackupNovel {
 }
 
 function normalizeChapter(chapter: BackupChapter): BackupChapter {
+  const createdAt = chapter.createdAt ?? chapter.updatedAt;
   return {
     ...chapter,
-    createdAt: chapter.createdAt ?? chapter.updatedAt,
+    createdAt,
+    foundAt: chapter.foundAt ?? Math.max(createdAt, chapter.updatedAt),
   };
 }
 

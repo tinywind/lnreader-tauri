@@ -56,6 +56,7 @@ function makeLeanManifest(): BackupManifest {
         releaseTime: null,
         readAt: null,
         createdAt: 1_700_000_000,
+        foundAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
       },
       {
@@ -74,6 +75,7 @@ function makeLeanManifest(): BackupManifest {
         releaseTime: null,
         readAt: null,
         createdAt: 1_700_000_000,
+        foundAt: 1_700_000_000,
         updatedAt: 1_700_000_000,
       },
     ],

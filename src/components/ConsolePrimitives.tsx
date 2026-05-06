@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEventHandler,
   type ReactNode,
 } from "react";
 import {
@@ -16,6 +17,7 @@ import {
   type PaperProps,
 } from "@mantine/core";
 import { useTranslation } from "../i18n";
+import { TextButton } from "./TextButton";
 
 interface ConsoleCoverProps {
   alt: string;
@@ -241,24 +243,59 @@ export function ConsoleStatusDot({
 
 interface ConsoleChipProps {
   active?: boolean;
+  ariaLabel?: string;
   children: ReactNode;
+  disabled?: boolean;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
+  pressed?: boolean;
+  title?: string;
   tone?: "default" | "accent" | "error" | "warning" | "success";
 }
 
 export function ConsoleChip({
   active = false,
+  ariaLabel,
   children,
+  disabled = false,
+  onClick,
+  pressed,
+  title,
   tone = "default",
 }: ConsoleChipProps) {
+  if (onClick) {
+    return (
+      <TextButton
+        aria-label={ariaLabel}
+        aria-pressed={pressed}
+        active={active}
+        className="lnr-console-chip"
+        disabled={disabled}
+        onClick={onClick}
+        size="sm"
+        title={title}
+        tone={tone}
+        type="button"
+      >
+        {children}
+      </TextButton>
+    );
+  }
+
   return (
-    <span className="lnr-console-chip" data-active={active} data-tone={tone}>
+    <span
+      aria-label={ariaLabel}
+      className="lnr-console-chip"
+      data-active={active}
+      data-tone={tone}
+      title={title}
+    >
       {children}
     </span>
   );
 }
 
 interface ConsolePanelProps extends PaperProps {
-  children: ReactNode;
+  children?: ReactNode;
   title?: ReactNode;
 }
 

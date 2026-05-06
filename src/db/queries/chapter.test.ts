@@ -79,6 +79,7 @@ describe("insertChapter", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("INSERT OR IGNORE INTO chapter");
     expect(sql).toContain("created_at");
+    expect(sql).toContain("found_at");
     expect(params).toEqual([
       1,
       "/c/1",
@@ -121,6 +122,8 @@ describe("upsertChapter", () => {
     expect(sql).toContain("ON CONFLICT(novel_id, path) DO UPDATE");
     expect(sql).toContain("name           = excluded.name");
     expect(sql).toContain("created_at");
+    expect(sql).toContain("found_at");
+    expect(sql).not.toContain("found_at       = excluded.found_at");
     expect(sql).toContain("updated_at     = unixepoch()");
     expect(sql).not.toContain("progress");
     expect(sql).not.toContain("is_downloaded");
@@ -302,11 +305,10 @@ describe("listLibraryUpdates", () => {
     expect(sql).toContain("n.in_library = 1");
     expect(sql).toContain("c.unread = 1");
     expect(sql).toContain("c.path");
-    expect(sql).toContain("MAX(");
-    expect(sql).toContain("n.library_added_at");
+    expect(sql).toContain("c.found_at        AS foundAt");
     expect(sql).toContain("ORDER BY foundAt DESC");
-    expect(sql).toContain("OFFSET $2");
-    expect(params).toEqual([100, 0]);
+    expect(sql).not.toContain("OFFSET");
+    expect(params).toEqual([100]);
   });
 
   it("coerces is_downloaded to a strict boolean", async () => {
@@ -333,14 +335,21 @@ describe("listLibraryUpdates", () => {
     mockSelect.mockResolvedValueOnce([]);
     await listLibraryUpdates(0);
     const [, params] = mockSelect.mock.calls[0]!;
-    expect(params).toEqual([1, 0]);
+    expect(params).toEqual([1]);
   });
 
-  it("forwards a sanitized offset", async () => {
+  it("uses keyset cursor params for the next page", async () => {
     mockSelect.mockResolvedValueOnce([]);
-    await listLibraryUpdates(25, 50.8);
-    const [, params] = mockSelect.mock.calls[0]!;
-    expect(params).toEqual([25, 50]);
+    await listLibraryUpdates(25, {
+      chapterId: 9,
+      foundAt: 1_700_000_000,
+      position: 4,
+    });
+    const [sql, params] = mockSelect.mock.calls[0]!;
+    expect(sql).toContain("c.found_at < $1");
+    expect(sql).toContain("c.position < $2");
+    expect(sql).toContain("c.id < $3");
+    expect(params).toEqual([1_700_000_000, 4, 9, 25]);
   });
 
   it("loads one extra row to report whether another page exists", async () => {
@@ -359,13 +368,17 @@ describe("listLibraryUpdates", () => {
       })),
     );
 
-    const page = await listLibraryUpdatesPage(100, 200);
+    const page = await listLibraryUpdatesPage(100);
 
     const [, params] = mockSelect.mock.calls[0]!;
-    expect(params).toEqual([101, 200]);
+    expect(params).toEqual([101]);
     expect(page.updates).toHaveLength(100);
     expect(page.hasMore).toBe(true);
-    expect(page.nextOffset).toBe(300);
+    expect(page.nextCursor).toEqual({
+      chapterId: 100,
+      foundAt: 1_700_000_000 - 99,
+      position: 100,
+    });
   });
 });
 

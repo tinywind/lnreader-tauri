@@ -13,6 +13,14 @@ val tauriProperties = Properties().apply {
     }
 }
 
+fun envOrNull(name: String) = System.getenv(name)?.takeIf { it.isNotBlank() }
+
+// The checked-in keystore is public and exists only to keep local tester APK upgrades continuous.
+val releaseKeystoreFile = envOrNull("ANDROID_RELEASE_KEYSTORE_FILE")?.let { file(it) } ?: file("test-release.keystore")
+val releaseKeyAlias = envOrNull("ANDROID_RELEASE_KEY_ALIAS") ?: "androiddebugkey"
+val releaseStorePassword = envOrNull("ANDROID_RELEASE_STORE_PASSWORD") ?: "android"
+val releaseKeyPassword = envOrNull("ANDROID_RELEASE_KEY_PASSWORD") ?: "android"
+
 android {
     compileSdk = 36
     namespace = "io.github.tinywind.lnreader_tauri"
@@ -24,6 +32,14 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        create("releaseApk") {
+            storeFile = releaseKeystoreFile
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
@@ -33,6 +49,7 @@ android {
             isMinifyEnabled = false
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("releaseApk")
             isJniDebuggable = false
             isMinifyEnabled = true
             proguardFiles(

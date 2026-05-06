@@ -36,6 +36,13 @@
       "when": 1778014903901,
       "tag": "0004_single_repository",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1778059416131,
+      "tag": "0005_naive_leech",
+      "breakpoints": true
     }
   ]
 }

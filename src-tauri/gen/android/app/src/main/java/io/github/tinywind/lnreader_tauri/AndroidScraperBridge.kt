@@ -436,12 +436,19 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
             response.headers.forEach(function (value, key) {
               responseHeaders[key] = value;
             });
-            const body = await response.text();
+            const responseBytes = new Uint8Array(await response.arrayBuffer());
+            const responseChunks = [];
+            const chunkSize = 0x8000;
+            for (let offset = 0; offset < responseBytes.length; offset += chunkSize) {
+              const chunk = responseBytes.subarray(offset, offset + chunkSize);
+              responseChunks.push(String.fromCharCode.apply(null, Array.from(chunk)));
+            }
+            const bodyBase64 = btoa(responseChunks.join(""));
             AndroidScraper.postFetchResult(requestId, JSON.stringify({
               success: true,
               status: response.status,
               statusText: response.statusText || "",
-              body,
+              bodyBase64,
               headers: responseHeaders,
               finalUrl: response.url || request.url
             }));

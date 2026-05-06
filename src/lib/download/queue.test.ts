@@ -89,6 +89,23 @@ describe("DownloadQueue.enqueue + drain", () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it("rejects empty chapter content instead of marking it downloaded", async () => {
+    const manager = makeManager([
+      makePlugin("p", async () => "   "),
+    ]);
+    const queue = new DownloadQueue({ manager, save, concurrency: 1 });
+
+    queue.enqueue({ id: 8, pluginId: "p", chapterPath: "/c/8" });
+    await settle();
+
+    const status = queue.status(8);
+    expect(status?.kind).toBe("failed");
+    if (status?.kind === "failed") {
+      expect(status.error).toBe("Downloaded chapter content is empty.");
+    }
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("fails when the plugin is not installed", async () => {
     const manager = makeManager([]);
     const queue = new DownloadQueue({ manager, save, concurrency: 1 });

@@ -224,6 +224,7 @@ export async function setNovelInLibrary(
   inLibrary: boolean,
 ): Promise<void> {
   const db = await getDb();
+  const inLibraryFlag = inLibrary ? 1 : 0;
   await db.execute(
     `UPDATE novel
      SET
@@ -231,8 +232,16 @@ export async function setNovelInLibrary(
        library_added_at = CASE WHEN $2 = 1 THEN unixepoch() ELSE NULL END,
        updated_at = unixepoch()
      WHERE id = $1`,
-    [id, inLibrary ? 1 : 0],
+    [id, inLibraryFlag],
   );
+  if (inLibrary) {
+    await db.execute(
+      `UPDATE chapter
+       SET found_at = MAX(COALESCE(found_at, 0), unixepoch())
+       WHERE novel_id = $1`,
+      [id],
+    );
+  }
 }
 
 export async function countNovels(): Promise<number> {

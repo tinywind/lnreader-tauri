@@ -7,9 +7,14 @@ import {
   Text,
   Title,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
-import { DownloadGlyph, DownloadedGlyph } from "../components/ActionGlyphs";
+import {
+  DetailsGlyph,
+  DownloadGlyph,
+  DownloadedGlyph,
+  LibraryAddGlyph,
+  LibraryAddedGlyph,
+} from "../components/ActionGlyphs";
 import {
   ConsoleChip,
   ConsoleCover,
@@ -20,6 +25,7 @@ import {
 } from "../components/ConsolePrimitives";
 import { PageFrame, StateView } from "../components/AppFrame";
 import { BackIconButton } from "../components/BackIconButton";
+import { IconButton } from "../components/IconButton";
 import {
   clearChapterContent,
   listChaptersByNovel,
@@ -33,11 +39,7 @@ import {
 import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
 import { pluginManager } from "../lib/plugins/manager";
 import { novelRoute } from "../router";
-import {
-  formatDateForLocale,
-  useTranslation,
-  type AppLocale,
-} from "../i18n";
+import { useTranslation } from "../i18n";
 import { useLibraryStore } from "../store/library";
 import { useReaderStore } from "../store/reader";
 import { useSiteBrowserStore } from "../store/site-browser";
@@ -53,9 +55,12 @@ function chaptersKey(id: number) {
   return ["novel", "detail", id, "chapters"] as const;
 }
 
-function formatDate(epoch: number | null, locale: AppLocale, t: TranslateFn): string {
-  if (!epoch) return t("novel.never");
-  return formatDateForLocale(locale, epoch * 1000);
+function normalizeDateText(value: string): string {
+  return value.replace(/,/g, "").replace(/\s+/g, " ").trim();
+}
+
+function formatChapterPosition(position: number): string {
+  return `#${String(position).padStart(2, "0")}`;
 }
 
 function splitGenres(genres: string | null): string[] {
@@ -71,10 +76,6 @@ function getChapterReadingProgress(chapter: ChapterRow): number {
   return Math.max(0, Math.min(100, Math.round(chapter.progress)));
 }
 
-function isChapterFinished(chapter: ChapterRow): boolean {
-  return getChapterReadingProgress(chapter) >= 100;
-}
-
 function getNovelReadingPercent(chapters: readonly ChapterRow[]): number {
   if (chapters.length === 0) return 0;
   const total = chapters.reduce(
@@ -84,35 +85,19 @@ function getNovelReadingPercent(chapters: readonly ChapterRow[]): number {
   return Math.round(total / chapters.length);
 }
 
-function findReadableChapter(
+function findFirstChapter(chapters: ChapterRow[]): ChapterRow | null {
+  return chapters.reduce<ChapterRow | null>((first, chapter) => {
+    if (!first || chapter.position < first.position) return chapter;
+    return first;
+  }, null);
+}
+
+function findLastReadChapter(
   chapters: ChapterRow[],
   lastReadChapterId: number | undefined,
 ): ChapterRow | null {
-  const lastReadChapter = chapters.find(
-    (chapter) => chapter.id === lastReadChapterId,
-  );
-  if (lastReadChapter && !isChapterFinished(lastReadChapter)) {
-    return lastReadChapter;
-  }
-
-  const inProgressChapter = chapters.find(
-    (chapter) => chapter.progress > 0 && !isChapterFinished(chapter),
-  );
-  if (inProgressChapter) return inProgressChapter;
-
-  if (lastReadChapter) {
-    const nextChapter = chapters.reduce<ChapterRow | null>(
-      (next, chapter) => {
-        if (chapter.position <= lastReadChapter.position) return next;
-        if (!next || chapter.position < next.position) return chapter;
-        return next;
-      },
-      null,
-    );
-    if (nextChapter) return nextChapter;
-  }
-
-  return chapters.find((chapter) => chapter.unread) ?? chapters[0] ?? null;
+  if (lastReadChapterId === undefined) return null;
+  return chapters.find((chapter) => chapter.id === lastReadChapterId) ?? null;
 }
 
 function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
@@ -137,14 +122,6 @@ function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
   }
 }
 
-function chapterProgressStatus(
-  chapter: ChapterRow,
-): "active" | "done" | "idle" {
-  if (isChapterFinished(chapter)) return "done";
-  if (chapter.progress > 0) return "active";
-  return "idle";
-}
-
 interface ChapterListItemProps {
   chapter: ChapterRow;
   isCurrent: boolean;
@@ -155,8 +132,6 @@ interface ChapterListItemProps {
   onDownload: () => void;
   onDeleteDownload: () => void;
 }
-
-type TranslateFn = ReturnType<typeof useTranslation>["t"];
 
 function ChapterListItem({
   chapter,
@@ -172,11 +147,54 @@ function ChapterListItem({
   const isQueued = status?.kind === "queued";
   const isRunning = status?.kind === "running";
   const failedMessage = status?.kind === "failed" ? status.error : null;
+  const downloadActionLabel = failedMessage
+    ? t("novel.retryDownload")
+    : t("novel.downloadChapter");
   const showDownloadButton =
     !chapter.isDownloaded && !opening && !isQueued && !isRunning;
   const showOpeningSpinner =
     opening && !chapter.isDownloaded && !isQueued && !isRunning;
-  const progressStatus = chapterProgressStatus(chapter);
+  const progress = getChapterReadingProgress(chapter);
+  const progressStatus =
+    progress >= FINISHED_PROGRESS
+      ? "done"
+      : chapter.progress > 0
+        ? "active"
+        : "idle";
+  const releaseTime = chapter.releaseTime
+    ? normalizeDateText(chapter.releaseTime)
+    : null;
+  const hasChapterFlags =
+    chapter.bookmark ||
+    !chapter.unread ||
+    chapter.isDownloaded ||
+    showOpeningSpinner ||
+    Boolean(status);
+  const renderChapterFlags = () => (
+    <>
+      {chapter.bookmark ? (
+        <ChapterFlag label={t("novel.bookmarked")} tone="warning">
+          <BookmarkIcon />
+        </ChapterFlag>
+      ) : null}
+      {!chapter.unread ? (
+        <ChapterFlag label={t("common.read")} tone="done">
+          <ReadIcon />
+        </ChapterFlag>
+      ) : null}
+      {chapter.isDownloaded ? (
+        <ChapterFlag label={t("novel.downloaded")} tone="done">
+          <DownloadedGlyph />
+        </ChapterFlag>
+      ) : null}
+      {showOpeningSpinner ? (
+        <ChapterFlag label={t("common.downloading")}>
+          <SpinnerIcon />
+        </ChapterFlag>
+      ) : null}
+      {status ? <ChapterDownloadStatusIcon status={status} /> : null}
+    </>
+  );
 
   return (
     <div
@@ -196,110 +214,84 @@ function ChapterListItem({
       }}
     >
       <div className="lnr-novel-chapter-position">
-        <span>#{chapter.position}</span>
+        <span>{formatChapterPosition(chapter.position)}</span>
         {isCurrent ? (
           <ConsoleStatusDot status="active" label={t("common.current")} />
         ) : null}
       </div>
 
       <div className="lnr-novel-chapter-main">
-        <Text
-          className="lnr-novel-chapter-title"
-          data-read={!chapter.unread}
-          title={chapter.name}
-        >
-          {chapter.name}
-        </Text>
-        <Group gap="xs" mt={4} wrap="wrap">
-          {chapter.chapterNumber ? (
-            <Text className="lnr-novel-chapter-meta">
-              {t("history.chapterPrefix")} {chapter.chapterNumber}
-            </Text>
+        <div className="lnr-novel-chapter-title-line">
+          <Text
+            className="lnr-novel-chapter-title"
+            data-read={!chapter.unread}
+            title={chapter.name}
+          >
+            {chapter.name}
+          </Text>
+        </div>
+        <div className="lnr-novel-chapter-meta-row">
+          {releaseTime ? (
+            <Text className="lnr-novel-chapter-meta">{releaseTime}</Text>
           ) : null}
-          {chapter.releaseTime ? (
-            <Text className="lnr-novel-chapter-meta">
-              {t("novel.released", { time: chapter.releaseTime })}
-            </Text>
+          <span className="lnr-novel-chapter-percent lnr-novel-chapter-percent--inline">
+            {progress}%
+          </span>
+          {hasChapterFlags ? (
+            <span
+              className="lnr-novel-chapter-flags lnr-novel-chapter-flags--inline"
+              aria-label={t("novel.chapterStatus")}
+            >
+              {renderChapterFlags()}
+            </span>
           ) : null}
-        </Group>
+        </div>
       </div>
 
-      <div className="lnr-novel-chapter-flags" aria-label={t("novel.chapterStatus")}>
-        {chapter.bookmark ? (
-          <ChapterFlag label={t("novel.bookmarked")} tone="warning">
-            <BookmarkIcon />
-          </ChapterFlag>
-        ) : null}
-        {!chapter.unread ? (
-          <ChapterFlag label={t("common.read")} tone="done">
-            <ReadIcon />
-          </ChapterFlag>
-        ) : null}
-        {chapter.isDownloaded ? (
-          <ChapterFlag label={t("novel.downloaded")} tone="done">
-            <DownloadedGlyph />
-          </ChapterFlag>
-        ) : null}
-        {showOpeningSpinner ? (
-          <ChapterFlag label={t("common.downloading")}>
-            <SpinnerIcon />
-          </ChapterFlag>
-        ) : null}
-        {status ? <ChapterDownloadStatusIcon status={status} /> : null}
-      </div>
+      {hasChapterFlags ? (
+        <div
+          className="lnr-novel-chapter-flags lnr-novel-chapter-flags--desktop"
+          aria-label={t("novel.chapterStatus")}
+        >
+          {renderChapterFlags()}
+        </div>
+      ) : null}
 
       <div className="lnr-novel-chapter-progress">
-        <ConsoleProgress value={chapter.progress} status={progressStatus} />
-        <span>{Math.round(chapter.progress)}%</span>
+        <ConsoleProgress value={progress} status={progressStatus} />
+        <span>{progress}%</span>
       </div>
 
       <div className="lnr-novel-chapter-actions">
         {showDownloadButton ? (
-          <Tooltip
-            label={
-              failedMessage ? t("novel.retryDownload") : t("novel.downloadChapter")
-            }
-            openDelay={350}
-            withArrow
+          <IconButton
+            className="lnr-novel-icon-button"
+            label={downloadActionLabel}
+            size="lg"
+            title={failedMessage ?? downloadActionLabel}
+            tone={failedMessage ? "danger" : "default"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDownload();
+            }}
           >
-            <UnstyledButton
-              aria-label={
-                failedMessage
-                  ? t("novel.retryDownload")
-                  : t("novel.downloadChapter")
-              }
-              className="lnr-novel-icon-button"
-              data-tone={failedMessage ? "error" : undefined}
-              title={failedMessage ?? t("novel.downloadChapter")}
-              onClick={(event) => {
-                event.stopPropagation();
-                onDownload();
-              }}
-            >
-              <DownloadGlyph />
-            </UnstyledButton>
-          </Tooltip>
+            <DownloadGlyph />
+          </IconButton>
         ) : null}
         {chapter.isDownloaded ? (
-          <Tooltip
+          <IconButton
+            className="lnr-novel-icon-button"
+            data-busy={deleteBusy ? "true" : undefined}
+            disabled={deleteBusy}
             label={t("novel.deleteDownloadedChapter")}
-            openDelay={350}
-            withArrow
+            size="lg"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDeleteDownload();
+            }}
           >
-            <UnstyledButton
-              aria-label={t("novel.deleteDownloadedChapter")}
-              className="lnr-novel-icon-button"
-              data-busy={deleteBusy}
-              disabled={deleteBusy}
-              title={t("novel.deleteDownloadedChapter")}
-              onClick={(event) => {
-                event.stopPropagation();
-                onDeleteDownload();
-              }}
-            >
-              <TrashIcon />
-            </UnstyledButton>
-          </Tooltip>
+            <TrashIcon />
+          </IconButton>
         ) : null}
       </div>
     </div>
@@ -361,74 +353,88 @@ function ChapterDownloadStatusIcon({ status }: { status: DownloadStatus }) {
 }
 
 interface NovelActionButtonProps {
+  active?: boolean;
   children: ReactNode;
   disabled?: boolean;
   label: string;
-  loading?: boolean;
   onClick: () => void;
-  tone?: "default" | "accent" | "danger";
+  pressed?: boolean;
+  tone?: "default" | "accent" | "success";
 }
 
 function NovelActionButton({
+  active = false,
   children,
   disabled = false,
   label,
-  loading = false,
   onClick,
+  pressed,
   tone = "default",
 }: NovelActionButtonProps) {
   return (
-    <Tooltip label={label} openDelay={350} withArrow>
-      <UnstyledButton
-        aria-label={label}
-        className="lnr-novel-icon-button"
-        data-busy={loading}
-        data-tone={tone}
-        disabled={disabled || loading}
-        onClick={onClick}
-        title={label}
-      >
-        {children}
-      </UnstyledButton>
-    </Tooltip>
+    <IconButton
+      active={active}
+      aria-pressed={pressed}
+      className="lnr-novel-icon-button"
+      disabled={disabled}
+      label={label}
+      onClick={onClick}
+      size="lg"
+      tone={tone}
+    >
+      {children}
+    </IconButton>
   );
 }
 
-function ReadForwardIcon() {
+interface NovelReadButtonProps {
+  children: ReactNode;
+  disabled: boolean;
+  label: string;
+  onClick: () => void;
+  tone?: "default" | "accent";
+}
+
+function NovelReadButton({
+  children,
+  disabled,
+  label,
+  onClick,
+  tone = "default",
+}: NovelReadButtonProps) {
+  return (
+    <IconButton
+      className="lnr-novel-read-icon-button"
+      disabled={disabled}
+      label={label}
+      onClick={onClick}
+      size="lg"
+      tone={tone}
+    >
+      {children}
+    </IconButton>
+  );
+}
+
+function StartReadingIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 5v14" />
+      <path d="M9 6h7a4 4 0 0 1 4 4v10h-7a4 4 0 0 0-4 4z" />
+      <path d="M13 10h4" />
+      <path d="M13 14h3" />
+    </svg>
+  );
+}
+
+function ContinueReadingIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
       <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
       <path d="M9 9h5" />
-      <path d="M9 13h4" />
-    </svg>
-  );
-}
-
-function LibraryAddIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" />
-      <path d="M12 9v6" />
-      <path d="M9 12h6" />
-    </svg>
-  );
-}
-
-function LibraryRemoveIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" />
-      <path d="M9 12h6" />
-    </svg>
-  );
-}
-
-function ExternalLinkIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M14 4h6v6" />
-      <path d="M20 4l-9 9" />
-      <path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" />
+      <path d="M9 13h6" />
+      <path d="M15 16h5" />
+      <path d="M18 13l3 3-3 3" />
     </svg>
   );
 }
@@ -498,7 +504,6 @@ interface NovelWorkspaceProps {
   onToggleLibrary: () => void;
   sourceUrl: string | null;
   toggleBusy: boolean;
-  unreadCount: number;
 }
 
 function NovelWorkspace({
@@ -511,15 +516,13 @@ function NovelWorkspace({
   onToggleLibrary,
   sourceUrl,
   toggleBusy,
-  unreadCount,
 }: NovelWorkspaceProps) {
-  const { locale, t } = useTranslation();
+  const { t } = useTranslation();
   const genres = splitGenres(novel.genres);
-  const readableChapter = findReadableChapter(chapters, lastReadChapterId);
+  const firstChapter = findFirstChapter(chapters);
+  const lastReadChapter = findLastReadChapter(chapters, lastReadChapterId);
   const readPercent = getNovelReadingPercent(chapters);
-  const readLabel =
-    readPercent > 0 ? t("novel.continueReading") : t("novel.startReading");
-  const libraryLabel = novel.inLibrary
+  const libraryActionLabel = novel.inLibrary
     ? t("novel.removeFromLibrary")
     : t("novel.addToLibrary");
   const renderCoverPanel = () => (
@@ -535,37 +538,8 @@ function NovelWorkspace({
 
   const renderInfoPanel = () => (
     <ConsolePanel className="lnr-novel-info-panel">
-      <div className="lnr-novel-action-bar">
-        <BackIconButton className="lnr-novel-icon-button" onClick={onBack} />
-        <div className="lnr-novel-action-cluster">
-          <NovelActionButton
-            disabled={!readableChapter}
-            label={readLabel}
-            onClick={() => readableChapter && onRead(readableChapter)}
-            tone="accent"
-          >
-            <ReadForwardIcon />
-          </NovelActionButton>
-          <NovelActionButton
-            label={libraryLabel}
-            loading={toggleBusy}
-            onClick={onToggleLibrary}
-            tone={novel.inLibrary ? "danger" : "accent"}
-          >
-            {novel.inLibrary ? <LibraryRemoveIcon /> : <LibraryAddIcon />}
-          </NovelActionButton>
-          <NovelActionButton
-            disabled={!sourceUrl}
-            label={t("novel.openSource")}
-            onClick={onOpenSource}
-          >
-            <ExternalLinkIcon />
-          </NovelActionButton>
-        </div>
-      </div>
-
-      <Text className="lnr-console-kicker">/novel/{novel.id}</Text>
       <div className="lnr-novel-title-row">
+        <BackIconButton className="lnr-novel-icon-button" onClick={onBack} />
         <div className="lnr-novel-title-copy">
           <Title className="lnr-novel-title" order={1}>
             {novel.name}
@@ -586,46 +560,71 @@ function NovelWorkspace({
             </Text>
           </Group>
         </div>
+        <div className="lnr-novel-title-actions">
+          <NovelActionButton
+            active={novel.inLibrary}
+            disabled={toggleBusy}
+            label={libraryActionLabel}
+            onClick={onToggleLibrary}
+            pressed={novel.inLibrary}
+            tone={novel.inLibrary ? "success" : "accent"}
+          >
+            {novel.inLibrary ? <LibraryAddedGlyph /> : <LibraryAddGlyph />}
+          </NovelActionButton>
+          <NovelActionButton
+            disabled={!sourceUrl}
+            label={t("novel.openSource")}
+            onClick={onOpenSource}
+          >
+            <DetailsGlyph />
+          </NovelActionButton>
+        </div>
       </div>
 
-      <Group gap="xs" mt="sm" wrap="wrap">
-        {novel.status ? (
-          <ConsoleChip tone="accent">{novel.status}</ConsoleChip>
-        ) : null}
-        {novel.isLocal ? <ConsoleChip>{t("common.local")}</ConsoleChip> : null}
-        {novel.inLibrary ? (
-          <ConsoleChip tone="success">{t("novel.inLibrary")}</ConsoleChip>
-        ) : (
-          <ConsoleChip>{t("novel.notInLibrary")}</ConsoleChip>
-        )}
-        {genres.slice(0, 5).map((genre) => (
-          <ConsoleChip key={genre}>{genre}</ConsoleChip>
-        ))}
-      </Group>
-
-      <div className="lnr-novel-progress-block">
-        <div className="lnr-novel-progress-line">
-          <ConsoleProgress
-            value={readPercent}
-            status={readPercent >= 100 ? "done" : "active"}
-          />
-          <span>{t("novel.percentRead", { progress: readPercent })}</span>
-        </div>
-        <Group gap="md" mt={6} wrap="wrap">
-          <Text className="lnr-novel-meta">
-            {t("novel.lastRead", {
-              date: formatDate(novel.lastReadAt, locale, t),
-            })}
-          </Text>
-          <Text className="lnr-novel-meta">
-            {t("novel.updated", {
-              date: formatDate(novel.updatedAt, locale, t),
-            })}
-          </Text>
-          <Text className="lnr-novel-meta">
-            {t("novel.unreadCount", { count: unreadCount })}
-          </Text>
+      <div className="lnr-novel-status-block">
+        <Group className="lnr-novel-identity-strip" gap="xs" wrap="wrap">
+          {novel.status ? (
+            <ConsoleChip tone="accent">{novel.status}</ConsoleChip>
+          ) : null}
+          {novel.isLocal ? <ConsoleChip>{t("common.local")}</ConsoleChip> : null}
         </Group>
+
+        <div className="lnr-novel-progress-block">
+          <div className="lnr-novel-progress-line">
+            <ConsoleProgress
+              value={readPercent}
+              status={readPercent >= 100 ? "done" : "active"}
+            />
+            <span>{t("novel.percentRead", { progress: readPercent })}</span>
+          </div>
+          <div className="lnr-novel-read-actions">
+            <NovelReadButton
+              disabled={!lastReadChapter}
+              label={t("novel.continueReading")}
+              onClick={() => lastReadChapter && onRead(lastReadChapter)}
+              tone="accent"
+            >
+              <ContinueReadingIcon />
+            </NovelReadButton>
+            <NovelReadButton
+              disabled={!firstChapter}
+              label={t("novel.startReading")}
+              onClick={() => firstChapter && onRead(firstChapter)}
+            >
+              <StartReadingIcon />
+            </NovelReadButton>
+          </div>
+        </div>
+
+        {genres.length > 0 ? (
+          <div className="lnr-novel-tags-scroll" aria-label={t("library.tags.title")}>
+            {genres.map((genre) => (
+              <span className="lnr-novel-genre-chip" key={genre}>
+                <ConsoleChip>{genre}</ConsoleChip>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </ConsolePanel>
   );
@@ -640,13 +639,6 @@ function NovelWorkspace({
       ) : (
         <Text className="lnr-novel-empty-copy">{t("novel.noSummary")}</Text>
       )}
-      {genres.length > 5 ? (
-        <Group gap="xs" mt="sm" wrap="wrap">
-          {genres.slice(5).map((genre) => (
-            <ConsoleChip key={genre}>{genre}</ConsoleChip>
-          ))}
-        </Group>
-      ) : null}
     </ConsolePanel>
   );
 
@@ -870,7 +862,6 @@ export function NovelDetailPage() {
         onToggleLibrary={() => toggle.mutate()}
         sourceUrl={sourceUrl}
         toggleBusy={toggle.isPending}
-        unreadCount={unreadCount}
       />
 
       <ConsolePanel className="lnr-novel-chapters-panel">

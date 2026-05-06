@@ -6,6 +6,7 @@
  */
 
 import type { Filters, FilterToValues } from "./filterTypes";
+import type { PluginInputSchema } from "./inputs";
 
 export enum NovelStatus {
   Unknown = "Unknown",
@@ -82,7 +83,10 @@ export interface Plugin extends PluginItem {
   };
   /** Filter schema rendered by the host as form controls. */
   filters?: Filters;
-  pluginSettings?: Record<string, unknown>;
+  /** App-managed input schema exposed to plugins through `@libs/pluginInputs`. */
+  pluginInputs?: PluginInputSchema;
+  /** Backward-compatible alias for upstream plugin setting declarations. */
+  pluginSettings?: PluginInputSchema | Record<string, unknown>;
   popularNovels: (
     pageNo: number,
     options?: PluginPopularOptions,

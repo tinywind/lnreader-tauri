@@ -1,4 +1,6 @@
-import { Button, CloseButton, Group, TextInput } from "@mantine/core";
+import { Group, TextInput } from "@mantine/core";
+import { CloseGlyph, SearchGlyph } from "./ActionGlyphs";
+import { IconButton } from "./IconButton";
 import { useTranslation } from "../i18n";
 
 interface SearchBarProps {
@@ -6,7 +8,7 @@ interface SearchBarProps {
   onChange: (value: string) => void;
   /**
    * Optional explicit submit handler. When set, the search input
-   * stops debouncing and instead a "Search" button (and the Enter
+   * stops debouncing and instead a search icon button (and the Enter
    * key) trigger this callback.
    */
   onSubmit?: () => void;
@@ -36,14 +38,22 @@ export function SearchBar({
       }
       placeholder={placeholder ?? t("searchBar.defaultPlaceholder")}
       size="sm"
-      style={{ flex: 1, maxWidth: 480 }}
+      classNames={{
+        input: "lnr-search-field-input",
+        root: "lnr-search-field",
+      }}
+      style={{ flex: 1, minWidth: 0 }}
+      rightSectionWidth={40}
       rightSection={
         value.length > 0 ? (
-          <CloseButton
+          <IconButton
+            className="lnr-search-clear-button"
+            label={t("searchBar.clear")}
             size="sm"
-            aria-label={t("searchBar.clear")}
             onClick={() => onChange("")}
-          />
+          >
+            <CloseGlyph />
+          </IconButton>
         ) : null
       }
     />
@@ -52,11 +62,21 @@ export function SearchBar({
   if (!onSubmit) return input;
 
   return (
-    <Group gap="xs" wrap="nowrap" style={{ flex: 1, maxWidth: 600 }}>
+    <Group
+      className="lnr-search-bar"
+      gap="xs"
+      wrap="nowrap"
+      style={{ flex: 1, minWidth: 0, width: "100%" }}
+    >
       {input}
-      <Button size="sm" onClick={onSubmit}>
-        {t("common.search")}
-      </Button>
+      <IconButton
+        className="lnr-search-submit-button"
+        label={t("common.search")}
+        size="lg"
+        onClick={onSubmit}
+      >
+        <SearchGlyph />
+      </IconButton>
     </Group>
   );
 }

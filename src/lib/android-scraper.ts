@@ -17,7 +17,8 @@ interface AndroidFetchInitWire {
 export interface AndroidFetchResultWire {
   status: number;
   statusText: string;
-  body: string;
+  body?: string;
+  bodyBase64?: string;
   headers: Record<string, string>;
   finalUrl: string;
 }

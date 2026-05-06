@@ -336,7 +336,7 @@ export function RootLayout() {
         ) : null}
         {pageVisited("updates") ? (
           <PersistentPageSlot active={activePersistentPage === "updates"}>
-            <UpdatesPage />
+            <UpdatesPage active={activePersistentPage === "updates"} />
           </PersistentPageSlot>
         ) : null}
         {pageVisited("history") ? (

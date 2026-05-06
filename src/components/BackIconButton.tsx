@@ -1,6 +1,6 @@
 import { type MouseEventHandler } from "react";
-import { Tooltip, UnstyledButton } from "@mantine/core";
 import { useTranslation } from "../i18n";
+import { IconButton } from "./IconButton";
 
 interface BackIconButtonProps {
   className?: string;
@@ -17,21 +17,19 @@ export function BackIconButton({
   const resolvedLabel = label ?? t("common.back");
 
   return (
-    <Tooltip label={resolvedLabel} openDelay={350} withArrow>
-      <UnstyledButton
-        aria-label={resolvedLabel}
-        className={
-          className
-            ? `lnr-back-icon-button ${className}`
-            : "lnr-back-icon-button"
-        }
-        onClick={onClick}
-        title={resolvedLabel}
-        type="button"
-      >
-        <BackIcon />
-      </UnstyledButton>
-    </Tooltip>
+    <IconButton
+      className={
+        className
+          ? `lnr-back-icon-button ${className}`
+          : "lnr-back-icon-button"
+      }
+      label={resolvedLabel}
+      onClick={onClick}
+      size="sm"
+      type="button"
+    >
+      <BackIcon />
+    </IconButton>
   );
 }
 

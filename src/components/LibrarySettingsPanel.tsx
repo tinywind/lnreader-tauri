@@ -1,11 +1,6 @@
-import {
-  Group,
-  NumberInput,
-  SegmentedControl,
-  Select,
-  Stack,
-  Switch,
-} from "@mantine/core";
+import { NumberInput, Select, Stack, Switch } from "@mantine/core";
+import { SegmentedToggle } from "./SegmentedToggle";
+import { SettingsFieldRow } from "./SettingsPrimitives";
 import { useTranslation, type TranslationKey } from "../i18n";
 import {
   useLibraryStore,
@@ -87,9 +82,8 @@ export function LibrarySettingsPanel() {
 
   return (
     <Stack gap="sm">
-      <Group gap="sm" align="end">
+      <SettingsFieldRow label={t("librarySettings.sort")}>
         <Select
-          label={t("librarySettings.sort")}
           data={SORT_ORDERS.map((value) => ({
             value,
             label: t(SORT_ORDER_LABEL_KEYS[value]),
@@ -98,10 +92,10 @@ export function LibrarySettingsPanel() {
           onChange={(value) => {
             if (value) setSortOrder(value as LibrarySortOrder);
           }}
-          w={{ base: "100%", sm: 280 }}
         />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.novelsPerRow")}>
         <NumberInput
-          label={t("librarySettings.novelsPerRow")}
           min={1}
           max={5}
           value={novelsPerRow}
@@ -109,10 +103,10 @@ export function LibrarySettingsPanel() {
             if (typeof value === "number") setNovelsPerRow(value);
           }}
           disabled={displayMode === "list"}
-          w={{ base: "100%", sm: 160 }}
         />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.defaultChapterSort")}>
         <Select
-          label={t("librarySettings.defaultChapterSort")}
           data={[
             { value: "asc", label: t("librarySettings.oldestFirst") },
             { value: "desc", label: t("librarySettings.newestFirst") },
@@ -121,47 +115,50 @@ export function LibrarySettingsPanel() {
           onChange={(value) => {
             if (value) setDefaultChapterSort(value as DefaultChapterSort);
           }}
-          w={{ base: "100%", sm: 180 }}
         />
-      </Group>
-      <SegmentedControl
-        data={DISPLAY_MODES.map((value) => ({
-          value,
-          label: t(DISPLAY_MODE_LABEL_KEYS[value]),
-        }))}
-        value={displayMode}
-        onChange={(value) => setDisplayMode(value as LibraryDisplayMode)}
-      />
-      <Group gap="lg">
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.displayMode")}>
+        <SegmentedToggle
+          data={DISPLAY_MODES.map((value) => ({
+            value,
+            label: t(DISPLAY_MODE_LABEL_KEYS[value]),
+          }))}
+          value={displayMode}
+          onChange={(value) => setDisplayMode(value as LibraryDisplayMode)}
+        />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.incognito")}>
         <Switch
-          label={t("librarySettings.incognito")}
           checked={incognitoMode}
           onChange={(event) =>
             setIncognitoMode(event.currentTarget.checked)
           }
         />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.downloadedBadges")}>
         <Switch
-          label={t("librarySettings.downloadedBadges")}
           checked={showDownloadBadges}
           onChange={(event) =>
             setShowDownloadBadges(event.currentTarget.checked)
           }
         />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.unreadBadges")}>
         <Switch
-          label={t("librarySettings.unreadBadges")}
           checked={showUnreadBadges}
           onChange={(event) =>
             setShowUnreadBadges(event.currentTarget.checked)
           }
         />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("librarySettings.numberBadges")}>
         <Switch
-          label={t("librarySettings.numberBadges")}
           checked={showNumberBadges}
           onChange={(event) =>
             setShowNumberBadges(event.currentTarget.checked)
           }
         />
-      </Group>
+      </SettingsFieldRow>
     </Stack>
   );
 }

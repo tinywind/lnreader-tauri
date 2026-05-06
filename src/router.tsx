@@ -77,6 +77,7 @@ export const sourceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/source",
   validateSearch: (search: Record<string, unknown>) => ({
+    from: search.from === "browse-search" ? "browse-search" : undefined,
     pluginId:
       typeof search.pluginId === "string" ? search.pluginId : "",
     query: typeof search.query === "string" ? search.query : "",

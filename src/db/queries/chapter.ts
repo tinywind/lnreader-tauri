@@ -16,6 +16,7 @@ export interface ChapterRow {
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number | null;
+  foundAt: number;
   updatedAt: number;
 }
 
@@ -35,6 +36,7 @@ const SELECT_FIELDS = `
   release_time   AS releaseTime,
   read_at        AS readAt,
   created_at     AS createdAt,
+  found_at       AS foundAt,
   updated_at     AS updatedAt
 `;
 
@@ -80,8 +82,8 @@ export async function insertChapter(
   const db = await getDb();
   await db.execute(
     `INSERT OR IGNORE INTO chapter
-       (novel_id, path, name, position, chapter_number, page, release_time, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch())`,
+       (novel_id, path, name, position, chapter_number, page, release_time, created_at, found_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch(), unixepoch())`,
     [
       input.novelId,
       input.path,
@@ -98,8 +100,8 @@ export async function upsertChapter(input: InsertChapterInput): Promise<void> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO chapter
-       (novel_id, path, name, position, chapter_number, page, release_time, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch())
+       (novel_id, path, name, position, chapter_number, page, release_time, created_at, found_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch(), unixepoch())
      ON CONFLICT(novel_id, path) DO UPDATE SET
        name           = excluded.name,
        position       = excluded.position,
@@ -274,8 +276,25 @@ const DEFAULT_UPDATES_LIMIT = 100;
 
 export interface LibraryUpdatesPage {
   hasMore: boolean;
-  nextOffset: number;
+  nextCursor: LibraryUpdatesCursor | null;
   updates: LibraryUpdateEntry[];
+}
+
+export interface LibraryUpdatesCursor {
+  chapterId: number;
+  foundAt: number;
+  position: number;
+}
+
+function getUpdatesCursor(
+  entry: LibraryUpdateEntry | undefined,
+): LibraryUpdatesCursor | null {
+  if (!entry) return null;
+  return {
+    chapterId: entry.chapterId,
+    foundAt: entry.foundAt,
+    position: entry.position,
+  };
 }
 
 /**
@@ -285,11 +304,21 @@ export interface LibraryUpdatesPage {
  */
 export async function listLibraryUpdates(
   limit: number = DEFAULT_UPDATES_LIMIT,
-  offset: number = 0,
+  cursor: LibraryUpdatesCursor | null = null,
 ): Promise<LibraryUpdateEntry[]> {
   const db = await getDb();
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  const normalizedOffset = Math.max(0, Math.floor(offset));
+  const cursorClause = cursor
+    ? `AND (
+         c.found_at < $1
+         OR (c.found_at = $1 AND c.position < $2)
+         OR (c.found_at = $1 AND c.position = $2 AND c.id < $3)
+       )`
+    : "";
+  const params = cursor
+    ? [cursor.foundAt, cursor.position, cursor.chapterId, normalizedLimit]
+    : [normalizedLimit];
+  const limitParam = cursor ? "$4" : "$1";
   const rows = await db.select<RawLibraryUpdate[]>(
     `SELECT
        c.id              AS chapterId,
@@ -298,11 +327,7 @@ export async function listLibraryUpdates(
        n.plugin_id       AS pluginId,
        c.name            AS chapterName,
        c.position,
-       MAX(
-         COALESCE(c.created_at, 0),
-         COALESCE(c.updated_at, 0),
-         COALESCE(n.library_added_at, n.updated_at, n.created_at, 0)
-       ) AS foundAt,
+       c.found_at        AS foundAt,
        c.is_downloaded   AS isDownloaded,
        n.name            AS novelName,
        n.cover           AS novelCover
@@ -311,9 +336,10 @@ export async function listLibraryUpdates(
      WHERE
        n.in_library = 1
        AND c.unread = 1
+       ${cursorClause}
       ORDER BY foundAt DESC, c.position DESC, c.id DESC
-      LIMIT $1 OFFSET $2`,
-    [normalizedLimit, normalizedOffset],
+      LIMIT ${limitParam}`,
+    params,
   );
   return rows.map((row) => ({
     ...row,
@@ -323,18 +349,18 @@ export async function listLibraryUpdates(
 
 export async function listLibraryUpdatesPage(
   limit: number = DEFAULT_UPDATES_LIMIT,
-  offset: number = 0,
+  cursor: LibraryUpdatesCursor | null = null,
 ): Promise<LibraryUpdatesPage> {
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  const normalizedOffset = Math.max(0, Math.floor(offset));
   const rows = await listLibraryUpdates(
     normalizedLimit + 1,
-    normalizedOffset,
+    cursor,
   );
   const updates = rows.slice(0, normalizedLimit);
+  const hasMore = rows.length > normalizedLimit;
   return {
-    hasMore: rows.length > normalizedLimit,
-    nextOffset: normalizedOffset + updates.length,
+    hasMore,
+    nextCursor: hasMore ? getUpdatesCursor(updates.at(-1)) : null,
     updates,
   };
 }

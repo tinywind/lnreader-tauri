@@ -160,6 +160,9 @@ export class DownloadQueue {
         throw new Error(`Plugin '${job.pluginId}' is not installed.`);
       }
       const html = await plugin.parseChapter(job.chapterPath);
+      if (html.trim() === "") {
+        throw new Error("Downloaded chapter content is empty.");
+      }
       await this.save(job.id, html);
       this.setStatus(job, { kind: "done" });
     } catch (error) {

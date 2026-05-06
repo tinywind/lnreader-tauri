@@ -2,7 +2,6 @@ import type { KeyboardEvent, ReactNode } from "react";
 import {
   Alert,
   Box,
-  Button,
   Group,
   Paper,
   Stack,
@@ -11,6 +10,8 @@ import {
   type AlertProps,
   type PaperProps,
 } from "@mantine/core";
+import { IconButton } from "./IconButton";
+import { TextButton } from "./TextButton";
 
 type PageFrameSize = "narrow" | "default" | "wide" | "full";
 
@@ -126,18 +127,26 @@ export function StateView({
   return (
     <Alert className="lnr-surface" color={color} radius="sm" title={title}>
       {message ? <Text size="sm">{message}</Text> : null}
-      {action ? (
-        <Button
-          aria-label={action.iconOnly ? action.label : undefined}
-          className={action.iconOnly ? "lnr-state-action-icon" : undefined}
+      {action?.iconOnly && action.icon ? (
+        <IconButton
+          className="lnr-state-action-icon"
+          label={action.label}
           mt="md"
-          size="xs"
-          title={action.iconOnly ? action.label : undefined}
+          onClick={action.onClick}
+          size="sm"
+          type="button"
+        >
+          {action.icon}
+        </IconButton>
+      ) : action ? (
+        <TextButton
+          mt="md"
+          size="sm"
           variant="light"
           onClick={action.onClick}
         >
-          {action.iconOnly && action.icon ? action.icon : action.label}
-        </Button>
+          {action.label}
+        </TextButton>
       ) : null}
     </Alert>
   );

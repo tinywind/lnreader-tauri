@@ -2,13 +2,10 @@ import { useMemo, type ReactNode } from "react";
 import {
   Accordion,
   Badge,
-  Button,
   ColorInput,
-  Divider,
   Group,
   NumberInput,
   Paper,
-  SegmentedControl,
   Select,
   SimpleGrid,
   Slider,
@@ -18,6 +15,13 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
+import { SegmentedToggle } from "./SegmentedToggle";
+import {
+  SettingsFieldRow,
+  SettingsInlineControls,
+  SettingsWideField,
+} from "./SettingsPrimitives";
+import { TextButton } from "./TextButton";
 import { useTranslation, type TranslationKey } from "../i18n";
 import {
   READER_TAP_PRESETS,
@@ -99,9 +103,8 @@ export function ReaderSettingsPanel() {
         title={t("readerSettings.reading.title")}
         description={t("readerSettings.reading.description")}
       >
-        <Stack gap={4}>
-          <Text size="sm">{t("readerSettings.readingMode")}</Text>
-          <SegmentedControl
+        <SettingsFieldRow label={t("readerSettings.readingMode")}>
+          <SegmentedToggle
             data={[
               { value: "scroll", label: t("readerSettings.scroll") },
               { value: "paged", label: t("readerSettings.paged") },
@@ -109,59 +112,58 @@ export function ReaderSettingsPanel() {
             value={general.pageReader ? "paged" : "scroll"}
             onChange={(value) => setGeneral({ pageReader: value === "paged" })}
           />
-        </Stack>
-        <Group>
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.fullscreen")}>
           <Switch
-            label={t("readerSettings.fullscreen")}
             checked={general.fullScreen}
             onChange={(event) =>
               setGeneral({ fullScreen: event.currentTarget.checked })
             }
           />
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.keepScreenOn")}>
           <Switch
-            label={t("readerSettings.keepScreenOn")}
             checked={general.keepScreenOn}
             onChange={(event) =>
               setGeneral({ keepScreenOn: event.currentTarget.checked })
             }
           />
-        </Group>
+        </SettingsFieldRow>
       </ReaderSettingSection>
-
-      <Divider />
 
       <ReaderSettingSection
         title={t("readerSettings.text.title")}
         description={t("readerSettings.text.description")}
       >
-        <Select
-          label={t("readerSettings.readerTheme")}
-          data={readerThemes.map((theme) => ({
-            value: theme.id,
-            label: getReaderThemeLabel(theme.id, theme.label, t),
-          }))}
-          value={appearance.themeId}
-          onChange={(themeId) => {
-            const nextTheme = readerThemes.find(
-              (theme) => theme.id === themeId,
-            );
-            if (nextTheme) applyTheme(nextTheme);
-          }}
-        />
-        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+        <SettingsFieldRow label={t("readerSettings.readerTheme")}>
+          <Select
+            data={readerThemes.map((theme) => ({
+              value: theme.id,
+              label: getReaderThemeLabel(theme.id, theme.label, t),
+            }))}
+            value={appearance.themeId}
+            onChange={(themeId) => {
+              const nextTheme = readerThemes.find(
+                (theme) => theme.id === themeId,
+              );
+              if (nextTheme) applyTheme(nextTheme);
+            }}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.background")}>
           <ColorInput
-            label={t("readerSettings.background")}
             value={appearance.backgroundColor}
             onChange={(backgroundColor) =>
               setAppearance({ backgroundColor })
             }
           />
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.textColor")}>
           <ColorInput
-            label={t("readerSettings.textColor")}
             value={appearance.textColor}
             onChange={(textColor) => setAppearance({ textColor })}
           />
-        </SimpleGrid>
+        </SettingsFieldRow>
         <SettingSlider
           label={t("readerSettings.textSize")}
           valueLabel={`${appearance.textSize}px`}
@@ -189,9 +191,8 @@ export function ReaderSettingsPanel() {
           value={appearance.padding}
           onChange={(padding) => setAppearance({ padding })}
         />
-        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+        <SettingsFieldRow label={t("readerSettings.font")}>
           <Select
-            label={t("readerSettings.font")}
             data={READER_FONT_OPTIONS.map((option) => ({
               ...option,
               label:
@@ -204,98 +205,100 @@ export function ReaderSettingsPanel() {
               setAppearance({ fontFamily: fontFamily ?? "" })
             }
           />
-          <Stack gap={4}>
-            <Text size="sm">{t("readerSettings.alignment")}</Text>
-            <SegmentedControl
-              value={appearance.textAlign}
-              onChange={(textAlign) =>
-                setAppearance({
-                  textAlign: textAlign as typeof appearance.textAlign,
-                })
-              }
-              data={[
-                { value: "left", label: t("readerSettings.align.left") },
-                {
-                  value: "justify",
-                  label: t("readerSettings.align.justify"),
-                },
-                { value: "center", label: t("readerSettings.align.center") },
-                { value: "right", label: t("readerSettings.align.right") },
-              ]}
-            />
-          </Stack>
-        </SimpleGrid>
-        <Group>
-          <Button variant="default" onClick={handleSaveCustomTheme}>
-            {t("readerSettings.saveCustomTheme")}
-          </Button>
-          <Button variant="default" onClick={resetReaderSettings}>
-            {t("readerSettings.reset")}
-          </Button>
-        </Group>
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.alignment")}>
+          <SegmentedToggle
+            value={appearance.textAlign}
+            onChange={(textAlign) =>
+              setAppearance({
+                textAlign: textAlign as typeof appearance.textAlign,
+              })
+            }
+            data={[
+              { value: "left", label: t("readerSettings.align.left") },
+              {
+                value: "justify",
+                label: t("readerSettings.align.justify"),
+              },
+              { value: "center", label: t("readerSettings.align.center") },
+              { value: "right", label: t("readerSettings.align.right") },
+            ]}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow>
+          <SettingsInlineControls>
+            <TextButton variant="default" onClick={handleSaveCustomTheme}>
+              {t("readerSettings.saveCustomTheme")}
+            </TextButton>
+            <TextButton variant="default" onClick={resetReaderSettings}>
+              {t("readerSettings.reset")}
+            </TextButton>
+          </SettingsInlineControls>
+        </SettingsFieldRow>
       </ReaderSettingSection>
-
-      <Divider />
 
       <ReaderSettingSection
         title={t("readerSettings.controls.title")}
         description={t("readerSettings.controls.description")}
       >
-        <Group>
+        <SettingsFieldRow label={t("readerSettings.swipeGestures")}>
           <Switch
-            label={t("readerSettings.swipeGestures")}
             checked={general.swipeGestures}
             onChange={(event) =>
               setGeneral({ swipeGestures: event.currentTarget.checked })
             }
           />
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.tapControls")}>
           <Switch
-            label={t("readerSettings.tapControls")}
             checked={general.tapToScroll}
             onChange={(event) =>
               setGeneral({ tapToScroll: event.currentTarget.checked })
             }
           />
-        </Group>
+        </SettingsFieldRow>
         {general.tapToScroll ? (
-          <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-            {READER_TAP_PRESETS.map((preset) => (
-              <TapZonePresetCard
-                key={preset.id}
-                preset={preset}
-                selected={preset.id === general.tapZonePresetId}
-                onApply={applyTapZonePreset}
-              />
-            ))}
-          </SimpleGrid>
+          <SettingsFieldRow layout="stacked">
+            <SettingsWideField>
+              <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
+                {READER_TAP_PRESETS.map((preset) => (
+                  <TapZonePresetCard
+                    key={preset.id}
+                    preset={preset}
+                    selected={preset.id === general.tapZonePresetId}
+                    onApply={applyTapZonePreset}
+                  />
+                ))}
+              </SimpleGrid>
+            </SettingsWideField>
+          </SettingsFieldRow>
         ) : null}
       </ReaderSettingSection>
-
-      <Divider />
 
       <ReaderSettingSection
         title={t("readerSettings.indicators.title")}
         description={t("readerSettings.indicators.description")}
       >
-        <Group>
+        <SettingsFieldRow label={t("readerSettings.seekbar")}>
           <Switch
-            label={t("readerSettings.seekbar")}
             checked={general.showSeekbar}
             onChange={(event) =>
               setGeneral({ showSeekbar: event.currentTarget.checked })
             }
           />
-          {general.showSeekbar ? (
+        </SettingsFieldRow>
+        {general.showSeekbar ? (
+          <SettingsFieldRow label={t("readerSettings.verticalSeekbar")}>
             <Switch
-              label={t("readerSettings.verticalSeekbar")}
               checked={general.verticalSeekbar}
               onChange={(event) =>
                 setGeneral({ verticalSeekbar: event.currentTarget.checked })
               }
             />
-          ) : null}
+          </SettingsFieldRow>
+        ) : null}
+        <SettingsFieldRow label={t("readerSettings.scrollPercentage")}>
           <Switch
-            label={t("readerSettings.scrollPercentage")}
             checked={general.showScrollPercentage}
             onChange={(event) =>
               setGeneral({
@@ -303,8 +306,9 @@ export function ReaderSettingsPanel() {
               })
             }
           />
+        </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.batteryTimeFooter")}>
           <Switch
-            label={t("readerSettings.batteryTimeFooter")}
             checked={general.showBatteryAndTime}
             onChange={(event) =>
               setGeneral({
@@ -312,48 +316,49 @@ export function ReaderSettingsPanel() {
               })
             }
           />
-        </Group>
+        </SettingsFieldRow>
       </ReaderSettingSection>
-
-      <Divider />
 
       <ReaderSettingSection
         title={t("readerSettings.automation.title")}
         description={t("readerSettings.automation.description")}
       >
-        <Switch
-          label={t("readerSettings.autoScroll")}
-          checked={general.autoScroll}
-          onChange={(event) =>
-            setGeneral({ autoScroll: event.currentTarget.checked })
-          }
-        />
+        <SettingsFieldRow label={t("readerSettings.autoScroll")}>
+          <Switch
+            checked={general.autoScroll}
+            onChange={(event) =>
+              setGeneral({ autoScroll: event.currentTarget.checked })
+            }
+          />
+        </SettingsFieldRow>
         {general.autoScroll ? (
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-            <NumberInput
-              label={t("readerSettings.autoScrollInterval")}
-              value={general.autoScrollInterval}
-              min={16}
-              max={500}
-              onChange={(value) => {
-                if (typeof value === "number") {
-                  setGeneral({ autoScrollInterval: value });
-                }
-              }}
-            />
-            <NumberInput
-              label={t("readerSettings.autoScrollOffset")}
-              value={general.autoScrollOffset}
-              min={0.25}
-              max={12}
-              step={0.25}
-              onChange={(value) => {
-                if (typeof value === "number") {
-                  setGeneral({ autoScrollOffset: value });
-                }
-              }}
-            />
-          </SimpleGrid>
+          <>
+            <SettingsFieldRow label={t("readerSettings.autoScrollInterval")}>
+              <NumberInput
+                value={general.autoScrollInterval}
+                min={16}
+                max={500}
+                onChange={(value) => {
+                  if (typeof value === "number") {
+                    setGeneral({ autoScrollInterval: value });
+                  }
+                }}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label={t("readerSettings.autoScrollOffset")}>
+              <NumberInput
+                value={general.autoScrollOffset}
+                min={0.25}
+                max={12}
+                step={0.25}
+                onChange={(value) => {
+                  if (typeof value === "number") {
+                    setGeneral({ autoScrollOffset: value });
+                  }
+                }}
+              />
+            </SettingsFieldRow>
+          </>
         ) : null}
       </ReaderSettingSection>
 
@@ -362,16 +367,18 @@ export function ReaderSettingsPanel() {
           <Accordion.Control>{t("readerSettings.advanced")}</Accordion.Control>
           <Accordion.Panel>
             <Stack gap="md">
-              <Group>
+              <SettingsFieldRow label={t("readerSettings.bionicReading")}>
                 <Switch
-                  label={t("readerSettings.bionicReading")}
                   checked={general.bionicReading}
                   onChange={(event) =>
                     setGeneral({ bionicReading: event.currentTarget.checked })
                   }
                 />
+              </SettingsFieldRow>
+              <SettingsFieldRow
+                label={t("readerSettings.removeExtraParagraphSpacing")}
+              >
                 <Switch
-                  label={t("readerSettings.removeExtraParagraphSpacing")}
                   checked={general.removeExtraParagraphSpacing}
                   onChange={(event) =>
                     setGeneral({
@@ -380,25 +387,37 @@ export function ReaderSettingsPanel() {
                     })
                   }
                 />
-              </Group>
-              <Textarea
+              </SettingsFieldRow>
+              <SettingsFieldRow
                 label={t("readerSettings.customCss")}
-                value={appearance.customCss}
-                autosize
-                minRows={5}
-                onChange={(event) =>
-                  setAppearance({ customCss: event.currentTarget.value })
-                }
-              />
-              <Textarea
+                layout="stacked"
+              >
+                <SettingsWideField>
+                  <Textarea
+                    value={appearance.customCss}
+                    autosize
+                    minRows={5}
+                    onChange={(event) =>
+                      setAppearance({ customCss: event.currentTarget.value })
+                    }
+                  />
+                </SettingsWideField>
+              </SettingsFieldRow>
+              <SettingsFieldRow
                 label={t("readerSettings.customJs")}
-                value={appearance.customJs}
-                autosize
-                minRows={5}
-                onChange={(event) =>
-                  setAppearance({ customJs: event.currentTarget.value })
-                }
-              />
+                layout="stacked"
+              >
+                <SettingsWideField>
+                  <Textarea
+                    value={appearance.customJs}
+                    autosize
+                    minRows={5}
+                    onChange={(event) =>
+                      setAppearance({ customJs: event.currentTarget.value })
+                    }
+                  />
+                </SettingsWideField>
+              </SettingsFieldRow>
             </Stack>
           </Accordion.Panel>
         </Accordion.Item>
@@ -418,7 +437,7 @@ function ReaderSettingSection({
 }) {
   return (
     <Stack gap="sm">
-      <Stack gap={2}>
+      <Stack className="lnr-reader-settings-section-heading" gap={2}>
         <Title order={4}>{title}</Title>
         <Text size="sm" c="dimmed">
           {description}
@@ -447,21 +466,18 @@ function SettingSlider({
   onChange: (value: number) => void;
 }) {
   return (
-    <Stack gap={4}>
-      <Group justify="space-between">
-        <Text size="sm">{label}</Text>
-        <Text size="sm" c="dimmed">
-          {valueLabel}
-        </Text>
-      </Group>
-      <Slider
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={onChange}
-      />
-    </Stack>
+    <SettingsFieldRow label={label}>
+      <div className="lnr-settings-slider-control">
+        <Text className="lnr-settings-slider-value">{valueLabel}</Text>
+        <Slider
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={onChange}
+        />
+      </div>
+    </SettingsFieldRow>
   );
 }
 
@@ -507,13 +523,11 @@ function TapZonePresetCard({
             zones={preset.landscape}
           />
         </SimpleGrid>
-        <Button
-          variant={selected ? "light" : "default"}
-          disabled={selected}
-          onClick={() => onApply(preset.id)}
-        >
-          {selected ? t("common.selected") : t("common.usePreset")}
-        </Button>
+        {selected ? null : (
+          <TextButton variant="default" onClick={() => onApply(preset.id)}>
+            {t("common.usePreset")}
+          </TextButton>
+        )}
       </Stack>
     </Paper>
   );

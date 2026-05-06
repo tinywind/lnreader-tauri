@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   LibraryUpdateEntry,
+  LibraryUpdatesCursor,
   LibraryUpdatesPage,
 } from "../db/queries/chapter";
 import type { UpdateCheckResult } from "../lib/updates/check-library-updates";
@@ -9,7 +10,7 @@ interface UpdatesState {
   hasLoaded: boolean;
   hasMoreUpdates: boolean;
   lastCheckResult: UpdateCheckResult | null;
-  nextUpdateOffset: number;
+  nextUpdateCursor: LibraryUpdatesCursor | null;
   updates: LibraryUpdateEntry[];
   appendPage: (page: LibraryUpdatesPage) => void;
   applyCheckResult: (result: UpdateCheckResult) => void;
@@ -51,30 +52,48 @@ function markRowsDownloaded(
   );
 }
 
+function getNextCursor(
+  rows: readonly LibraryUpdateEntry[],
+  hasMore: boolean,
+): LibraryUpdatesCursor | null {
+  if (!hasMore) return null;
+  const last = rows.at(-1);
+  if (!last) return null;
+  return {
+    chapterId: last.chapterId,
+    foundAt: last.foundAt,
+    position: last.position,
+  };
+}
+
 export const useUpdatesStore = create<UpdatesState>((set) => ({
   hasLoaded: false,
   hasMoreUpdates: false,
   lastCheckResult: null,
-  nextUpdateOffset: 0,
+  nextUpdateCursor: null,
   updates: [],
   appendPage: (page) =>
-    set((state) => ({
-      hasLoaded: true,
-      hasMoreUpdates: page.hasMore,
-      nextUpdateOffset: page.nextOffset,
-      updates: appendRows(state.updates, page.updates),
-    })),
+    set((state) => {
+      const updates = appendRows(state.updates, page.updates);
+      return {
+        hasLoaded: true,
+        hasMoreUpdates: page.hasMore,
+        nextUpdateCursor: getNextCursor(updates, page.hasMore),
+        updates,
+      };
+    }),
   applyCheckResult: (result) =>
-    set((state) => ({
-      hasLoaded: true,
-      hasMoreUpdates: result.hasMoreUpdates || state.hasMoreUpdates,
-      lastCheckResult: result,
-      nextUpdateOffset: Math.max(
-        state.nextUpdateOffset,
-        result.nextUpdateOffset,
-      ),
-      updates: mergeRows(result.updates, state.updates),
-    })),
+    set((state) => {
+      const hasMoreUpdates = result.hasMoreUpdates || state.hasMoreUpdates;
+      const updates = mergeRows(result.updates, state.updates);
+      return {
+        hasLoaded: true,
+        hasMoreUpdates,
+        lastCheckResult: result,
+        nextUpdateCursor: getNextCursor(updates, hasMoreUpdates),
+        updates,
+      };
+    }),
   markChapterDownloaded: (chapterId) =>
     set((state) => ({
       lastCheckResult: state.lastCheckResult
@@ -89,10 +108,14 @@ export const useUpdatesStore = create<UpdatesState>((set) => ({
       updates: markRowsDownloaded(state.updates, chapterId),
     })),
   mergeFirstPage: (page) =>
-    set((state) => ({
-      hasLoaded: true,
-      hasMoreUpdates: page.hasMore || state.hasMoreUpdates,
-      nextUpdateOffset: Math.max(state.nextUpdateOffset, page.nextOffset),
-      updates: mergeRows(page.updates, state.updates),
-    })),
+    set((state) => {
+      const hasMoreUpdates = page.hasMore || state.hasMoreUpdates;
+      const updates = mergeRows(page.updates, state.updates);
+      return {
+        hasLoaded: true,
+        hasMoreUpdates,
+        nextUpdateCursor: getNextCursor(updates, hasMoreUpdates),
+        updates,
+      };
+    }),
 }));

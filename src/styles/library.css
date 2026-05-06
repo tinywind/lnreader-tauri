@@ -47,9 +47,7 @@
   border-radius: 4px;
   color: var(--lnr-design-ink-muted);
   display: inline-flex;
-  height: 24px;
   justify-content: center;
-  width: 26px;
 }
 
 .lnr-library-subpanel-icon:hover {
@@ -146,9 +144,7 @@
   border-radius: 4px;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
-  height: 24px;
   justify-content: center;
-  width: 24px;
 }
 
 .lnr-library-category-action:hover {
@@ -437,9 +433,7 @@
   align-items: center;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
-  height: 26px;
   justify-content: center;
-  width: 32px;
 }
 
 .lnr-library-filter-button + .lnr-library-filter-button {
@@ -451,9 +445,7 @@
   align-items: center;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
-  height: 26px;
   justify-content: center;
-  width: 32px;
 }
 
 .lnr-library-view-button + .lnr-library-view-button {
@@ -479,8 +471,6 @@
   border: 1px solid var(--lnr-design-rule-strong);
   border-radius: 4px;
   flex: 0 0 auto;
-  height: 28px;
-  width: 30px;
 }
 
 .lnr-library-settings-popover {
@@ -521,10 +511,8 @@
   border: 1px solid currentColor;
   border-radius: 4px;
   display: inline-flex;
-  height: 24px;
   justify-content: center;
   opacity: 0.85;
-  width: 28px;
 }
 
 .lnr-library-selection-icon:hover {
@@ -970,9 +958,7 @@
     color: var(--lnr-design-ink-subtle);
     display: inline-flex;
     flex: 0 0 auto;
-    height: 28px;
     justify-content: center;
-    width: 30px;
   }
 
   .lnr-library-mobile-search-button[data-active="true"] {

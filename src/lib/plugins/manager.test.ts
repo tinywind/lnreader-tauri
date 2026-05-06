@@ -143,14 +143,46 @@ describe("PluginManager.installPlugin", () => {
 
 describe("PluginManager.uninstallPlugin", () => {
   it("removes a previously installed plugin and reports false on a miss", async () => {
+    const values = new Map<string, string>([
+      ["plugin:demo:url", "https://komga.test/"],
+    ]);
+    const original = globalThis.localStorage;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        get length() {
+          return values.size;
+        },
+        key(index: number) {
+          return [...values.keys()][index] ?? null;
+        },
+        getItem(key: string) {
+          return values.get(key) ?? null;
+        },
+        setItem(key: string, value: string) {
+          values.set(key, value);
+        },
+        removeItem(key: string) {
+          values.delete(key);
+        },
+      } as Storage,
+    });
     const manager = new PluginManager();
     mockedFetchText.mockResolvedValueOnce(VALID_PLUGIN_SOURCE);
     await manager.installPlugin(VALID_ITEM);
 
-    expect(manager.uninstallPlugin("demo")).toBe(true);
-    expect(manager.has("demo")).toBe(false);
-    expect(manager.size()).toBe(0);
-    expect(manager.uninstallPlugin("demo")).toBe(false);
+    try {
+      expect(manager.uninstallPlugin("demo")).toBe(true);
+      expect(manager.has("demo")).toBe(false);
+      expect(manager.size()).toBe(0);
+      expect(values.has("plugin:demo:url")).toBe(false);
+      expect(manager.uninstallPlugin("demo")).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: original,
+      });
+    }
   });
 });
 

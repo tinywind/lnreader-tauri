@@ -2,7 +2,6 @@ import { useCallback, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  Button,
   Group,
   Loader,
   Modal,
@@ -19,8 +18,10 @@ import { PageFrame, StateView } from "../components/AppFrame";
 import { DownloadedGlyph } from "../components/ActionGlyphs";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
 import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
+import { IconButton } from "../components/IconButton";
 import { LibraryGrid } from "../components/LibraryGrid";
 import { LibrarySettingsPanel } from "../components/LibrarySettingsPanel";
+import { TextButton } from "../components/TextButton";
 import {
   addNovelsToCategory,
   deleteCategory,
@@ -362,17 +363,18 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                 </span>
               </div>
               <div className="lnr-library-header-actions">
-                <UnstyledButton
+                <IconButton
+                  active={showMobileSearch}
                   aria-controls="library-mobile-search"
                   aria-expanded={showMobileSearch}
-                  aria-label={t("library.search.aria")}
                   className="lnr-library-mobile-search-button"
-                  data-active={showMobileSearch}
+                  label={t("library.search.aria")}
                   onClick={() => setMobileSearchOpen((open) => !open)}
+                  size="sm"
                   title={t("library.search.placeholder")}
                 >
                   <SearchIcon />
-                </UnstyledButton>
+                </IconButton>
                 <UnstyledButton
                   className="lnr-library-mobile-category-button"
                   onClick={() => setCategoriesOpen(true)}
@@ -399,13 +401,14 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                 />
                 <Popover position="bottom-end" shadow="md" width={390}>
                   <Popover.Target>
-                    <UnstyledButton
-                      aria-label={t("library.settings.open")}
+                    <IconButton
                       className="lnr-library-icon-button"
+                      label={t("library.settings.open")}
+                      size="sm"
                       title={t("library.settings.title")}
                     >
                       <SlidersIcon />
-                    </UnstyledButton>
+                    </IconButton>
                   </Popover.Target>
                   <Popover.Dropdown className="lnr-library-settings-popover">
                     <LibrarySettingsPanel />
@@ -539,20 +542,20 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               </Text>
             ) : null}
             <Group justify="flex-end">
-              <Button
+              <TextButton
                 type="button"
                 variant="subtle"
                 onClick={closeCategoryEditor}
               >
                 {t("common.cancel")}
-              </Button>
-              <Button
+              </TextButton>
+              <TextButton
                 disabled={categoryName.trim() === ""}
                 loading={categorySaving}
                 type="submit"
               >
                 {t("common.save")}
-              </Button>
+              </TextButton>
             </Group>
           </Stack>
         </form>
@@ -582,7 +585,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
             </Text>
           ) : null}
           <Group justify="flex-end">
-            <Button
+            <TextButton
               type="button"
               variant="subtle"
               onClick={() => {
@@ -591,10 +594,10 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               }}
             >
               {t("common.cancel")}
-            </Button>
-            <Button
-              color="red"
+            </TextButton>
+            <TextButton
               loading={deleteCategoryMutation.isPending}
+              tone="danger"
               onClick={() => {
                 if (categoryDeleteTarget) {
                   deleteCategoryMutation.mutate(categoryDeleteTarget.id);
@@ -602,7 +605,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               }}
             >
               {t("common.delete")}
-            </Button>
+            </TextButton>
           </Group>
         </Stack>
       </Modal>
@@ -632,28 +635,30 @@ function LibraryScopeFilters({
       aria-label={t("library.filters.label")}
     >
       <Tooltip label={t("library.downloadedOnly")} openDelay={350} withArrow>
-        <UnstyledButton
-          aria-label={t("library.downloadedOnly")}
+        <IconButton
+          active={downloadedOnly}
           aria-pressed={downloadedOnly}
           className="lnr-library-filter-button"
-          data-active={downloadedOnly}
+          label={t("library.downloadedOnly")}
           onClick={() => onDownloadedOnlyChange(!downloadedOnly)}
+          size="sm"
           title={t("library.downloadedOnly")}
         >
           <DownloadedGlyph />
-        </UnstyledButton>
+        </IconButton>
       </Tooltip>
       <Tooltip label={t("library.unreadOnly")} openDelay={350} withArrow>
-        <UnstyledButton
-          aria-label={t("library.unreadOnly")}
+        <IconButton
+          active={unreadOnly}
           aria-pressed={unreadOnly}
           className="lnr-library-filter-button"
-          data-active={unreadOnly}
+          label={t("library.unreadOnly")}
           onClick={() => onUnreadOnlyChange(!unreadOnly)}
+          size="sm"
           title={t("library.unreadOnly")}
         >
           <UnreadFilterIcon />
-        </UnstyledButton>
+        </IconButton>
       </Tooltip>
     </div>
   );
@@ -695,14 +700,15 @@ function CategorySubpanel({
       <div className="lnr-library-subpanel-header">
         <Text className="lnr-console-kicker">{t("categories.title")}</Text>
         <Tooltip label={t("categories.add")} openDelay={350} withArrow>
-          <UnstyledButton
-            aria-label={t("categories.add")}
+          <IconButton
             className="lnr-library-subpanel-icon"
+            label={t("categories.add")}
             onClick={onCreate}
+            size="sm"
             title={t("categories.add")}
           >
             <PlusIcon />
-          </UnstyledButton>
+          </IconButton>
         </Tooltip>
       </div>
       <ScrollArea className="lnr-library-category-scroll">
@@ -807,24 +813,26 @@ function CategoryButton({
       {canEdit ? (
         <span className="lnr-library-category-actions">
           <Tooltip label={t("categories.rename")} openDelay={350} withArrow>
-            <UnstyledButton
-              aria-label={t("categories.renameNamed", { name: label })}
+            <IconButton
               className="lnr-library-category-action"
+              label={t("categories.renameNamed", { name: label })}
               onClick={onRename}
+              size="sm"
               title={t("categories.rename")}
             >
               <EditIcon />
-            </UnstyledButton>
+            </IconButton>
           </Tooltip>
           <Tooltip label={t("categories.delete")} openDelay={350} withArrow>
-            <UnstyledButton
-              aria-label={t("categories.deleteNamed", { name: label })}
+            <IconButton
               className="lnr-library-category-action"
+              label={t("categories.deleteNamed", { name: label })}
               onClick={onDelete}
+              size="sm"
               title={t("categories.delete")}
             >
               <TrashIcon />
-            </UnstyledButton>
+            </IconButton>
           </Tooltip>
         </span>
       ) : null}
@@ -849,14 +857,15 @@ function SelectionCategoryPicker({
   return (
     <Popover position="bottom-end" shadow="md" width={220}>
       <Popover.Target>
-        <UnstyledButton
-          aria-label={t("library.addSelectedToCategory")}
+        <IconButton
           className="lnr-library-selection-icon"
           disabled={categories.length === 0 || assigning}
+          label={t("library.addSelectedToCategory")}
+          size="sm"
           title={t("library.addSelectedToCategory")}
         >
           <FolderPlusIcon />
-        </UnstyledButton>
+        </IconButton>
       </Popover.Target>
       <Popover.Dropdown className="lnr-library-category-assign-popover">
         <div className="lnr-library-category-assign-list">
@@ -944,16 +953,17 @@ function ViewModeToggle({ displayMode, onChange, t }: ViewModeToggleProps) {
       {VIEW_MODE_OPTIONS.map((option) => {
         const label = t(option.labelKey);
         return (
-          <UnstyledButton
-            aria-label={label}
+          <IconButton
+            active={displayMode === option.mode}
             className="lnr-library-view-button"
-            data-active={displayMode === option.mode}
             key={option.mode}
+            label={label}
             onClick={() => onChange(option.mode)}
+            size="sm"
             title={label}
           >
             <ViewModeIcon icon={option.icon} />
-          </UnstyledButton>
+          </IconButton>
         );
       })}
     </div>
@@ -973,13 +983,14 @@ function MobileViewModePicker({
   return (
     <Popover position="bottom-end" shadow="md" width={180}>
       <Popover.Target>
-        <UnstyledButton
-          aria-label={t("library.viewMode.label")}
+        <IconButton
           className="lnr-library-mobile-view-button"
+          label={t("library.viewMode.label")}
+          size="sm"
           title={activeLabel}
         >
           <ViewModeIcon icon={activeOption.icon} />
-        </UnstyledButton>
+        </IconButton>
       </Popover.Target>
       <Popover.Dropdown className="lnr-library-mobile-view-menu">
         {VIEW_MODE_OPTIONS.map((option) => {

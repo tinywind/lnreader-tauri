@@ -5,15 +5,20 @@ import {
   Anchor,
   Badge,
   Box,
-  Button,
   Drawer,
   Group,
   Loader,
-  SegmentedControl,
   Stack,
   Text,
 } from "@mantine/core";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
+import {
+  ChevronDownGlyph,
+  ExternalLinkGlyph,
+  SettingsGlyph,
+} from "../components/ActionGlyphs";
+import { SegmentedToggle } from "../components/SegmentedToggle";
+import { TextButton } from "../components/TextButton";
 import {
   ConsoleChip,
   ConsoleCover,
@@ -27,10 +32,13 @@ import {
   defaultFilterValues,
   type ResolvedFilterValues,
 } from "../components/PluginFilters";
+import { IconButton } from "../components/IconButton";
+import { PluginSettingsEditor } from "../components/PluginSettingsEditor";
 import { SearchBar } from "../components/SearchBar";
 import { importNovelFromSource } from "../lib/plugins/import-novel";
+import { FilterTypes, type Filters } from "../lib/plugins/filterTypes";
 import { pluginManager } from "../lib/plugins/manager";
-import type { NovelItem } from "../lib/plugins/types";
+import type { NovelItem, Plugin } from "../lib/plugins/types";
 import { useTranslation } from "../i18n";
 import { sourceRoute } from "../router";
 import { useSiteBrowserStore } from "../store/site-browser";
@@ -51,6 +59,72 @@ function countActiveFilters(filters: ResolvedFilterValues): number {
     }
     return value !== null && value !== undefined && value !== "" && value !== false;
   }).length;
+}
+
+function getOptionLabel(
+  options: readonly { label: string; value: string }[],
+  value: string,
+): string {
+  return options.find((option) => option.value === value)?.label ?? value;
+}
+
+function formatActiveFilter(
+  filter: Filters[string],
+  value: unknown,
+): string | null {
+  switch (filter.type) {
+    case FilterTypes.TextInput: {
+      const text = typeof value === "string" ? value.trim() : "";
+      return text ? `${filter.label}: ${text}` : null;
+    }
+    case FilterTypes.Switch:
+      return value === true ? filter.label : null;
+    case FilterTypes.Picker: {
+      const selected = typeof value === "string" ? value : "";
+      return selected
+        ? `${filter.label}: ${getOptionLabel(filter.options, selected)}`
+        : null;
+    }
+    case FilterTypes.CheckboxGroup: {
+      const selected = Array.isArray(value) ? value : [];
+      if (selected.length === 0) return null;
+      const labels = selected.map((item) => getOptionLabel(filter.options, item));
+      return `${filter.label}: ${labels.join(", ")}`;
+    }
+    case FilterTypes.ExcludableCheckboxGroup: {
+      const selected =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { exclude?: string[]; include?: string[] })
+          : {};
+      const include = selected.include ?? [];
+      const exclude = selected.exclude ?? [];
+      const labels = [
+        ...include.map((item) => `+${getOptionLabel(filter.options, item)}`),
+        ...exclude.map((item) => `-${getOptionLabel(filter.options, item)}`),
+      ];
+      return labels.length > 0 ? `${filter.label}: ${labels.join(", ")}` : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function getActiveFilterLabels(
+  schema: Filters,
+  filters: ResolvedFilterValues,
+): Array<{ key: string; label: string }> {
+  return Object.entries(schema).flatMap(([key, filter]) => {
+    const label = formatActiveFilter(filter, filters[key]?.value ?? filter.value);
+    return label ? [{ key, label }] : [];
+  });
+}
+
+function hasPluginInputs(plugin: Plugin | null | undefined): boolean {
+  if (!plugin) return false;
+  return (
+    Object.keys(plugin.pluginInputs ?? {}).length > 0 ||
+    Object.keys(plugin.pluginSettings ?? {}).length > 0
+  );
 }
 
 interface SourceNovelButtonProps {
@@ -87,9 +161,18 @@ function SourceNovelButton({
   );
 }
 
+function BackGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M15 18l-6-6 6-6" />
+      <path d="M9 12h11" />
+    </svg>
+  );
+}
+
 export function SourcePage() {
   const { t } = useTranslation();
-  const { pluginId, query } = sourceRoute.useSearch();
+  const { from, pluginId, query } = sourceRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
@@ -103,6 +186,7 @@ export function SourcePage() {
   const [submittedSearch, setSubmittedSearch] = useState(query);
 
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
+  const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const initialFilters = useMemo<ResolvedFilterValues>(
     () => (plugin?.filters ? defaultFilterValues(plugin.filters) : {}),
     [plugin],
@@ -187,15 +271,22 @@ export function SourcePage() {
   const filterCount = plugin.filters
     ? Object.keys(plugin.filters).length
     : 0;
+  const hasPluginSettings = hasPluginInputs(plugin);
   const activeFilterCount = countActiveFilters(activeFilters);
   const hasNextPage =
     !listing.isFetching && !!listing.data && listing.data.length > 0;
+  const showLoadMoreButton =
+    hasNextPage || (listing.isFetching && page > 1);
   const sourceStatus: "active" | "done" | "error" = listing.error
     ? "error"
     : listing.isFetching
       ? "active"
       : "done";
   const modeLabel = mode === "popular" ? t("source.popular") : t("source.latest");
+  const backToGlobalSearch = from === "browse-search";
+  const activeFilterLabels = plugin.filters
+    ? getActiveFilterLabels(plugin.filters, activeFilters)
+    : [];
 
   return (
     <PageFrame size="wide" className="lnr-source-page">
@@ -215,6 +306,27 @@ export function SourcePage() {
         }
         actions={
           <>
+            {backToGlobalSearch ? (
+              <IconButton
+                label={t("source.backToGlobalSearch")}
+                size="lg"
+                onClick={() => {
+                  void navigate({ to: "/browse", search: { q: query } });
+                }}
+              >
+                <BackGlyph />
+              </IconButton>
+            ) : null}
+            {hasPluginSettings ? (
+              <IconButton
+                label={t("pluginSettings.open", { name: plugin.name })}
+                size="lg"
+                variant="subtle"
+                onClick={() => setSettingsDrawerOpen(true)}
+              >
+                <SettingsGlyph />
+              </IconButton>
+            ) : null}
             <Badge variant="light">{plugin.lang}</Badge>
             <Badge variant="light" color="gray">
               v{plugin.version}
@@ -227,7 +339,7 @@ export function SourcePage() {
         <aside className="lnr-source-tools">
           <ConsolePanel title={t("source.controls")}>
             <Stack gap="sm" p="sm">
-              <SegmentedControl
+              <SegmentedToggle
                 value={mode}
                 onChange={(value) => setMode(value as ListingMode)}
                 data={[
@@ -235,8 +347,6 @@ export function SourcePage() {
                   { value: "latest", label: t("source.latest") },
                 ]}
                 disabled={isSearchMode}
-                size="xs"
-                className="lnr-console-segmented"
               />
 
               <SearchBar
@@ -248,11 +358,12 @@ export function SourcePage() {
                 })}
               />
 
-              <Group gap="xs" wrap="wrap">
-                {filterCount > 0 && (
-                  <Button
+              {filterCount > 0 ? (
+                <div className="lnr-source-filter-row">
+                  <TextButton
+                    className="lnr-source-filter-trigger"
                     variant="light"
-                    size="xs"
+                    size="sm"
                     onClick={() => {
                       setPendingFilters(activeFilters);
                       setFilterDrawerOpen(true);
@@ -263,56 +374,68 @@ export function SourcePage() {
                       active: activeFilterCount,
                       total: filterCount,
                     })}
-                  </Button>
-                )}
-                <Button
-                  variant="default"
-                  size="xs"
-                  onClick={() => openSiteBrowser(plugin.site)}
-                >
-                  {t("common.openWebView")}
-                </Button>
-              </Group>
+                  </TextButton>
+                  {activeFilterLabels.map((filter) => (
+                    <span
+                      className="lnr-source-active-filter"
+                      key={filter.key}
+                      title={filter.label}
+                    >
+                      {filter.label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </Stack>
           </ConsolePanel>
 
           <ConsolePanel title={t("source.state")}>
-            <Stack gap="sm" p="sm">
-              <Group gap={6} wrap="wrap">
-                <ConsoleStatusDot
-                  status={sourceStatus}
-                  label={
-                    listing.error
-                      ? t("source.error")
-                      : listing.isFetching
-                        ? t("common.fetching")
-                        : t("common.ready")
-                  }
-                />
-                <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>
-                <ConsoleChip>v{plugin.version}</ConsoleChip>
-                {isSearchMode ? (
-                  <ConsoleChip active>{t("source.searchMode")}</ConsoleChip>
-                ) : (
-                  <ConsoleChip active>{modeLabel}</ConsoleChip>
-                )}
-              </Group>
-              <Box style={{ minWidth: 0 }}>
-                <Text className="lnr-console-kicker">
-                  {t("source.preparedOrigin")}
-                </Text>
-                <Anchor
-                  size="sm"
-                  truncate
-                  onClick={(event) => {
-                    event.preventDefault();
-                    openSiteBrowser(plugin.site);
-                  }}
-                >
-                  {plugin.site}
-                </Anchor>
-              </Box>
-            </Stack>
+            <div className="lnr-source-state-body">
+              <Stack className="lnr-source-state-copy" gap="sm">
+                <Group gap={6} wrap="wrap">
+                  <ConsoleStatusDot
+                    status={sourceStatus}
+                    label={
+                      listing.error
+                        ? t("source.error")
+                        : listing.isFetching
+                          ? t("common.fetching")
+                          : t("common.ready")
+                    }
+                  />
+                  <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>
+                  <ConsoleChip>v{plugin.version}</ConsoleChip>
+                  {isSearchMode ? (
+                    <ConsoleChip active>{t("source.searchMode")}</ConsoleChip>
+                  ) : (
+                    <ConsoleChip active>{modeLabel}</ConsoleChip>
+                  )}
+                </Group>
+                <Box style={{ minWidth: 0 }}>
+                  <Text className="lnr-console-kicker">
+                    {t("source.preparedOrigin")}
+                  </Text>
+                  <Anchor
+                    size="sm"
+                    truncate
+                    onClick={(event) => {
+                      event.preventDefault();
+                      openSiteBrowser(plugin.site);
+                    }}
+                  >
+                    {plugin.site}
+                  </Anchor>
+                </Box>
+              </Stack>
+              <IconButton
+                label={t("common.openWebView")}
+                size="lg"
+                variant="default"
+                onClick={() => openSiteBrowser(plugin.site)}
+              >
+                <ExternalLinkGlyph />
+              </IconButton>
+            </div>
           </ConsolePanel>
         </aside>
 
@@ -326,15 +449,18 @@ export function SourcePage() {
             title={isSearchMode ? `"${trimmedSearch}"` : modeLabel}
             count={t("source.loadedCount", { count: accumulated.length })}
             actions={
-              <Button
-                variant="default"
-                size="xs"
-                onClick={() => setPage((p) => p + 1)}
-                loading={listing.isFetching && page > 1}
-                disabled={!hasNextPage}
-              >
-                {t("common.loadMore")}
-              </Button>
+              showLoadMoreButton ? (
+                <IconButton
+                  label={t("common.loadMore")}
+                  variant="default"
+                  size="lg"
+                  onClick={() => setPage((p) => p + 1)}
+                  loading={listing.isFetching && page > 1}
+                  disabled={!hasNextPage}
+                >
+                  <ChevronDownGlyph />
+                </IconButton>
+              ) : null
             }
           />
 
@@ -366,17 +492,6 @@ export function SourcePage() {
             <StateView
               color="blue"
               title={t("source.noResults")}
-              message={
-                isSearchMode
-                  ? t("source.noSearchResults", {
-                      name: plugin.name,
-                      query: trimmedSearch,
-                    })
-                  : t("source.noCatalogResults", {
-                      name: plugin.name,
-                      mode: modeLabel,
-                    })
-              }
             />
           ) : (
             <div className="lnr-source-grid">
@@ -434,34 +549,52 @@ export function SourcePage() {
               onChange={setPendingFilters}
             />
             <Group justify="space-between">
-              <Button
+              <TextButton
                 variant="subtle"
                 onClick={() => {
                   setPendingFilters(initialFilters);
                 }}
               >
                 {t("common.reset")}
-              </Button>
+              </TextButton>
               <Group gap="xs">
-                <Button
+                <TextButton
                   variant="default"
                   onClick={() => setFilterDrawerOpen(false)}
                 >
                   {t("common.cancel")}
-                </Button>
-                <Button
+                </TextButton>
+                <TextButton
                   onClick={() => {
                     setActiveFilters(pendingFilters);
                     setFilterDrawerOpen(false);
                   }}
                 >
                   {t("common.apply")}
-                </Button>
+                </TextButton>
               </Group>
             </Group>
           </Stack>
         </Drawer>
       )}
+      {hasPluginSettings ? (
+        <Drawer
+          opened={settingsDrawerOpen}
+          onClose={() => setSettingsDrawerOpen(false)}
+          title={t("pluginSettings.title", { name: plugin.name })}
+          position="right"
+          size="md"
+        >
+          <PluginSettingsEditor
+            key={plugin.id}
+            plugin={plugin}
+            onSaved={() => {
+              setSettingsDrawerOpen(false);
+              void listing.refetch();
+            }}
+          />
+        </Drawer>
+      ) : null}
     </PageFrame>
   );
 }

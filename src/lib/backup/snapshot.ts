@@ -52,6 +52,7 @@ interface RawChapterRow {
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number;
+  foundAt: number;
   updatedAt: number;
 }
 
@@ -101,6 +102,7 @@ const SELECT_CHAPTERS = `
     release_time   AS releaseTime,
     read_at        AS readAt,
     COALESCE(created_at, updated_at) AS createdAt,
+    found_at       AS foundAt,
     updated_at     AS updatedAt
   FROM chapter
   ORDER BY id
@@ -136,8 +138,8 @@ const INSERT_CHAPTER = `
   INSERT INTO chapter (
     id, novel_id, path, name, chapter_number, position, page,
     bookmark, unread, progress, is_downloaded, content,
-    release_time, read_at, created_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    release_time, read_at, created_at, found_at, updated_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 `;
 
 const INSERT_CATEGORY = `
@@ -190,6 +192,7 @@ function toChapter(row: RawChapterRow): BackupChapter {
     releaseTime: row.releaseTime,
     readAt: row.readAt,
     createdAt: row.createdAt,
+    foundAt: row.foundAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -243,8 +246,9 @@ export async function gatherBackupSnapshot(): Promise<BackupManifest> {
 /**
  * Replace every row in the 5 backup-relevant tables with the values
  * carried by `manifest`. Destructive — call only after the user has
- * confirmed restore. v0.1 keeps it simple: delete all + insert all,
- * one statement at a time. v0.2 may wrap it in a transaction.
+ * confirmed restore. The current implementation keeps it simple:
+ * delete all + insert all, one statement at a time. A future version
+ * may wrap it in a transaction.
  */
 export async function applyBackupSnapshot(
   manifest: BackupManifest,
@@ -313,6 +317,7 @@ export async function applyBackupSnapshot(
       chapter.releaseTime,
       chapter.readAt,
       chapter.createdAt,
+      chapter.foundAt,
       chapter.updatedAt,
     ]);
   }

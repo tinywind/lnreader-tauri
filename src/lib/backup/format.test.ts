@@ -47,6 +47,7 @@ const VALID_MANIFEST: BackupManifest = {
       releaseTime: null,
       readAt: null,
       createdAt: 1_700_000_000,
+      foundAt: 1_700_000_000,
       updatedAt: 1_700_000_000,
     },
   ],
@@ -88,11 +89,15 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     const chapters = legacy.chapters as Array<Record<string, unknown>>;
     delete novels[0]!.libraryAddedAt;
     delete chapters[0]!.createdAt;
+    delete chapters[0]!.foundAt;
 
     const parsed = parseBackupManifest(JSON.stringify(legacy));
 
     expect(parsed.novels[0]?.libraryAddedAt).toBeNull();
     expect(parsed.chapters[0]?.createdAt).toBe(
+      VALID_MANIFEST.chapters[0]?.updatedAt,
+    );
+    expect(parsed.chapters[0]?.foundAt).toBe(
       VALID_MANIFEST.chapters[0]?.updatedAt,
     );
   });

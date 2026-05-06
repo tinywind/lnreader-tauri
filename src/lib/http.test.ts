@@ -28,7 +28,7 @@ function wireOk(
   return {
     status: overrides.status ?? 200,
     statusText: overrides.statusText ?? "OK",
-    body,
+    bodyBase64: btoa(body),
     headers: overrides.headers ?? { "content-type": "text/plain" },
     finalUrl: overrides.finalUrl ?? "https://ok.test/",
   };
@@ -60,6 +60,22 @@ describe("pluginFetch", () => {
     expect(response.status).toBe(200);
     expect(response.ok).toBe(true);
     expect(await response.text()).toBe("hello");
+  });
+
+  it("preserves binary response bodies from webview_fetch", async () => {
+    invokeMock.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      bodyBase64: "AP9QSwME",
+      headers: { "content-type": "application/zip" },
+      finalUrl: "https://ok.test/archive.zip",
+    });
+
+    const response = await pluginFetch("https://ok.test/archive.zip");
+
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([
+      0, 255, 80, 75, 3, 4,
+    ]);
   });
 
   it("preserves the final URL on the rebuilt Response", async () => {

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -12,20 +13,24 @@ import {
   Stack,
   Text,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
-import { DownloadGlyph, DownloadedGlyph } from "../components/ActionGlyphs";
+import {
+  DetailsGlyph,
+  DownloadGlyph,
+  DownloadedGlyph,
+} from "../components/ActionGlyphs";
 import {
   ConsoleCover,
   ConsolePanel,
   ConsoleSectionHeader,
   ConsoleStatusDot,
-  ConsoleStatusStrip,
 } from "../components/ConsolePrimitives";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
+import { IconButton } from "../components/IconButton";
 import {
   listLibraryUpdatesPage,
   type LibraryUpdateEntry,
+  type LibraryUpdatesCursor,
 } from "../db/queries/chapter";
 import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
 import {
@@ -58,40 +63,6 @@ function countLabel(
   return t(value === 1 ? singularKey : pluralKey, { count: value });
 }
 
-interface SourceUpdateState {
-  failures: number;
-  pluginId: string;
-  updates: number;
-}
-
-function getSourceStates(
-  result: UpdateCheckResult | undefined,
-  updates: LibraryUpdateEntry[] = result?.updates ?? [],
-): SourceUpdateState[] {
-  if (!result && updates.length === 0) return [];
-  const sources = new Map<string, SourceUpdateState>();
-
-  for (const entry of updates) {
-    const current =
-      sources.get(entry.pluginId) ??
-      { failures: 0, pluginId: entry.pluginId, updates: 0 };
-    current.updates += 1;
-    sources.set(entry.pluginId, current);
-  }
-
-  for (const failure of result?.failures ?? []) {
-    const current =
-      sources.get(failure.pluginId) ??
-      { failures: 0, pluginId: failure.pluginId, updates: 0 };
-    current.failures += 1;
-    sources.set(failure.pluginId, current);
-  }
-
-  return [...sources.values()].sort((a, b) =>
-    a.pluginId.localeCompare(b.pluginId),
-  );
-}
-
 interface UpdateSummaryProps {
   hasMoreUpdates: boolean;
   loadedUpdates: number;
@@ -107,42 +78,34 @@ function UpdateSummary({
 }: UpdateSummaryProps) {
   const { t } = useTranslation();
   const failures = result?.failures.length ?? 0;
-  const checked = result?.checkedNovels ?? 0;
-  const skipped = result?.skippedNovels ?? 0;
 
   return (
     <ConsolePanel className="lnr-updates-summary">
-      <div className="lnr-updates-summary-grid">
-        <div className="lnr-updates-summary-queue">
-          <Text className="lnr-console-kicker">{t("updates.queueState")}</Text>
-          <Group gap="xs" mt={6} wrap="wrap">
-            <ConsoleStatusDot
-              status={running ? "active" : failures > 0 ? "warning" : "idle"}
-              label={
-                running
-                  ? t("common.checking")
-                  : result
-                    ? t("common.ready")
-                    : t("settings.idle")
-              }
-            />
-            <UpdateFlag
-              count={loadedUpdates}
-              label={countLabel(
-                t,
-                loadedUpdates,
-                "updates.loadedUpdateCount",
-                "updates.loadedUpdateCountPlural",
-              )}
-              tone={loadedUpdates > 0 ? "accent" : "default"}
-            >
-              <RefreshIcon />
-            </UpdateFlag>
-            {hasMoreUpdates ? (
-              <UpdateFlag label={t("updates.moreAvailable")} tone="accent">
-                <PlusIcon />
-              </UpdateFlag>
-            ) : null}
+      <div className="lnr-updates-summary-row">
+        <Group gap="xs" wrap="wrap">
+          <ConsoleStatusDot
+            status={running ? "active" : failures > 0 ? "warning" : "idle"}
+            label={
+              running
+                ? t("common.checking")
+                : result
+                  ? t("common.ready")
+                  : t("settings.idle")
+            }
+          />
+          <UpdateFlag
+            count={loadedUpdates}
+            label={countLabel(
+              t,
+              loadedUpdates,
+              "updates.newChapterCount",
+              "updates.newChapterCountPlural",
+            )}
+            tone={loadedUpdates > 0 ? "accent" : "default"}
+          >
+            <UnreadIcon />
+          </UpdateFlag>
+          {failures > 0 ? (
             <UpdateFlag
               count={failures}
               label={countLabel(
@@ -151,129 +114,18 @@ function UpdateSummary({
                 "updates.failureCount",
                 "updates.failureCountPlural",
               )}
-              tone={failures > 0 ? "warning" : "default"}
+              tone="warning"
             >
               <AlertIcon />
             </UpdateFlag>
-          </Group>
-        </div>
-
-        <div className="lnr-updates-summary-source">
-          <Text className="lnr-console-kicker">{t("updates.sourceCheck")}</Text>
-          <Text className="lnr-updates-summary-value" mt={4}>
-            {countLabel(
-              t,
-              checked,
-              "updates.novelCount",
-              "updates.novelCountPlural",
-            )}
-          </Text>
-          <Text className="lnr-updates-summary-copy">
-            {skipped > 0
-              ? countLabel(
-                  t,
-                  skipped,
-                  "updates.localNovelSkipped",
-                  "updates.localNovelSkippedPlural",
-                )
-              : t("updates.noLocalSkipped")}
-          </Text>
-        </div>
-
-        <div className="lnr-updates-summary-limit">
-          <Text className="lnr-console-kicker">{t("updates.limit")}</Text>
-          <Text className="lnr-updates-summary-value" mt={4}>
-            {UPDATES_PAGE_SIZE}
-          </Text>
-          <Text className="lnr-updates-summary-copy">
-            {t("updates.rowsLoadedPerPage")}
-          </Text>
-        </div>
+          ) : null}
+          {hasMoreUpdates ? (
+            <UpdateFlag label={t("updates.moreAvailable")} tone="accent">
+              <PlusIcon />
+            </UpdateFlag>
+          ) : null}
+        </Group>
       </div>
-    </ConsolePanel>
-  );
-}
-
-function SourceStatePanel({
-  result,
-  running,
-  onRetry,
-  updates,
-}: {
-  result: UpdateCheckResult | undefined;
-  running: boolean;
-  onRetry: () => void;
-  updates: LibraryUpdateEntry[];
-}) {
-  const { t } = useTranslation();
-  const sources = getSourceStates(result, updates);
-
-  return (
-    <ConsolePanel
-      className="lnr-updates-source-state"
-      title={t("updates.sourceState")}
-    >
-      {sources.length > 0 ? (
-        <div className="lnr-updates-source-grid">
-          {sources.map((source) => {
-            const status =
-              source.failures > 0
-                ? "error"
-                : source.updates > 0
-                  ? "active"
-                  : "done";
-            return (
-              <div className="lnr-updates-source-row" key={source.pluginId}>
-                <ConsoleStatusDot status={status} label={source.pluginId} />
-                <UpdateFlag
-                  count={source.updates}
-                  label={countLabel(
-                    t,
-                    source.updates,
-                    "updates.updateCount",
-                    "updates.updateCountPlural",
-                  )}
-                  tone={source.updates > 0 ? "accent" : "default"}
-                >
-                  <RefreshIcon />
-                </UpdateFlag>
-                <UpdateFlag
-                  count={source.failures}
-                  label={countLabel(
-                    t,
-                    source.failures,
-                    "updates.failureCount",
-                    "updates.failureCountPlural",
-                  )}
-                  tone={source.failures > 0 ? "error" : "default"}
-                >
-                  <AlertIcon />
-                </UpdateFlag>
-                {source.failures > 0 ? (
-                  <UpdateIconButton
-                    className="lnr-updates-source-retry"
-                    disabled={running}
-                    label={t("updates.retrySource")}
-                    onClick={onRetry}
-                    tone="accent"
-                  >
-                    {running ? <SpinnerIcon /> : <RefreshIcon />}
-                  </UpdateIconButton>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="lnr-updates-source-empty">
-          <ConsoleStatusDot
-            status={running ? "active" : "idle"}
-            label={
-              running ? t("updates.checkingSources") : t("updates.noSourceState")
-            }
-          />
-        </div>
-      )}
     </ConsolePanel>
   );
 }
@@ -304,7 +156,7 @@ function FailureRow({ failure, onOpenNovel }: FailureRowProps) {
         </Text>
       </div>
       <UpdateIconButton label={t("updates.details")} onClick={onOpenNovel}>
-        <DetailsIcon />
+        <DetailsGlyph />
       </UpdateIconButton>
     </div>
   );
@@ -316,7 +168,7 @@ interface UpdateIconButtonProps {
   disabled?: boolean;
   label: string;
   onClick: () => void;
-  tone?: "default" | "accent" | "error";
+  tone?: "default" | "accent" | "danger";
 }
 
 function UpdateIconButton({
@@ -332,22 +184,19 @@ function UpdateIconButton({
   }`;
 
   return (
-    <Tooltip label={label} openDelay={350} withArrow>
-      <UnstyledButton
-        aria-label={label}
-        className={classNames}
-        data-tone={tone}
-        disabled={disabled}
-        onClick={(event) => {
-          event.stopPropagation();
-          onClick();
-        }}
-        title={label}
-        type="button"
-      >
-        {children}
-      </UnstyledButton>
-    </Tooltip>
+    <IconButton
+      className={classNames}
+      disabled={disabled}
+      label={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      size="lg"
+      tone={tone}
+    >
+      {children}
+    </IconButton>
   );
 }
 
@@ -504,9 +353,7 @@ function UpdateRow({
             <UpdateDownloadStatusFlag status={downloadStatus} />
           </span>
           <Text className="lnr-updates-row-meta">
-            {t("updates.foundAt", {
-              date: formatDateTime(entry.foundAt, locale),
-            })}
+            {formatDateTime(entry.foundAt, locale)}
           </Text>
         </Group>
       </div>
@@ -520,7 +367,7 @@ function UpdateRow({
             disabled={isQueued || isRunning}
             label={downloadLabel}
             onClick={onDownload}
-            tone={failedMessage ? "error" : "default"}
+            tone={failedMessage ? "danger" : "default"}
           >
             {isRunning ? (
               <SpinnerIcon />
@@ -532,7 +379,7 @@ function UpdateRow({
           </UpdateIconButton>
         ) : null}
         <UpdateIconButton label={t("updates.details")} onClick={onOpenNovel}>
-          <DetailsIcon />
+          <DetailsGlyph />
         </UpdateIconButton>
       </div>
     </div>
@@ -556,16 +403,6 @@ function UnreadIcon() {
       <path d="M8 10h6" />
       <path d="M8 14h5" />
       <circle cx="17" cy="7" r="2" />
-    </svg>
-  );
-}
-
-function DetailsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 11v5" />
-      <path d="M12 8h.01" />
     </svg>
   );
 }
@@ -630,15 +467,19 @@ function PlusIcon() {
   );
 }
 
-export function UpdatesPage() {
+interface UpdatesPageProps {
+  active?: boolean;
+}
+
+export function UpdatesPage({ active = true }: UpdatesPageProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const hasLoaded = useUpdatesStore((state) => state.hasLoaded);
   const hasMoreUpdates = useUpdatesStore((state) => state.hasMoreUpdates);
   const lastCheckResult = useUpdatesStore((state) => state.lastCheckResult);
-  const nextUpdateOffset = useUpdatesStore(
-    (state) => state.nextUpdateOffset,
+  const nextUpdateCursor = useUpdatesStore(
+    (state) => state.nextUpdateCursor,
   );
   const updates = useUpdatesStore((state) => state.updates);
   const appendPage = useUpdatesStore((state) => state.appendPage);
@@ -649,6 +490,7 @@ export function UpdatesPage() {
     (state) => state.markChapterDownloaded,
   );
   const mergeFirstPage = useUpdatesStore((state) => state.mergeFirstPage);
+  const initialLocalLoadRequested = useRef(false);
   const [downloadStatuses, setDownloadStatuses] = useState<
     ReadonlyMap<number, DownloadStatus>
   >(() => new Map());
@@ -664,8 +506,8 @@ export function UpdatesPage() {
   });
 
   const loadMore = useMutation({
-    mutationFn: (offset: number) =>
-      listLibraryUpdatesPage(UPDATES_PAGE_SIZE, offset),
+    mutationFn: (cursor: LibraryUpdatesCursor) =>
+      listLibraryUpdatesPage(UPDATES_PAGE_SIZE, cursor),
     onSuccess: appendPage,
   });
   const isInitialLoading = refresh.isPending && !hasLoaded;
@@ -676,10 +518,12 @@ export function UpdatesPage() {
   const loadMoreIfNeeded = useCallback(() => {
     if (
       !hasLoaded ||
+      !active ||
       refresh.isPending ||
       check.isPending ||
       isLoadingMore ||
-      !hasMoreUpdates
+      !hasMoreUpdates ||
+      !nextUpdateCursor
     ) {
       return;
     }
@@ -689,21 +533,24 @@ export function UpdatesPage() {
       scrollElement.scrollHeight - window.innerHeight - scrollElement.scrollTop;
 
     if (distanceToBottom <= LOAD_MORE_THRESHOLD_PX) {
-      loadMorePage(nextUpdateOffset);
+      loadMorePage(nextUpdateCursor);
     }
   }, [
+    active,
     check.isPending,
     hasLoaded,
     hasMoreUpdates,
     isLoadingMore,
     loadMorePage,
-    nextUpdateOffset,
+    nextUpdateCursor,
     refresh.isPending,
   ]);
 
   useEffect(() => {
+    if (!active || hasLoaded || initialLocalLoadRequested.current) return;
+    initialLocalLoadRequested.current = true;
     refreshFirstPage();
-  }, [refreshFirstPage]);
+  }, [active, hasLoaded, refreshFirstPage]);
 
   useEffect(() => {
     return downloadQueue.subscribe((event) => {
@@ -750,17 +597,14 @@ export function UpdatesPage() {
   }, [markChapterDownloaded, updates]);
 
   useEffect(() => {
+    if (!active) return;
     window.addEventListener("scroll", loadMoreIfNeeded, { passive: true });
     window.addEventListener("resize", loadMoreIfNeeded);
     return () => {
       window.removeEventListener("scroll", loadMoreIfNeeded);
       window.removeEventListener("resize", loadMoreIfNeeded);
     };
-  }, [loadMoreIfNeeded]);
-
-  useEffect(() => {
-    loadMoreIfNeeded();
-  }, [loadMoreIfNeeded, updates.length]);
+  }, [active, loadMoreIfNeeded]);
 
   const openChapter = (chapterId: number) => {
     void navigate({ to: "/reader", search: { chapterId } });
@@ -781,9 +625,14 @@ export function UpdatesPage() {
   return (
     <PageFrame className="lnr-updates-page" size="wide">
       <PageHeader
-        eyebrow="/updates"
-        title={t("updates.title")}
-        description={t("updates.description")}
+        title={
+          <span className="lnr-updates-title-line">
+            <span>{t("updates.title")}</span>
+            <span className="lnr-updates-title-description">
+              {t("updates.description")}
+            </span>
+          </span>
+        }
         actions={
           <UpdateIconButton
             className="lnr-updates-check-button"
@@ -802,12 +651,6 @@ export function UpdatesPage() {
         loadedUpdates={updates.length}
         result={result}
         running={check.isPending || refresh.isPending}
-      />
-      <SourceStatePanel
-        result={result}
-        running={check.isPending}
-        onRetry={() => check.mutate()}
-        updates={updates}
       />
 
       {isInitialLoading ? (
@@ -895,13 +738,12 @@ export function UpdatesPage() {
 
           <ConsolePanel className="lnr-updates-queue">
             <ConsoleSectionHeader
-              eyebrow={t("updates.workQueue")}
-              title={t("updates.unreadChapterUpdates")}
+              title={t("updates.newChapters")}
               count={`${countLabel(
                 t,
                 updates.length,
-                "updates.loadedRowCount",
-                "updates.loadedRowCountPlural",
+                "updates.newChapterCount",
+                "updates.newChapterCountPlural",
               )}${hasMoreUpdates ? ` / ${t("updates.moreAvailable")}` : ""}`}
             />
 
@@ -921,9 +763,11 @@ export function UpdatesPage() {
                   <div className="lnr-updates-load-more">
                     <UpdateIconButton
                       className="lnr-updates-load-more-action"
-                      disabled={isLoadingMore}
+                      disabled={isLoadingMore || !nextUpdateCursor}
                       label={t("updates.loadMore")}
-                      onClick={() => loadMorePage(nextUpdateOffset)}
+                      onClick={() => {
+                        if (nextUpdateCursor) loadMorePage(nextUpdateCursor);
+                      }}
                       tone="accent"
                     >
                       {isLoadingMore ? <SpinnerIcon /> : <PlusIcon />}
@@ -944,45 +788,6 @@ export function UpdatesPage() {
           </ConsolePanel>
         </Stack>
       )}
-
-      <ConsoleStatusStrip>
-        <span>
-          {check.isPending
-            ? t("updates.checkingSourcesLabel")
-            : refresh.isPending
-              ? t("updates.refreshingLocalUpdates")
-              : result
-                ? countLabel(
-                    t,
-                    result.checkedNovels,
-                    "updates.checkedNovelCount",
-                    "updates.checkedNovelCountPlural",
-                  )
-                : hasLoaded
-                  ? t("updates.localUpdatesLoaded")
-                  : t("updates.noLocalUpdatesLoaded")}
-        </span>
-        <span>
-          {result
-            ? countLabel(
-                t,
-                result.skippedNovels,
-                "updates.skippedLocalNovelCount",
-                "updates.skippedLocalNovelCountPlural",
-              )
-            : hasLoaded
-              ? t("updates.manualSourceCheckAvailable")
-              : t("common.loading")}
-        </span>
-        <span>
-          {`${countLabel(
-            t,
-            updates.length,
-            "updates.loadedUpdateCount",
-            "updates.loadedUpdateCountPlural",
-          )}${hasMoreUpdates ? ` / ${t("common.more")}` : ""}`}
-        </span>
-      </ConsoleStatusStrip>
     </PageFrame>
   );
 }

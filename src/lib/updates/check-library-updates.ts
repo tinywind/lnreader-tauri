@@ -3,6 +3,7 @@ import {
   listLibraryUpdatesPage,
   upsertChapter,
   type LibraryUpdateEntry,
+  type LibraryUpdatesCursor,
 } from "../../db/queries/chapter";
 import { pluginManager } from "../plugins/manager";
 import { LOCAL_PLUGIN_ID } from "../plugins/types";
@@ -26,7 +27,7 @@ export interface UpdateCheckResult {
   skippedNovels: number;
   failures: UpdateCheckFailure[];
   hasMoreUpdates: boolean;
-  nextUpdateOffset: number;
+  nextUpdateCursor: LibraryUpdatesCursor | null;
   updates: LibraryUpdateEntry[];
 }
 
@@ -115,7 +116,7 @@ export async function checkLibraryUpdates(
     skippedNovels,
     failures,
     hasMoreUpdates: updatesPage.hasMore,
-    nextUpdateOffset: updatesPage.nextOffset,
+    nextUpdateCursor: updatesPage.nextCursor,
     updates: updatesPage.updates,
   };
 }

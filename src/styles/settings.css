@@ -106,12 +106,6 @@
   white-space: nowrap;
 }
 
-.lnr-settings-nav-count {
-  color: var(--lnr-design-ink-subtle);
-  font-family: var(--lnr-font-meta);
-  font-size: 0.65rem;
-}
-
 .lnr-settings-nav-footer {
   border-top: 1px solid var(--lnr-design-rule);
   color: var(--lnr-design-ink-subtle);
@@ -159,6 +153,7 @@
 }
 
 .lnr-settings-detail-copy {
+  flex: 1;
   min-width: 0;
 }
 
@@ -180,19 +175,14 @@
   white-space: nowrap;
 }
 
-.lnr-settings-detail-meta {
-  flex-shrink: 0;
-  padding-top: 0;
-}
-
 .lnr-settings-mobile-back {
   border: 1px solid var(--lnr-design-rule-strong);
   border-radius: 4px;
   color: var(--lnr-design-ink-subtle);
   display: none;
+  flex-shrink: 0;
   height: 28px;
-  margin-top: 8px;
-  width: 30px;
+  width: 28px;
 }
 
 .lnr-settings-mobile-back:hover {
@@ -245,14 +235,23 @@
   align-items: center;
   border-bottom: 1px solid var(--lnr-design-rule);
   display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, max-content);
-  min-height: 54px;
-  padding: 12px 0;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, max-content);
+  min-height: 52px;
+  padding: 8px 0;
 }
 
 .lnr-settings-form-row:last-child {
   border-bottom: 0;
+}
+
+.lnr-settings-form-row[data-layout="stacked"] {
+  align-items: stretch;
+  grid-template-columns: 1fr;
+}
+
+.lnr-settings-form-row[data-copy="empty"] {
+  grid-template-columns: 1fr;
 }
 
 .lnr-settings-form-copy {
@@ -276,37 +275,79 @@
 .lnr-settings-form-control {
   justify-self: end;
   max-width: min(100%, 440px);
+  min-width: 0;
 }
 
-.lnr-settings-actions {
+.lnr-settings-form-row[data-layout="stacked"] .lnr-settings-form-control {
+  justify-self: stretch;
+  max-width: none;
+}
+
+.lnr-settings-inline-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
   max-width: 100%;
+  min-width: 0;
 }
 
-.lnr-settings-strip {
-  border-bottom: 0;
-  border-left: 0;
-  border-radius: 0;
-  border-right: 0;
-  flex: 0 0 22px;
-  flex-wrap: nowrap;
-  font-size: 0.625rem;
-  gap: 16px;
-  height: 22px;
-  justify-content: space-between;
-  min-height: 22px;
-  overflow: hidden;
-  padding: 0 16px;
+.lnr-settings-wide-field {
+  min-width: 0;
+  width: 100%;
 }
 
-.lnr-settings-strip span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.lnr-settings-form-control :where(.mantine-InputWrapper-root) {
+  width: min(240px, 100%);
+}
+
+.lnr-settings-form-control :where(.mantine-Input-input:not(textarea)) {
+  height: 40px;
+  min-height: 40px;
+}
+
+.lnr-settings-wide-field :where(.mantine-InputWrapper-root),
+.lnr-settings-wide-field :where(.mantine-Textarea-root) {
+  width: 100%;
+}
+
+.lnr-settings-wide-field :where(.mantine-Textarea-input) {
+  height: auto;
+  min-height: 112px;
+}
+
+.lnr-settings-switch-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lnr-settings-slider-control {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 48px minmax(160px, 260px);
+  min-width: 0;
+}
+
+.lnr-settings-slider-value {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  text-align: right;
 }
 
 @media (max-width: 980px) {
   .lnr-settings-shell {
     display: flex;
+  }
+
+  .lnr-settings-detail-summary,
+  .lnr-settings-group .lnr-console-panel-title,
+  .lnr-reader-settings-section-heading {
+    display: none;
   }
 }
 
@@ -376,19 +417,17 @@
   }
 
   .lnr-settings-detail-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
-    height: auto;
-    min-height: 98px;
-    padding: 12px;
+    align-items: center;
+    flex-direction: row;
+    gap: 8px;
+    height: 48px;
+    min-height: 48px;
+    padding: 0 12px;
   }
 
-  .lnr-settings-detail-meta {
-    justify-content: flex-start;
-    padding-top: 0;
-  }
+}
 
+@media (max-width: 420px) {
   .lnr-settings-form-row {
     align-items: stretch;
     gap: 8px;
@@ -400,19 +439,22 @@
     max-width: none;
   }
 
+  .lnr-settings-form-control :where(.mantine-InputWrapper-root),
   .lnr-settings-form-control > *,
-  .lnr-settings-actions {
+  .lnr-settings-inline-controls {
     width: 100%;
   }
 
-  .lnr-settings-actions {
+  .lnr-settings-inline-controls {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .lnr-settings-strip {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
+  .lnr-settings-slider-control {
+    grid-template-columns: 1fr;
+  }
+
+  .lnr-settings-slider-value {
+    text-align: left;
   }
 }

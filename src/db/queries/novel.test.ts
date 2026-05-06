@@ -273,6 +273,11 @@ describe("setNovelInLibrary", () => {
     expect(sql).toContain("library_added_at");
     expect(sql).toContain("updated_at = unixepoch()");
     expect(params).toEqual([7, 1]);
+
+    const [chapterSql, chapterParams] = db.execute.mock.calls[1]!;
+    expect(chapterSql).toContain("UPDATE chapter");
+    expect(chapterSql).toContain("found_at");
+    expect(chapterParams).toEqual([7]);
   });
 
   it("can flip the flag back to false", async () => {
@@ -283,5 +288,6 @@ describe("setNovelInLibrary", () => {
 
     const [, params] = db.execute.mock.calls[0]!;
     expect(params).toEqual([7, 0]);
+    expect(db.execute).toHaveBeenCalledTimes(1);
   });
 });

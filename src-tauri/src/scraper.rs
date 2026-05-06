@@ -133,7 +133,7 @@ pub struct FetchInit {
 pub struct FetchResult {
     pub status: u16,
     pub status_text: String,
-    pub body: String,
+    pub body_base64: String,
     pub headers: HashMap<String, String>,
     pub final_url: String,
 }
@@ -356,7 +356,7 @@ struct WebviewFetchScriptResult {
     ok: bool,
     status: Option<u16>,
     status_text: Option<String>,
-    body: Option<String>,
+    body_base64: Option<String>,
     headers: Option<HashMap<String, String>>,
     final_url: Option<String>,
     error: Option<String>,
@@ -509,13 +509,20 @@ fn build_webview_fetch_start_script(
       response.headers.forEach(function (value, key) {{
         responseHeaders[key] = value;
       }});
-      const body = await response.text();
+      const responseBytes = new Uint8Array(await response.arrayBuffer());
+      const responseChunks = [];
+      const chunkSize = 0x8000;
+      for (let offset = 0; offset < responseBytes.length; offset += chunkSize) {{
+        const chunk = responseBytes.subarray(offset, offset + chunkSize);
+        responseChunks.push(String.fromCharCode.apply(null, Array.from(chunk)));
+      }}
+      const bodyBase64 = btoa(responseChunks.join(""));
       window.__lnrFetchResults[requestId] = {{
         done: true,
         ok: true,
         status: response.status,
         statusText: response.statusText || "",
-        body,
+        bodyBase64,
         headers: responseHeaders,
         finalUrl: response.url || request.url
       }};
@@ -613,7 +620,7 @@ pub async fn webview_fetch(
                 .status
                 .ok_or_else(|| "scraper: browser fetch missing status".to_string())?,
             status_text: result.status_text.unwrap_or_default(),
-            body: result.body.unwrap_or_default(),
+            body_base64: result.body_base64.unwrap_or_default(),
             headers: result.headers.unwrap_or_default(),
             final_url: result.final_url.unwrap_or(url),
         });

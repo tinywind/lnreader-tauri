@@ -8,6 +8,7 @@ import {
   type ReaderContentHandle,
 } from "../components/ReaderContent";
 import { BackIconButton } from "../components/BackIconButton";
+import { IconButton } from "../components/IconButton";
 import {
   getAdjacentChapter,
   getChapterById,
@@ -144,28 +145,28 @@ function ReaderTopChrome({
         </span>
       ) : null}
       <span className="lnr-reader-status">{Math.round(progress)}%</span>
-      <button
-        aria-label={
+      <IconButton
+        active={Boolean(chapter?.bookmark)}
+        className="lnr-reader-icon-button"
+        disabled={bookmarkDisabled || bookmarkLoading}
+        label={
           chapter?.bookmark
             ? t("reader.removeBookmark")
             : t("reader.bookmarkChapter")
         }
-        className="lnr-reader-icon-button"
-        data-active={chapter?.bookmark}
-        disabled={bookmarkDisabled || bookmarkLoading}
         onClick={onToggleBookmark}
-        type="button"
+        size="sm"
       >
         <BookmarkIcon />
-      </button>
-      <button
-        aria-label={t("reader.openSettings")}
+      </IconButton>
+      <IconButton
         className="lnr-reader-icon-button"
+        label={t("reader.openSettings")}
         onClick={onOpenSettings}
-        type="button"
+        size="sm"
       >
         <SettingsIcon />
-      </button>
+      </IconButton>
     </header>
   );
 }

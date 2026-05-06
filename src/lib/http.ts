@@ -17,7 +17,7 @@ export interface HttpInit {
   body?: unknown;
   /** Plugin-owned site origin to prepare in the scraper WebView. */
   contextUrl?: string;
-  /** Reserved for v0.2; the WebView fetch IPC ignores it today. */
+  /** Accepted for API compatibility; the WebView fetch IPC ignores it today. */
   signal?: AbortSignal;
 }
 
@@ -30,7 +30,8 @@ interface FetchInitWire {
 interface FetchResultWire {
   status: number;
   statusText: string;
-  body: string;
+  body?: string;
+  bodyBase64?: string;
   headers: Record<string, string>;
   finalUrl: string;
 }
@@ -58,6 +59,22 @@ function toWireInit(init: HttpInit): FetchInitWire {
     headers: init.headers ? { ...init.headers } : undefined,
     body: serializeBody(init.body),
   };
+}
+
+function decodeBase64Body(bodyBase64: string): Uint8Array {
+  const binary = atob(bodyBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function bodyFromWire(result: FetchResultWire): BodyInit {
+  if (result.bodyBase64 !== undefined) {
+    return decodeBase64Body(result.bodyBase64);
+  }
+  return result.body ?? "";
 }
 
 export async function appFetch(
@@ -111,7 +128,7 @@ export async function pluginFetch(
         init: wireInit,
         contextUrl,
       });
-  const response = new Response(result.body, {
+  const response = new Response(bodyFromWire(result), {
     status: result.status,
     statusText: result.statusText,
     headers: result.headers,
@@ -147,7 +164,7 @@ export function createPluginFetch(
   return (url, init = {}) =>
     pluginFetch(url, {
       ...init,
-      contextUrl,
+      contextUrl: init.contextUrl ?? contextUrl,
     });
 }
 
@@ -157,7 +174,7 @@ export function createPluginFetchText(
   return (url, init = {}) =>
     pluginFetchText(url, {
       ...init,
-      contextUrl,
+      contextUrl: init.contextUrl ?? contextUrl,
     });
 }
 
@@ -203,6 +220,9 @@ export function createPluginFetchShim(
   init?: RequestInit,
 ) => Promise<Response> {
   return (input, init) => {
+    const pluginInit = init as
+      | (RequestInit & { contextUrl?: string })
+      | undefined;
     const url =
       typeof input === "string"
         ? input
@@ -210,11 +230,11 @@ export function createPluginFetchShim(
           ? input.href
           : input.url;
     return pluginFetch(url, {
-      method: init?.method,
-      headers: normalizeHeaders(init?.headers),
-      body: init?.body,
-      contextUrl,
-      signal: init?.signal ?? undefined,
+      method: pluginInit?.method,
+      headers: normalizeHeaders(pluginInit?.headers),
+      body: pluginInit?.body,
+      contextUrl: pluginInit?.contextUrl ?? contextUrl,
+      signal: pluginInit?.signal ?? undefined,
     });
   };
 }

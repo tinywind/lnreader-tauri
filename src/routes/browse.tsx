@@ -2,11 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ActionIcon,
   Anchor,
   Badge,
   Box,
-  Button,
   Group,
   Loader,
   Modal,
@@ -19,22 +17,22 @@ import {
 import {
   CheckGlyph,
   ClockGlyph,
+  DetailsGlyph,
   ExternalLinkGlyph,
-  PinGlyph,
   PlusGlyph,
   RefreshGlyph,
   RepositoryGlyph,
-  SourceGlyph,
+  SettingsGlyph,
   TrashGlyph,
 } from "../components/ActionGlyphs";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
 import {
   ConsoleChip,
   ConsolePanel,
-  ConsoleSectionHeader,
-  ConsoleStatusDot,
-  ConsoleStatusStrip,
 } from "../components/ConsolePrimitives";
+import { IconButton } from "../components/IconButton";
+import { PluginSettingsEditor } from "../components/PluginSettingsEditor";
+import { TextButton } from "../components/TextButton";
 import { useSiteBrowserStore } from "../store/site-browser";
 import {
   getCachedRepoIndex,
@@ -218,16 +216,15 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   const setLastUsedPluginId = useBrowseStore(
     (s) => s.setLastUsedPluginId,
   );
-  const siteBrowserVisible = useSiteBrowserStore((s) => s.visible);
-  const siteBrowserUrl = useSiteBrowserStore((s) => s.currentUrl);
 
   const [addOpen, setAddOpen] = useState(false);
   const [url, setUrl] = useState("");
+  const [settingsPlugin, setSettingsPlugin] = useState<Plugin | null>(null);
 
   const navigateToSource = (pluginId: string) =>
     navigate({
       to: "/source",
-      search: { pluginId, query: "" },
+      search: { from: undefined, pluginId, query: "" },
     });
 
   const installedPlugins = installed.data ?? [];
@@ -265,13 +262,9 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     () => new Set(installed.data?.map((p) => p.id) ?? []),
     [installed.data],
   );
-  const pinnedCount = installedPlugins.filter((plugin) =>
-    pinnedPluginIds.includes(plugin.id),
-  ).length;
   const availableFailures = hasRepository
     ? (available.data?.failures ?? [])
     : [];
-  const failureCount = availableFailures.length;
 
   // Deep-link entry: pre-fill the URL and open the modal.
   useEffect(() => {
@@ -340,8 +333,14 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   return (
     <PageFrame size="wide" className="lnr-browse-page">
       <PageHeader
-        title={t("browse.title")}
-        description={t("browse.description")}
+        title={
+          <span className="lnr-browse-title-inline">
+            <span>{t("browse.title")}</span>
+            <span className="lnr-browse-title-description">
+              {t("browse.description")}
+            </span>
+          </span>
+        }
       />
 
       <Tabs
@@ -393,57 +392,30 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
               onLanguageChange={setPluginLanguageFilter}
             />
 
-            <ConsolePanel className="lnr-browse-panel" title={t("browse.sourceActions")}>
-              <Group p="sm" gap="xs" wrap="wrap">
-                <ActionIcon
-                  className="lnr-action-icon"
-                  size="md"
-                  variant="light"
-                  aria-label={
-                    hasRepository
-                      ? t("browse.changeRepository")
-                      : t("browse.setRepository")
-                  }
-                  title={
-                    hasRepository
-                      ? t("browse.changeRepository")
-                      : t("browse.setRepository")
-                  }
-                  onClick={() => {
-                    setUrl(activeRepository?.url ?? "");
-                    setAddOpen(true);
-                  }}
-                >
-                  <RepositoryGlyph />
-                </ActionIcon>
-                <ActionIcon
-                  className="lnr-action-icon"
-                  size="md"
-                  variant="subtle"
-                  aria-label={t("common.refresh")}
-                  title={t("common.refresh")}
-                  loading={available.isFetching}
-                  onClick={() => {
-                    setForceRefreshNext(true);
-                    void queryClient.invalidateQueries({
-                      queryKey: AVAILABLE_QUERY_KEY,
-                    });
-                  }}
-                  disabled={!hasRepository}
-                >
-                  <RefreshGlyph />
-                </ActionIcon>
-              </Group>
-            </ConsolePanel>
+            <RepositoriesSection
+              query={repos}
+              onAdd={() => {
+                setUrl(activeRepository?.url ?? "");
+                setAddOpen(true);
+              }}
+              onRefresh={() => {
+                setForceRefreshNext(true);
+                void queryClient.invalidateQueries({
+                  queryKey: AVAILABLE_QUERY_KEY,
+                });
+              }}
+              refreshing={available.isFetching}
+              onRemove={(id) => removeRepoMutation.mutate(id)}
+              removing={removeRepoMutation.isPending}
+            />
 
             <InstalledSection
               plugins={filteredInstalledPlugins}
               locale={locale}
               onUninstall={(id) => uninstallMutation.mutate(id)}
               uninstalling={uninstallMutation.isPending}
-              pinnedPluginIds={pinnedPluginIds}
               lastUsedPluginId={lastUsedPluginId}
-              onTogglePin={togglePinnedPlugin}
+              onOpenSettings={setSettingsPlugin}
               onOpenSource={(plugin) => {
                 setLastUsedPluginId(plugin.id);
                 void navigateToSource(plugin.id);
@@ -461,29 +433,9 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
               failures={availableFailures}
             />
 
-            <RepositoriesSection
-              query={repos}
-              onRemove={(id) => removeRepoMutation.mutate(id)}
-              removing={removeRepoMutation.isPending}
-            />
-
-            <FetchContextSection
-              visible={siteBrowserVisible}
-              currentUrl={siteBrowserUrl}
-            />
           </div>
         </Tabs.Panel>
       </Tabs>
-
-      <ConsoleStatusStrip>
-        <span>
-          {hasRepository ? t("browse.repositoryConfigured") : t("browse.noRepository")}
-        </span>
-        <span>{t("browse.installedSourcesCount", { count: installedPlugins.length })}</span>
-        <span>{t("browse.pinnedCount", { count: pinnedCount })}</span>
-        <span>{t("browse.availableCount", { count: filteredAvailableEntries.length })}</span>
-        <span>{t("browse.repositoryFetchFailuresCount", { count: failureCount })}</span>
-      </ConsoleStatusStrip>
 
       <Modal
         opened={active && addOpen}
@@ -513,7 +465,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
             />
           )}
           <Group justify="flex-end">
-            <Button
+            <TextButton
               variant="subtle"
               onClick={() => {
                 setAddOpen(false);
@@ -521,81 +473,45 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
               }}
             >
               {t("common.cancel")}
-            </Button>
-            <Button
+            </TextButton>
+            <TextButton
               loading={addRepoMutation.isPending}
               disabled={url.trim() === ""}
               onClick={() => addRepoMutation.mutate()}
             >
               {t("common.save")}
-            </Button>
+            </TextButton>
           </Group>
         </Stack>
+      </Modal>
+      <Modal
+        opened={active && settingsPlugin !== null}
+        onClose={() => setSettingsPlugin(null)}
+        size="lg"
+        title={
+          settingsPlugin
+            ? t("pluginSettings.title", { name: settingsPlugin.name })
+            : t("pluginSettings.title", { name: "" })
+        }
+      >
+        {settingsPlugin ? (
+          <PluginSettingsEditor
+            key={settingsPlugin.id}
+            plugin={settingsPlugin}
+            onSaved={() => setSettingsPlugin(null)}
+          />
+        ) : null}
       </Modal>
     </PageFrame>
   );
 }
 
-interface FetchContextSectionProps {
-  visible: boolean;
-  currentUrl: string | null;
-}
-
-function FetchContextSection({
-  visible,
-  currentUrl,
-}: FetchContextSectionProps) {
-  const { t } = useTranslation();
-
-  return (
-    <ConsolePanel className="lnr-browse-panel" title={t("browse.fetchContext.title")}>
-      <Stack gap="sm" p="sm">
-        <Group gap="xs" wrap="wrap">
-          <ConsoleStatusDot
-            status={visible ? "done" : "idle"}
-            label={
-              visible
-                ? t("browse.fetchContext.webviewOpen")
-                : t("browse.fetchContext.webviewIdle")
-            }
-          />
-          <ConsoleChip>{t("browse.fetchContext.repositoryHttp")}</ConsoleChip>
-          <ConsoleChip tone="accent">
-            {t("browse.fetchContext.scraperWebView")}
-          </ConsoleChip>
-          <ConsoleChip tone="warning">
-            {t("browse.fetchContext.cloudflareReady")}
-          </ConsoleChip>
-        </Group>
-        {currentUrl ? (
-          <Box style={{ minWidth: 0 }}>
-            <Text className="lnr-console-kicker">
-              {t("browse.fetchContext.preparedSite")}
-            </Text>
-            <Anchor
-              size="sm"
-              truncate
-              onClick={(event) => {
-                event.preventDefault();
-                openSite(currentUrl);
-              }}
-            >
-              {currentUrl}
-            </Anchor>
-          </Box>
-        ) : (
-          <Text size="sm" c="dimmed">
-            {t("browse.fetchContext.empty")}
-          </Text>
-        )}
-      </Stack>
-    </ConsolePanel>
-  );
-}
-
 interface RepositoriesSectionProps {
   query: ReturnType<typeof useQuery<PluginRepository[]>>;
+  onAdd: () => void;
+  onRefresh: () => void;
   onRemove: (id: number) => void;
+  refreshing: boolean;
   removing: boolean;
 }
 
@@ -613,11 +529,14 @@ function PluginSettingsSection({
   const { t } = useTranslation();
 
   return (
-    <ConsolePanel className="lnr-browse-panel" title={t("browse.pluginFilters.title")}>
-      <div className="lnr-browse-settings-grid">
+    <ConsolePanel className="lnr-browse-panel lnr-browse-filter-panel">
+      <div className="lnr-browse-filter-title-row">
+        <span className="lnr-browse-filter-title">
+          {t("browse.pluginFilters.title")}
+        </span>
         <MultiSelect
-          label={t("browse.pluginLanguages.label")}
-          description={t("browse.pluginLanguages.description")}
+          className="lnr-browse-language-input"
+          aria-label={t("browse.pluginLanguages.label")}
           data={languageOptions}
           value={selectedLanguages}
           onChange={onLanguageChange}
@@ -626,34 +545,27 @@ function PluginSettingsSection({
           clearable
         />
       </div>
-      <ConsoleStatusStrip className="lnr-browse-panel-strip">
-        <span>
-          {selectedLanguages.length === 0
-            ? t("browse.allLanguages")
-            : t("browse.languageCount", { count: selectedLanguages.length })}
-        </span>
-      </ConsoleStatusStrip>
     </ConsolePanel>
   );
 }
 
 function RepositoriesSection({
   query,
+  onAdd,
+  onRefresh,
   onRemove,
+  refreshing,
   removing,
 }: RepositoriesSectionProps) {
   const { t } = useTranslation();
   const repository = query.data?.[0] ?? null;
 
   return (
-    <ConsolePanel className="lnr-browse-panel" title={t("browse.repository.title")}>
-      <Stack gap="xs" p="sm">
-        <Group justify="space-between" align="center">
-          <ConsoleStatusDot
-            status="active"
-            label={t("browse.repository.singleCacheFirstIndex")}
-          />
-        </Group>
+    <ConsolePanel
+      className="lnr-browse-panel lnr-browse-repository-panel"
+      title={t("browse.repository.title")}
+    >
+      <Stack gap="sm" p="sm">
         {query.isLoading ? (
           <StateView
             title={
@@ -674,50 +586,80 @@ function RepositoriesSection({
             }
           />
         ) : repository ? (
-          <Stack gap={6}>
-            <div key={repository.id} className="lnr-browse-repo-row">
-              <Group justify="space-between" align="flex-start" wrap="wrap">
-                <Box style={{ minWidth: 0, flex: "1 1 18rem" }}>
-                  <Group gap="xs" wrap="wrap">
-                    <span
-                      className="lnr-icon-state"
-                      role="img"
-                      aria-label={t("browse.repository.badge")}
-                      title={t("browse.repository.badge")}
-                    >
-                      <RepositoryGlyph />
-                    </span>
-                    <Text size="sm" fw={500} truncate>
-                      {repository.name ?? repository.url}
-                    </Text>
-                  </Group>
-                  {repository.name ? (
-                    <Text size="xs" c="dimmed" truncate>
-                      {repository.url}
-                    </Text>
-                  ) : null}
-                </Box>
-                <ActionIcon
-                  className="lnr-action-icon lnr-action-icon--danger"
-                  size="sm"
-                  color="red"
+          <div key={repository.id} className="lnr-browse-repo-row">
+            <Group justify="space-between" align="center" wrap="nowrap">
+              <span
+                className="lnr-icon-state"
+                role="img"
+                aria-label={t("browse.repository.badge")}
+                title={t("browse.repository.badge")}
+              >
+                <RepositoryGlyph />
+              </span>
+              <Box style={{ minWidth: 0, flex: "1 1 auto" }}>
+                <Text size="sm" fw={500} truncate>
+                  {repository.name ?? repository.url}
+                </Text>
+                {repository.name ? (
+                  <Text size="xs" c="dimmed" truncate>
+                    {repository.url}
+                  </Text>
+                ) : null}
+              </Box>
+              <span className="lnr-browse-repository-actions">
+                <IconButton
+                  label={t("common.refresh")}
+                  size="lg"
+                  variant="subtle"
+                  loading={refreshing}
+                  onClick={onRefresh}
+                >
+                  <RefreshGlyph />
+                </IconButton>
+                <IconButton
+                  label={t("common.remove")}
+                  size="lg"
+                  tone="danger"
                   variant="subtle"
                   loading={removing}
-                  aria-label={t("common.remove")}
-                  title={t("common.remove")}
                   onClick={() => onRemove(repository.id)}
                 >
                   <TrashGlyph />
-                </ActionIcon>
-              </Group>
-            </div>
-          </Stack>
+                </IconButton>
+              </span>
+            </Group>
+          </div>
         ) : (
-          <StateView
-            color="blue"
-            title={t("browse.repository.emptyTitle")}
-            message={t("browse.repository.emptyMessage")}
-          />
+          <div className="lnr-browse-repo-row">
+            <Group justify="space-between" align="center" wrap="nowrap">
+              <span
+                className="lnr-icon-state"
+                role="img"
+                aria-label={t("browse.repository.badge")}
+                title={t("browse.repository.badge")}
+              >
+                <RepositoryGlyph />
+              </span>
+              <Box style={{ minWidth: 0, flex: "1 1 auto" }}>
+                <Text size="sm" fw={500} truncate>
+                  {t("browse.repository.emptyTitle")}
+                </Text>
+                <Text size="xs" c="dimmed" truncate>
+                  {t("browse.repository.emptyMessage")}
+                </Text>
+              </Box>
+              <span className="lnr-browse-repository-actions">
+                <IconButton
+                  label={t("browse.setRepository")}
+                  size="lg"
+                  variant="light"
+                  onClick={onAdd}
+                >
+                  <PlusGlyph />
+                </IconButton>
+              </span>
+            </Group>
+          </div>
         )}
       </Stack>
     </ConsolePanel>
@@ -729,10 +671,9 @@ interface InstalledSectionProps {
   locale: AppLocale;
   onUninstall: (id: string) => void;
   uninstalling: boolean;
-  pinnedPluginIds: readonly string[];
   lastUsedPluginId: string | null;
-  onTogglePin: (id: string) => void;
   onOpenSource: (plugin: Plugin) => void;
+  onOpenSettings: (plugin: Plugin) => void;
 }
 
 /**
@@ -744,13 +685,19 @@ function openSite(url: string): void {
   useSiteBrowserStore.getState().openAt(url);
 }
 
+function hasPluginInputs(plugin: Plugin): boolean {
+  return (
+    Object.keys(plugin.pluginInputs ?? {}).length > 0 ||
+    Object.keys(plugin.pluginSettings ?? {}).length > 0
+  );
+}
+
 interface PluginRowProps {
   plugin: Plugin;
   locale: AppLocale;
-  pinned: boolean;
   lastUsed: boolean;
-  onTogglePin: (id: string) => void;
   onOpenSource: (plugin: Plugin) => void;
+  onOpenSettings: (plugin: Plugin) => void;
   onUninstall: (id: string) => void;
   uninstalling: boolean;
 }
@@ -758,10 +705,9 @@ interface PluginRowProps {
 function PluginRow({
   plugin,
   locale,
-  pinned,
   lastUsed,
-  onTogglePin,
   onOpenSource,
+  onOpenSettings,
   onUninstall,
   uninstalling,
 }: PluginRowProps) {
@@ -769,8 +715,8 @@ function PluginRow({
 
   return (
     <div key={plugin.id} className="lnr-browse-plugin-row">
-      <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
-        <Box style={{ minWidth: 0, flex: "1 1 18rem" }}>
+      <Group justify="space-between" align="center" wrap="nowrap" gap="sm">
+        <Box style={{ minWidth: 0, flex: "1 1 auto" }}>
           <Group gap="xs" wrap="wrap">
             <Text
               size="sm"
@@ -786,17 +732,6 @@ function PluginRow({
             <ConsoleChip>
               v{plugin.version}
             </ConsoleChip>
-            {pinned ? (
-              <span
-                className="lnr-icon-state"
-                data-active="true"
-                role="img"
-                aria-label={t("common.pinned")}
-                title={t("common.pinned")}
-              >
-                <PinGlyph />
-              </span>
-            ) : null}
             {lastUsed ? (
               <span
                 className="lnr-icon-state"
@@ -823,52 +758,49 @@ function PluginRow({
           </Anchor>
         </Box>
         <Group className="lnr-action-strip" gap={4} wrap="nowrap" justify="flex-end">
-          <ActionIcon
-            className={`lnr-action-icon${pinned ? " lnr-action-icon--active" : ""}`}
-            size="sm"
+          {hasPluginInputs(plugin) ? (
+            <IconButton
+              label={`${t("common.settings")}: ${plugin.name}`}
+              size="lg"
+              variant="subtle"
+              disabled={uninstalling}
+              title={t("common.settings")}
+              onClick={() => onOpenSettings(plugin)}
+            >
+              <SettingsGlyph />
+            </IconButton>
+          ) : null}
+          <IconButton
+            label={`${t("common.source")}: ${plugin.name}`}
+            size="lg"
             variant="subtle"
             disabled={uninstalling}
-            aria-label={`${t("common.source")}: ${plugin.name}`}
             title={t("common.source")}
             onClick={() => onOpenSource(plugin)}
           >
-            <SourceGlyph />
-          </ActionIcon>
-          <ActionIcon
-            className="lnr-action-icon lnr-action-icon--danger"
-            size="sm"
-            variant={pinned ? "light" : "default"}
-            disabled={uninstalling}
-            aria-pressed={pinned}
-            aria-label={`${pinned ? t("browse.unpin") : t("browse.pin")}: ${plugin.name}`}
-            title={pinned ? t("browse.unpin") : t("browse.pin")}
-            onClick={() => onTogglePin(plugin.id)}
-          >
-            <PinGlyph />
-          </ActionIcon>
-          <ActionIcon
-            className="lnr-action-icon"
-            size="sm"
+            <DetailsGlyph />
+          </IconButton>
+          <IconButton
+            label={`${t("common.openSite")}: ${plugin.name}`}
+            size="lg"
             variant="default"
             disabled={uninstalling}
-            aria-label={`${t("common.openSite")}: ${plugin.name}`}
             title={t("common.openSite")}
             onClick={() => openSite(plugin.site)}
           >
             <ExternalLinkGlyph />
-          </ActionIcon>
-          <ActionIcon
-            className="lnr-action-icon"
-            size="sm"
-            color="red"
+          </IconButton>
+          <IconButton
+            label={`${t("browse.uninstall")}: ${plugin.name}`}
+            size="lg"
+            tone="danger"
             variant="subtle"
             loading={uninstalling}
-            aria-label={`${t("browse.uninstall")}: ${plugin.name}`}
             title={t("browse.uninstall")}
             onClick={() => onUninstall(plugin.id)}
           >
             <TrashGlyph />
-          </ActionIcon>
+          </IconButton>
         </Group>
       </Group>
     </div>
@@ -880,22 +812,12 @@ function InstalledSection({
   locale,
   onUninstall,
   uninstalling,
-  pinnedPluginIds,
   lastUsedPluginId,
-  onTogglePin,
   onOpenSource,
+  onOpenSettings,
 }: InstalledSectionProps) {
   const { t } = useTranslation();
   const sortedPlugins = sortByName(plugins);
-  const pinnedPlugins = sortedPlugins.filter((plugin) =>
-    pinnedPluginIds.includes(plugin.id),
-  );
-  const unpinnedPlugins = sortedPlugins.filter(
-    (plugin) => !pinnedPluginIds.includes(plugin.id),
-  );
-  const lastUsedPlugin = unpinnedPlugins.find(
-    (plugin) => plugin.id === lastUsedPluginId,
-  );
 
   return (
     <ConsolePanel
@@ -903,87 +825,28 @@ function InstalledSection({
       title={t("browse.installedSources.title")}
     >
       <Stack gap="sm" p="sm">
-      <ConsoleSectionHeader
-        title={t("browse.sourcesHeader")}
-        count={plugins.length}
-        actions={
-          <span
-            className="lnr-icon-count"
-            aria-label={t("browse.pinnedCount", { count: pinnedPlugins.length })}
-            title={t("browse.pinnedCount", { count: pinnedPlugins.length })}
-          >
-            <PinGlyph />
-            <span>{pinnedPlugins.length}</span>
-          </span>
-        }
-      />
-      {plugins.length > 0 ? (
-        <Stack gap="sm">
-          {pinnedPlugins.length > 0 ? (
-            <Stack gap={6}>
-              <Text size="xs" fw={600} c="dimmed">
-                {t("browse.pinnedPlugins")}
-              </Text>
-              {pinnedPlugins.map((plugin) => (
-                <PluginRow
-                  key={plugin.id}
-                  plugin={plugin}
-                  locale={locale}
-                  pinned
-                  lastUsed={plugin.id === lastUsedPluginId}
-                  onTogglePin={onTogglePin}
-                  onOpenSource={onOpenSource}
-                  onUninstall={onUninstall}
-                  uninstalling={uninstalling}
-                />
-              ))}
-            </Stack>
-          ) : null}
-
-          {lastUsedPlugin ? (
-            <Stack gap={6}>
-              <Text size="xs" fw={600} c="dimmed">
-                {t("browse.lastUsed")}
-              </Text>
-              <PluginRow
-                plugin={lastUsedPlugin}
-                locale={locale}
-                pinned={false}
-                lastUsed
-                onTogglePin={onTogglePin}
-                onOpenSource={onOpenSource}
-                onUninstall={onUninstall}
-                uninstalling={uninstalling}
-              />
-            </Stack>
-          ) : null}
-
+        {plugins.length > 0 ? (
           <Stack gap={6}>
-            <Text size="xs" fw={600} c="dimmed">
-              {t("browse.allInstalledPlugins")}
-            </Text>
-            {unpinnedPlugins.map((plugin) => (
+            {sortedPlugins.map((plugin) => (
               <PluginRow
                 key={plugin.id}
                 plugin={plugin}
                 locale={locale}
-                pinned={false}
                 lastUsed={plugin.id === lastUsedPluginId}
-                onTogglePin={onTogglePin}
                 onOpenSource={onOpenSource}
+                onOpenSettings={onOpenSettings}
                 onUninstall={onUninstall}
                 uninstalling={uninstalling}
               />
             ))}
           </Stack>
-        </Stack>
-      ) : (
-        <StateView
-          color="blue"
-          title={t("browse.noInstalledPlugins.title")}
-          message={t("browse.noInstalledPlugins.message")}
-        />
-      )}
+        ) : (
+          <StateView
+            color="blue"
+            title={t("browse.noInstalledPlugins.title")}
+            message={t("browse.noInstalledPlugins.message")}
+          />
+        )}
       </Stack>
     </ConsolePanel>
   );
@@ -1018,42 +881,6 @@ function AvailableSection({
       title={t("browse.availableSourcePlugins.title")}
     >
       <Stack gap="sm" p="sm">
-        <ConsoleSectionHeader
-          title={t("browse.repositoryIndex")}
-          count={entries.length}
-          actions={
-            !hasRepository ? (
-              <span
-                className="lnr-icon-state"
-                role="img"
-                aria-label={t("browse.notSet")}
-                title={t("browse.notSet")}
-              >
-                <RepositoryGlyph />
-              </span>
-            ) : failures.length > 0 ? (
-              <span
-                className="lnr-icon-count"
-                data-tone="error"
-                aria-label={t("globalSearch.summary.failed", { count: failures.length })}
-                title={t("globalSearch.summary.failed", { count: failures.length })}
-              >
-                <RefreshGlyph />
-                <span>{failures.length}</span>
-              </span>
-            ) : (
-              <span
-                className="lnr-icon-state"
-                data-tone="success"
-                role="img"
-                aria-label={t("common.ready")}
-                title={t("common.ready")}
-              >
-                <CheckGlyph />
-              </span>
-            )
-          }
-        />
         {failures.length > 0 && (
           <Stack gap={4}>
             {failures.map((failure) => (
@@ -1143,8 +970,8 @@ function AvailablePluginRow({
 
   return (
     <div className="lnr-browse-plugin-row">
-      <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
-        <Box style={{ minWidth: 0, flex: "1 1 18rem" }}>
+      <Group justify="space-between" align="center" wrap="nowrap" gap="sm">
+        <Box style={{ minWidth: 0, flex: "1 1 auto" }}>
           <Group gap="xs" wrap="wrap">
             <Text
               size="sm"
@@ -1189,29 +1016,27 @@ function AvailablePluginRow({
           </Text>
         </Box>
         <Group className="lnr-action-strip" gap={4} wrap="nowrap" justify="flex-end">
-          <ActionIcon
-            className="lnr-action-icon"
-            size="sm"
+          <IconButton
+            label={`${t("common.openSite")}: ${item.name}`}
+            size="lg"
             variant="default"
             disabled={installing}
-            aria-label={`${t("common.openSite")}: ${item.name}`}
             title={t("common.openSite")}
             onClick={() => openSite(item.site)}
           >
             <ExternalLinkGlyph />
-          </ActionIcon>
-          <ActionIcon
-            className="lnr-action-icon"
-            size="sm"
+          </IconButton>
+          <IconButton
+            label={`${isInstalled ? t("common.installed") : t("common.install")}: ${item.name}`}
+            size="lg"
             variant="light"
             disabled={isInstalled}
             loading={installing && !isInstalled}
-            aria-label={`${isInstalled ? t("common.installed") : t("common.install")}: ${item.name}`}
             title={isInstalled ? t("common.installed") : t("common.install")}
             onClick={() => onInstall(item)}
           >
             {isInstalled ? <CheckGlyph /> : <PlusGlyph />}
-          </ActionIcon>
+          </IconButton>
         </Group>
       </Group>
     </div>

@@ -3,6 +3,7 @@ import {
   UNCATEGORIZED_CATEGORY_ID,
   type LibraryCategory,
 } from "../db/queries/category";
+import { IconButton } from "./IconButton";
 import { useTranslation } from "../i18n";
 
 interface CategoriesDrawerProps {
@@ -148,22 +149,24 @@ function DrawerCategoryButton({
       </UnstyledButton>
       {canEdit ? (
         <span className="lnr-library-category-actions">
-          <UnstyledButton
-            aria-label={t("categories.renameNamed", { name: label })}
+          <IconButton
             className="lnr-library-category-action"
+            label={t("categories.renameNamed", { name: label })}
             onClick={onRename}
+            size="sm"
             title={t("categories.rename")}
           >
             <EditIcon />
-          </UnstyledButton>
-          <UnstyledButton
-            aria-label={t("categories.deleteNamed", { name: label })}
+          </IconButton>
+          <IconButton
             className="lnr-library-category-action"
+            label={t("categories.deleteNamed", { name: label })}
             onClick={onDelete}
+            size="sm"
             title={t("categories.delete")}
           >
             <TrashIcon />
-          </UnstyledButton>
+          </IconButton>
         </span>
       ) : null}
       <span className="lnr-library-category-count">{count ?? 0}</span>

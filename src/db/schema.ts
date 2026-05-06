@@ -70,6 +70,7 @@ export const chapterTable = sqliteTable(
     releaseTime: text("release_time"),
     readAt: integer("read_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }),
+    foundAt: integer("found_at").notNull().default(0),
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -82,6 +83,12 @@ export const chapterTable = sqliteTable(
     novelPositionIdx: index("chapter_novel_position_idx").on(
       t.novelId,
       t.position,
+    ),
+    unreadFoundPositionIdx: index("chapter_unread_found_position_idx").on(
+      t.unread,
+      t.foundAt,
+      t.position,
+      t.id,
     ),
   }),
 );

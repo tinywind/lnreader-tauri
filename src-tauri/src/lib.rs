@@ -1,4 +1,5 @@
 mod backup;
+mod plugin_host;
 mod scraper;
 
 use tauri::Manager;
@@ -38,6 +39,12 @@ pub fn run() {
             sql: include_str!("../../drizzle/0004_single_repository.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "materialize update ordering timestamp",
+            sql: include_str!("../../drizzle/0005_naive_leech.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -53,6 +60,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backup::backup_pack,
             backup::backup_unpack,
+            plugin_host::plugin_zip_list,
+            plugin_host::plugin_zip_read_file,
             scraper::webview_fetch,
             scraper::webview_extract,
             scraper::scraper_navigate,

@@ -7,6 +7,7 @@ import {
   appFetchText,
   createPluginFetchShim,
 } from "../http";
+import { clearPluginInputValues } from "./inputs";
 import { loadPlugin } from "./sandbox";
 import { createShimResolver } from "./shims";
 import type { Plugin, PluginItem } from "./types";
@@ -181,6 +182,7 @@ export class PluginManager {
   uninstallPlugin(id: string): boolean {
     const removed = this.installed.delete(id);
     if (removed) {
+      clearPluginInputValues(id);
       void deleteInstalledPlugin(id).catch((error: unknown) => {
         // eslint-disable-next-line no-console
         console.warn(

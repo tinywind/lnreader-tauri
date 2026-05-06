@@ -1,0 +1,81 @@
+import { Stack, Text } from "@mantine/core";
+import type { ReactNode } from "react";
+import { ConsolePanel } from "./ConsolePrimitives";
+
+interface SettingsSectionProps {
+  children: ReactNode;
+  summary?: string;
+  title: string;
+}
+
+interface SettingsFieldRowProps {
+  children: ReactNode;
+  description?: string;
+  label?: string;
+  layout?: "inline" | "stacked";
+}
+
+interface SettingsInlineControlsProps {
+  children: ReactNode;
+}
+
+export function SettingsSection({
+  children,
+  summary,
+  title,
+}: SettingsSectionProps) {
+  return (
+    <ConsolePanel
+      className="lnr-settings-group"
+      title={
+        <Stack gap={2}>
+          <Text className="lnr-settings-group-title">{title}</Text>
+          {summary ? (
+            <Text className="lnr-settings-group-summary">{summary}</Text>
+          ) : null}
+        </Stack>
+      }
+    >
+      <div className="lnr-settings-group-body">{children}</div>
+    </ConsolePanel>
+  );
+}
+
+export function SettingsFieldRow({
+  children,
+  description,
+  label,
+  layout = "inline",
+}: SettingsFieldRowProps) {
+  const hasCopy = Boolean(label || description);
+
+  return (
+    <div
+      className="lnr-settings-form-row"
+      data-copy={hasCopy ? "visible" : "empty"}
+      data-layout={layout}
+    >
+      {hasCopy ? (
+        <div className="lnr-settings-form-copy">
+          {label ? (
+            <Text className="lnr-settings-form-label">{label}</Text>
+          ) : null}
+          {description ? (
+            <Text className="lnr-settings-form-description">{description}</Text>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="lnr-settings-form-control">{children}</div>
+    </div>
+  );
+}
+
+export function SettingsInlineControls({
+  children,
+}: SettingsInlineControlsProps) {
+  return <div className="lnr-settings-inline-controls">{children}</div>;
+}
+
+export function SettingsWideField({ children }: { children: ReactNode }) {
+  return <div className="lnr-settings-wide-field">{children}</div>;
+}

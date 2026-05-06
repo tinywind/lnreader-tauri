@@ -1,69 +1,31 @@
 .lnr-updates-page {
-  --lnr-page-max-width: 1220px;
+  --lnr-page-max-width: 1440px;
+}
+
+.lnr-updates-title-line {
+  align-items: baseline;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.lnr-updates-title-description {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-body);
+  font-size: 0.5em;
+  font-weight: 400;
+  line-height: 1.25;
 }
 
 .lnr-updates-summary {
-  padding: 0;
-}
-
-.lnr-updates-summary-grid {
-  display: grid;
-  gap: 1px;
-  grid-template-columns: minmax(220px, 1.4fr) repeat(2, minmax(160px, 0.8fr));
-}
-
-.lnr-updates-summary-grid > div {
-  background: var(--lnr-design-surface);
-  min-width: 0;
   padding: 14px 16px;
 }
 
-.lnr-updates-summary-value {
-  color: var(--lnr-design-ink);
-  font-family: var(--lnr-font-display);
-  font-size: 1.15rem;
-  font-weight: 600;
-  line-height: 1.15;
-}
-
-.lnr-updates-summary-copy,
 .lnr-updates-row-meta {
   color: var(--lnr-design-ink-subtle);
   font-family: var(--lnr-font-meta);
   font-size: 0.6875rem;
   line-height: 1.4;
-}
-
-.lnr-updates-source-state {
-  padding: 12px 14px;
-}
-
-.lnr-updates-source-grid {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.lnr-updates-source-row,
-.lnr-updates-source-empty {
-  align-items: center;
-  background: var(--lnr-design-surface);
-  border: 1px solid var(--lnr-design-rule);
-  border-radius: 5px;
-  display: flex;
-  gap: 8px;
-  min-height: 38px;
-  min-width: 0;
-  padding: 8px 10px;
-}
-
-.lnr-updates-source-row .lnr-console-status {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.lnr-updates-source-empty {
-  color: var(--lnr-design-ink-subtle);
 }
 
 .lnr-updates-queue {
@@ -84,7 +46,7 @@
   cursor: pointer;
   grid-template-columns: 48px minmax(0, 1fr) auto;
   min-height: 86px;
-  padding: 7px 2px;
+  padding: 7px 8px 7px 2px;
 }
 
 .lnr-updates-row:focus-visible,
@@ -131,6 +93,8 @@
 }
 
 .lnr-updates-row-actions {
+  align-items: center;
+  align-self: stretch;
   display: flex;
   gap: 5px;
   justify-content: flex-end;
@@ -145,15 +109,9 @@
 
 .lnr-updates-icon-button {
   align-items: center;
-  border: 1px solid var(--lnr-design-rule-strong);
-  border-radius: 4px;
-  box-sizing: border-box;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
-  flex: 0 0 auto;
-  height: 28px;
   justify-content: center;
-  width: 30px;
 }
 
 .lnr-updates-icon-button:hover:not(:disabled) {
@@ -172,13 +130,8 @@
   color: var(--lnr-design-accent);
 }
 
-.lnr-updates-icon-button[data-tone="error"] {
+.lnr-updates-icon-button[data-tone="danger"] {
   color: var(--lnr-design-error);
-}
-
-.lnr-updates-check-button {
-  height: 32px;
-  width: 32px;
 }
 
 .lnr-updates-icon-flag {
@@ -225,15 +178,14 @@
   text-overflow: ellipsis;
 }
 
-.lnr-updates-icon-button svg,
 .lnr-updates-icon-flag svg {
   fill: none;
-  height: 15px;
+  height: 18px;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
-  width: 15px;
+  width: 18px;
 }
 
 .lnr-updates-spin-icon {
@@ -286,54 +238,28 @@
     z-index: 30;
   }
 
-  .lnr-updates-page .lnr-page-header-copy,
-  .lnr-updates-summary {
+  .lnr-updates-page .lnr-page-header-copy {
     display: none;
+  }
+
+  .lnr-updates-summary {
+    padding: 10px 62px 10px 10px;
   }
 
   .lnr-updates-check-button {
     background: var(--lnr-design-surface);
     box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
-    height: 34px;
     position: fixed;
     right: 12px;
     top: calc(var(--lnr-safe-area-top) + 12px);
-    width: 34px;
     z-index: 30;
   }
 
-  .lnr-updates-source-state {
-    padding: 8px 52px 8px 10px;
-  }
-
-  .lnr-updates-source-state .lnr-console-panel-title {
-    display: none;
-  }
-
-  .lnr-updates-source-grid {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-
-  .lnr-updates-source-row,
-  .lnr-updates-source-empty {
-    flex: 0 0 auto;
-    min-height: 30px;
-    padding: 5px 7px;
-  }
-
-  .lnr-updates-source-row {
-    max-width: min(180px, 70vw);
-  }
-
-  .lnr-updates-source-retry {
-    display: none;
-  }
-
   .lnr-updates-row {
-    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 8px;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    min-height: 77px;
+    padding: 7px 6px 7px 2px;
   }
 
   .lnr-updates-row .lnr-console-cover {
@@ -342,8 +268,7 @@
   }
 
   .lnr-updates-row-actions {
-    grid-column: 1 / -1;
-    justify-content: flex-start;
+    gap: 4px;
   }
 
   .lnr-updates-failure-footer {

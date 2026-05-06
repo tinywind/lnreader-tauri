@@ -1,5 +1,6 @@
-import { Button, Group, Paper, Text } from "@mantine/core";
+import { Group, Paper, Text } from "@mantine/core";
 import { useTranslation } from "../i18n";
+import { TextButton } from "./TextButton";
 
 interface LibrarySelectionToolbarProps {
   count: number;
@@ -9,9 +10,8 @@ interface LibrarySelectionToolbarProps {
 /**
  * Top bar that appears when one or more novels are selected.
  *
- * Action buttons are deliberately disabled in v0.1. Sprint 1 only
- * ships the UI shell; real bulk actions land with the remaining
- * Settings surface.
+ * Bulk action buttons stay disabled until the destructive paths are
+ * implemented end-to-end.
  */
 export function LibrarySelectionToolbar({
   count,
@@ -24,25 +24,25 @@ export function LibrarySelectionToolbar({
       <Group justify="space-between" wrap="nowrap">
         <Text fw={600}>{t("library.selectedCount", { count })}</Text>
         <Group gap="xs" wrap="nowrap">
-          <Button
-            size="xs"
+          <TextButton
+            size="sm"
             variant="subtle"
             disabled
-            title={t("library.selection.sprint6")}
+            title={t("library.selection.unavailable")}
           >
             {t("library.selection.markRead")}
-          </Button>
-          <Button
-            size="xs"
+          </TextButton>
+          <TextButton
+            size="sm"
             variant="subtle"
             disabled
-            title={t("library.selection.sprint6")}
+            title={t("library.selection.unavailable")}
           >
             {t("common.remove")}
-          </Button>
-          <Button size="xs" variant="light" onClick={onClear}>
+          </TextButton>
+          <TextButton size="sm" variant="light" onClick={onClear}>
             {t("common.done")}
-          </Button>
+          </TextButton>
         </Group>
       </Group>
     </Paper>

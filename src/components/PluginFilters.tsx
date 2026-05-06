@@ -1,12 +1,12 @@
 import {
   Checkbox,
-  SegmentedControl,
   Select,
   Stack,
   Switch,
   Text,
   TextInput,
 } from "@mantine/core";
+import { SegmentedToggle } from "./SegmentedToggle";
 import { useTranslation } from "../i18n";
 import { FilterTypes, type Filters } from "../lib/plugins/filterTypes";
 
@@ -174,9 +174,8 @@ export function PluginFilters({
                         ? "-"
                         : "";
                     return (
-                      <SegmentedControl
+                      <SegmentedToggle
                         key={o.value}
-                        size="xs"
                         value={state}
                         data={[
                           {

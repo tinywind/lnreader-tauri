@@ -26,6 +26,15 @@ export function ChevronUpGlyph({ className }: ActionGlyphProps) {
   );
 }
 
+export function CloseGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M6 6l12 12" />
+      <path d="M18 6 6 18" />
+    </svg>
+  );
+}
+
 export function ClockGlyph({ className }: ActionGlyphProps) {
   return (
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
@@ -50,6 +59,35 @@ export function DownloadedGlyph({ className }: ActionGlyphProps) {
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
       <path d="M5 5h14v14H5z" />
       <path d="m8 12 3 3 5-6" />
+    </svg>
+  );
+}
+
+export function LibraryAddGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 4h10a4 4 0 0 1 4 4v12H9a4 4 0 0 0-4 4z" />
+      <path d="M12 9v6" />
+      <path d="M9 12h6" />
+    </svg>
+  );
+}
+
+export function LibraryAddedGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M5 4h10a4 4 0 0 1 4 4v12H9a4 4 0 0 0-4 4z" />
+      <path d="m9 12 2 2 5-5" />
+    </svg>
+  );
+}
+
+export function DetailsGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
     </svg>
   );
 }
@@ -122,6 +160,31 @@ export function RetryGlyph({ className }: ActionGlyphProps) {
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
       <path d="M20 12a8 8 0 1 1-2.34-5.66" />
       <path d="M20 4v6h-6" />
+    </svg>
+  );
+}
+
+export function SearchGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="6" />
+      <path d="m16 16 4 4" />
+    </svg>
+  );
+}
+
+export function SettingsGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3" />
+      <path d="M12 19v3" />
+      <path d="M4.93 4.93l2.12 2.12" />
+      <path d="M16.95 16.95l2.12 2.12" />
+      <path d="M2 12h3" />
+      <path d="M19 12h3" />
+      <path d="M4.93 19.07l2.12-2.12" />
+      <path d="M16.95 7.05l2.12-2.12" />
     </svg>
   );
 }
