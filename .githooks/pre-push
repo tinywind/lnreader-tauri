@@ -53,7 +53,7 @@ if [ "${LNR_ANDROID_PRE_PUSH:-0}" = "1" ]; then
   if [ ! -d src-tauri/gen/android ]; then
     pnpm tauri android init --ci --skip-targets-install
   fi
-  pnpm tauri android build --debug --apk
+  pnpm android:apk:release
 else
-  echo "Skipping Android debug APK build. Set LNR_ANDROID_PRE_PUSH=1 to run it."
+  echo "Skipping Android release APK build. Set LNR_ANDROID_PRE_PUSH=1 to run it."
 fi

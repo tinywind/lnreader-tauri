@@ -1,4 +1,4 @@
-name: Android Debug APK
+name: Android Release APKs
 
 on:
   workflow_dispatch:
@@ -28,10 +28,11 @@ env:
   ANDROID_PLATFORM: android-36
   ANDROID_BUILD_TOOLS: 36.0.0
   ANDROID_NDK_VERSION: 27.1.12297006
+  RELEASE_SIGNED_APK_DIR: .tmp/android-release-apks
 
 jobs:
-  android-debug-apk:
-    name: Android debug APK
+  android-release-apks:
+    name: Android release APKs
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -85,15 +86,88 @@ jobs:
             pnpm tauri android init --ci --skip-targets-install
           fi
 
-      - name: Build debug APK
-        run: pnpm tauri android build --debug --apk
+      - name: Build universal and split release APKs
+        run: pnpm android:apk:release
 
-      - name: Upload debug APK
+      - name: Sign release APKs
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          unsigned_apk_root="src-tauri/gen/android/app/build/outputs/apk"
+          signing_dir=".tmp/android-release-signing"
+          mkdir -p "$RELEASE_SIGNED_APK_DIR" "$signing_dir"
+
+          mapfile -t unsigned_apks < <(find "$unsigned_apk_root" -type f -path "*/release/*-release-unsigned.apk" | sort)
+          if [ "${#unsigned_apks[@]}" -eq 0 ]; then
+            echo "No unsigned release APKs found under $unsigned_apk_root."
+            exit 1
+          fi
+
+          keystore="$signing_dir/release.jks"
+          key_alias="$ANDROID_RELEASE_KEY_ALIAS"
+          store_password="$ANDROID_RELEASE_STORE_PASSWORD"
+          key_password="$ANDROID_RELEASE_KEY_PASSWORD"
+          signing_suffix="release-signed"
+
+          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ] &&
+             [ -n "$key_alias" ] &&
+             [ -n "$store_password" ] &&
+             [ -n "$key_password" ]; then
+            printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          else
+            echo "::warning::Android release signing secrets are not configured; using an ephemeral CI debug key for installable tester artifacts."
+            keystore="$signing_dir/ci-debug.jks"
+            key_alias="androiddebugkey"
+            store_password="android"
+            key_password="android"
+            signing_suffix="ci-debug-signed"
+            keytool -genkeypair \
+              -keystore "$keystore" \
+              -storetype JKS \
+              -storepass "$store_password" \
+              -keypass "$key_password" \
+              -alias "$key_alias" \
+              -keyalg RSA \
+              -keysize 4096 \
+              -validity 10000 \
+              -dname "CN=LNReaderTauri CI, OU=Android Testing, O=tinywind, L=CI, S=CI, C=US"
+          fi
+
+          zipalign="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/zipalign"
+          apksigner="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
+          checksum_file="$RELEASE_SIGNED_APK_DIR/SHA256SUMS.txt"
+          : > "$checksum_file"
+
+          for unsigned_apk in "${unsigned_apks[@]}"; do
+            abi="$(basename "$(dirname "$(dirname "$unsigned_apk")")")"
+            aligned_apk="$signing_dir/lnreader-tauri-${abi}-aligned.apk"
+            signed_apk="$RELEASE_SIGNED_APK_DIR/lnreader-tauri-${abi}-${signing_suffix}.apk"
+
+            "$zipalign" -p -f 4 "$unsigned_apk" "$aligned_apk"
+            "$apksigner" sign \
+              --ks "$keystore" \
+              --ks-key-alias "$key_alias" \
+              --ks-pass "pass:$store_password" \
+              --key-pass "pass:$key_password" \
+              --out "$signed_apk" \
+              "$aligned_apk"
+            "$apksigner" verify --verbose "$signed_apk"
+            (cd "$RELEASE_SIGNED_APK_DIR" && sha256sum "$(basename "$signed_apk")") >> "$checksum_file"
+          done
+
+      - name: Upload signed release APKs
         uses: actions/upload-artifact@v7
         with:
-          name: lnreader-tauri-debug-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          name: lnreader-tauri-signed-release-apks
+          path: |
+            ${{ env.RELEASE_SIGNED_APK_DIR }}/*.apk
+            ${{ env.RELEASE_SIGNED_APK_DIR }}/SHA256SUMS.txt
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 7
+          retention-days: 3
