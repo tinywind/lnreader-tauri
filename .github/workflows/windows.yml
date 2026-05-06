@@ -1,0 +1,150 @@
+name: Windows Release Bundles
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+    paths:
+      - ".github/workflows/windows.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "src/**"
+      - "src-tauri/**"
+      - "drizzle/**"
+      - "index.html"
+      - "vite.config.*"
+      - "tsconfig*.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WINDOWS_BUNDLE_ARTIFACT_DIR: .tmp/windows-release-bundles
+
+jobs:
+  windows-release-bundles:
+    name: Windows release bundles (${{ matrix.platform }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            rust-target: x86_64-pc-windows-msvc
+          - platform: windows-arm64
+            rust-target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.rust-target }}
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows release bundle
+        run: pnpm tauri build --target ${{ matrix.rust-target }}
+
+      - name: Collect Windows release bundles
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $platform = "${{ matrix.platform }}"
+          $target = "${{ matrix.rust-target }}"
+          $bundleRoot = "src-tauri/target/$target/release/bundle"
+          $artifactDir = $env:WINDOWS_BUNDLE_ARTIFACT_DIR
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          if (-not (Test-Path $bundleRoot)) {
+            throw "Bundle output directory not found: $bundleRoot"
+          }
+
+          $bundleFiles = Get-ChildItem -Path $bundleRoot -Recurse -File |
+            Where-Object { $_.Extension -in ".msi", ".exe" } |
+            Sort-Object FullName
+
+          if ($bundleFiles.Count -eq 0) {
+            throw "No Windows release bundle files found under $bundleRoot."
+          }
+
+          $byType = @{}
+          foreach ($bundleFile in $bundleFiles) {
+            $type = switch ($bundleFile.Extension) {
+              ".msi" { "msi" }
+              ".exe" { "nsis" }
+              default { throw "Unsupported Windows bundle extension: $($bundleFile.Extension)" }
+            }
+            if ($byType.ContainsKey($type)) {
+              throw "Expected one $type bundle for $platform, found multiple."
+            }
+            $byType[$type] = $bundleFile
+          }
+
+          foreach ($requiredType in @("msi", "nsis")) {
+            if (-not $byType.ContainsKey($requiredType)) {
+              throw "Missing $requiredType bundle for $platform."
+            }
+          }
+
+          $checksumFile = Join-Path $artifactDir "SHA256SUMS-$platform.txt"
+          New-Item -ItemType File -Force -Path $checksumFile | Out-Null
+
+          foreach ($type in @("msi", "nsis")) {
+            $bundleFile = $byType[$type]
+            $destination = Join-Path $artifactDir "lnreader-tauri-$platform-$type-$($bundleFile.Name)"
+            Copy-Item -LiteralPath $bundleFile.FullName -Destination $destination
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
+            Add-Content -Path $checksumFile -Value "$hash  $(Split-Path -Leaf $destination)"
+          }
+
+      - name: Upload Windows MSI
+        uses: actions/upload-artifact@v7
+        with:
+          name: lnreader-tauri-${{ matrix.platform }}-msi
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/lnreader-tauri-${{ matrix.platform }}-msi-*.msi
+          if-no-files-found: error
+          archive: false
+          compression-level: 0
+          retention-days: 3
+
+      - name: Upload Windows NSIS installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: lnreader-tauri-${{ matrix.platform }}-nsis
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/lnreader-tauri-${{ matrix.platform }}-nsis-*.exe
+          if-no-files-found: error
+          archive: false
+          compression-level: 0
+          retention-days: 3
+
+      - name: Upload Windows bundle checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: lnreader-tauri-${{ matrix.platform }}-checksums
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/SHA256SUMS-${{ matrix.platform }}.txt
+          if-no-files-found: error
+          archive: false
+          compression-level: 0
+          retention-days: 3

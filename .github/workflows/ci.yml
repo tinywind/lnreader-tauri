@@ -6,8 +6,8 @@
 #                          build --debug` to catch Rust/native breakage.
 #
 # macOS and iOS are intentionally absent because this repo targets
-# Windows, Linux, and Android. Android APK builds live in
-# `.github/workflows/android.yml`.
+# Windows, Linux, and Android. Release artifacts live in
+# `.github/workflows/android.yml` and `.github/workflows/windows.yml`.
 
 name: CI
 
