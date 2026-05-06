@@ -1,6 +1,6 @@
-# LNReaderTauri
+# Norea
 
-LNReaderTauri is a Tauri 2 light-novel reader for Windows, Linux, and Android.
+Norea is a Tauri 2 light-novel reader for Windows, Linux, and Android.
 It is inspired by [lnreader/lnreader](https://github.com/lnreader/lnreader),
 but it is a separate project with its own database, backup format, plugin
 runtime, and desktop-first shell.
@@ -36,17 +36,18 @@ Current limits:
 
 ## Get a Build
 
-- Latest release page: [GitHub Releases](https://github.com/tinywind/lnreader-tauri/releases/latest)
-- Tester APK artifacts: [Android Release APKs workflow](https://github.com/tinywind/lnreader-tauri/actions/workflows/android.yml)
+- Latest release page: [GitHub Releases](https://github.com/tinywind/norea/releases/latest)
+- Tester APK artifacts: [Android Release APKs workflow](https://github.com/tinywind/norea/actions/workflows/android.yml)
 
 The Android workflow uploads signed release APKs plus `SHA256SUMS.txt` as a
 short-lived artifact. Open the latest successful workflow run and download
-`lnreader-tauri-signed-release-apks`.
+`norea-arm64-signed-release-apk` for physical devices or
+`norea-x86_64-signed-release-apk` for emulators and WSA.
 
 ## Plugin Repository
 
 Source plugins are distributed separately from the app. The legal-safe sample
-catalog is [tinywind/lnreader-tauri-plugins](http://github.com/tinywind/lnreader-tauri-plugins),
+catalog is [tinywind/norea-plugins](https://github.com/tinywind/norea-plugins),
 which contains public-domain, open-license, official-API, and user-owned
 self-hosted source examples.
 
@@ -57,7 +58,7 @@ To use the published catalog in the app:
 3. Enter the repository manifest URL:
 
    ```text
-   https://raw.githubusercontent.com/tinywind/lnreader-tauri-plugins/plugins/v0.1.0/.dist/plugins.min.json
+   https://raw.githubusercontent.com/tinywind/norea-plugins/plugins/v0.1.0/.dist/plugins.min.json
    ```
 
 4. Save it, refresh the repository if needed, then install plugins from
@@ -67,10 +68,10 @@ The app keeps one active repository URL. Saving a different URL replaces the
 current repository index.
 
 For local plugin development, keep a sibling checkout at
-`../lnreader-tauri-plugins` and serve its generated manifest:
+`../norea-plugins` and serve its generated manifest:
 
 ```bash
-cd ../lnreader-tauri-plugins
+cd ../norea-plugins
 npm install
 cp .env.template .env
 node scripts/generate-plugin-index.js
@@ -101,13 +102,26 @@ list and legal sample books. Once captured, add:
 
 ## Develop
 
-Requirements:
+### Build and Test Environment
 
-- Node.js 22 LTS
-- pnpm 10
-- Rust stable
-- Platform prerequisites for Tauri 2
-- Android SDK, NDK, and JDK 17 when building Android APKs locally
+The GitHub workflows are the source of truth for supported build tooling.
+Local builds should use the same major versions:
+
+| Tool | Version / target | Used for |
+| --- | --- | --- |
+| Node.js | 22 LTS | Frontend build, tests, and Tauri CLI |
+| pnpm | 10.27.0 | Package manager, pinned by `packageManager` |
+| Rust | stable | Tauri host and native plugins |
+| Java | JDK 17 | Android Gradle builds |
+| Android SDK platform | `android-36` | Android APK builds |
+| Android build tools | `36.0.0` | APK signing and build tools |
+| Android NDK | `27.1.12297006` | Rust Android targets |
+| Android Rust targets | `aarch64-linux-android`, `x86_64-linux-android` | Device APK and emulator/WSA APK |
+| Windows Rust targets | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows x64 and ARM64 release bundles |
+
+Desktop Linux builds also need the Tauri 2 system packages used by CI:
+`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, and `patchelf`.
 
 Install and run the desktop app:
 
@@ -121,14 +135,22 @@ Useful checks:
 ```bash
 pnpm tsc
 pnpm test
+pnpm db:generate
 pnpm tauri build --debug
 ```
+
+After `pnpm db:generate`, commit any intended `drizzle/` migration changes.
+CI fails when generated migrations drift from the checked-in schema.
 
 Android APK build:
 
 ```bash
 pnpm android:apk:release
 ```
+
+This builds arm64 APKs for current physical devices and x86_64 APKs for
+emulators or WSA. The workflow installs `platforms;android-36`,
+`build-tools;36.0.0`, and `ndk;27.1.12297006` before running the same command.
 
 Rust-side checks:
 
@@ -166,5 +188,5 @@ belongs in the existing i18n files.
 
 ## License
 
-MIT. Upstream lnreader assets and translation seeds remain MIT-compatible and
+MIT. Upstream assets and translation seeds remain MIT-compatible and
 are credited in the app where relevant.
