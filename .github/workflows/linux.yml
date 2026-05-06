@@ -77,7 +77,8 @@ jobs:
             patchelf \
             pkg-config \
             rpm \
-            wget
+            wget \
+            xdg-utils
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
