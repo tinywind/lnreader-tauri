@@ -120,17 +120,18 @@ jobs:
           release_apk_root="src-tauri/gen/android/app/build/outputs/apk"
           mkdir -p "$RELEASE_SIGNED_APK_DIR"
 
-          mapfile -t release_apks < <(find "$release_apk_root" -type f -path "*/release/*.apk" ! -name "*-aligned.apk" ! -name "*-unsigned.apk" | sort)
-          if [ "${#release_apks[@]}" -eq 0 ]; then
-            echo "No release APKs found under $release_apk_root."
-            exit 1
-          fi
-
           apksigner="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
           checksum_file="$RELEASE_SIGNED_APK_DIR/SHA256SUMS.txt"
           : > "$checksum_file"
 
-          for release_apk in "${release_apks[@]}"; do
+          for release_apk in \
+            "$release_apk_root/arm64/release/app-arm64-release.apk" \
+            "$release_apk_root/x86_64/release/app-x86_64-release.apk"; do
+            if [ ! -f "$release_apk" ]; then
+              echo "Expected release APK not found: $release_apk"
+              exit 1
+            fi
+
             variant="$(basename "$(dirname "$(dirname "$release_apk")")")"
             collected_apk="$RELEASE_SIGNED_APK_DIR/norea-${variant}-$(basename "$release_apk")"
 
