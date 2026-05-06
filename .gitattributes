@@ -1,0 +1,22 @@
+# Normalize all text files to LF in the index and working tree.
+* text=auto eol=lf
+
+# Keep binary assets and archives out of text normalization.
+*.aab binary
+*.apk binary
+*.avif binary
+*.db binary
+*.dll binary
+*.dylib binary
+*.exe binary
+*.gif binary
+*.ico binary
+*.jar binary
+*.jpeg binary
+*.jpg binary
+*.jks binary
+*.keystore binary
+*.png binary
+*.so binary
+*.webp binary
+*.zip binary
