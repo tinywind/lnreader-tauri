@@ -37,6 +37,7 @@ Current limits:
 ## Get a Build
 
 - Latest release page: [GitHub Releases](https://github.com/tinywind/norea/releases/latest)
+- Linux desktop artifacts: [Linux Release Bundles workflow](https://github.com/tinywind/norea/actions/workflows/linux.yml)
 - Tester APK artifacts: [Android Release APKs workflow](https://github.com/tinywind/norea/actions/workflows/android.yml)
 
 The Android workflow uploads signed release APKs plus `SHA256SUMS.txt` as a
@@ -117,11 +118,12 @@ Local builds should use the same major versions:
 | Android build tools | `36.0.0` | APK signing and build tools |
 | Android NDK | `27.1.12297006` | Rust Android targets |
 | Android Rust targets | `aarch64-linux-android`, `x86_64-linux-android` | Device APK and emulator/WSA APK |
+| Linux Rust targets | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux x64 and ARM64 release bundles |
 | Windows Rust targets | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows x64 and ARM64 release bundles |
 
 Desktop Linux builds also need the Tauri 2 system packages used by CI:
 `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
-`librsvg2-dev`, and `patchelf`.
+`librsvg2-dev`, `patchelf`, and `rpm`.
 
 Install and run the desktop app:
 
