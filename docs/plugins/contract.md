@@ -58,7 +58,10 @@ export interface Plugin extends PluginItem {
 
 The repository index supplies `PluginItem` metadata. The installed plugin source
 may omit some metadata; `PluginManager` falls back to the repository item before
-persisting the installed plugin.
+persisting the installed plugin. Local file installs do not have a repository
+index fallback, so uploaded `.js` plugin files that omit repository-only
+metadata are registered with `lang: "local"` and an empty `iconUrl`. They still
+must export the required runtime functions before they can be registered.
 
 ## Domain Types
 

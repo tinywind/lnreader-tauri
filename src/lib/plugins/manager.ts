@@ -19,6 +19,77 @@ export class PluginValidationError extends Error {
   }
 }
 
+const REQUIRED_PLUGIN_METADATA_FIELDS = [
+  "id",
+  "name",
+  "site",
+  "lang",
+  "version",
+] as const;
+
+const REQUIRED_PLUGIN_METHOD_FIELDS = [
+  "popularNovels",
+  "parseNovel",
+  "parseChapter",
+  "searchNovels",
+] as const;
+
+const LOCAL_PLUGIN_LANGUAGE = "local";
+
+function readRequiredPluginString(
+  value: unknown,
+  field: string,
+  sourceLabel: string,
+): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new PluginValidationError(
+      `Plugin ${sourceLabel} is missing required string field '${field}'.`,
+    );
+  }
+  return value;
+}
+
+function readOptionalPluginString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value
+    : undefined;
+}
+
+function assertPluginContract(plugin: Plugin, sourceLabel: string): void {
+  const value = plugin as unknown as Record<string, unknown>;
+  for (const field of [...REQUIRED_PLUGIN_METADATA_FIELDS, "url"] as const) {
+    readRequiredPluginString(value[field], field, sourceLabel);
+  }
+  if (typeof value.iconUrl !== "string") {
+    throw new PluginValidationError(
+      `Plugin ${sourceLabel} is missing required string field 'iconUrl'.`,
+    );
+  }
+  for (const field of REQUIRED_PLUGIN_METHOD_FIELDS) {
+    if (typeof value[field] !== "function") {
+      throw new PluginValidationError(
+        `Plugin ${sourceLabel} is missing required function '${field}'.`,
+      );
+    }
+  }
+}
+
+function pluginItemFromLocalSource(
+  plugin: Plugin,
+  sourceUrl: string,
+): PluginItem {
+  const value = plugin as unknown as Record<string, unknown>;
+  return {
+    id: readRequiredPluginString(value.id, "id", sourceUrl),
+    name: readRequiredPluginString(value.name, "name", sourceUrl),
+    site: readRequiredPluginString(value.site, "site", sourceUrl),
+    lang: readOptionalPluginString(value.lang) ?? LOCAL_PLUGIN_LANGUAGE,
+    version: readRequiredPluginString(value.version, "version", sourceUrl),
+    url: sourceUrl,
+    iconUrl: readOptionalPluginString(value.iconUrl) ?? "",
+  };
+}
+
 /**
  * Type-guard for the loose JSON shape upstream `repository.json`
  * indexes carry. We only require the fields the host actually
@@ -103,11 +174,49 @@ export class PluginManager {
       }),
       item,
     );
+    assertPluginContract(plugin, item.url);
     if (plugin.id !== item.id) {
       throw new PluginValidationError(
         `Plugin id mismatch: repository index says '${item.id}', source says '${plugin.id}'.`,
       );
     }
+    await this.registerInstalledPlugin(plugin, item.url, source);
+    return plugin;
+  }
+
+  /**
+   * Install a local plugin source file. Repository-only metadata is
+   * synthesized when absent, but the runtime methods must be present
+   * before the plugin is persisted.
+   */
+  async installPluginFromSource(
+    source: string,
+    sourceUrl: string,
+  ): Promise<Plugin> {
+    const item = pluginItemFromLocalSource(
+      loadPlugin(source, {
+        resolveRequire: createShimResolver(sourceUrl),
+        fetch: createPluginFetchShim(),
+      }),
+      sourceUrl,
+    );
+    const plugin = withPluginMetadata(
+      loadPlugin(source, {
+        resolveRequire: createShimResolver(item.id, item.site),
+        fetch: createPluginFetchShim(item.site),
+      }),
+      item,
+    );
+    assertPluginContract(plugin, sourceUrl);
+    await this.registerInstalledPlugin(plugin, sourceUrl, source);
+    return plugin;
+  }
+
+  private async registerInstalledPlugin(
+    plugin: Plugin,
+    sourceUrl: string,
+    source: string,
+  ): Promise<void> {
     this.installed.set(plugin.id, plugin);
     // Some plugin sources (e.g. Komga) only set `id`/`name`/
     // `version`/`site` on the loaded instance and rely on the
@@ -121,10 +230,9 @@ export class PluginManager {
       lang: plugin.lang,
       version: plugin.version,
       iconUrl: plugin.iconUrl,
-      sourceUrl: item.url,
+      sourceUrl,
       sourceCode: source,
     });
-    return plugin;
   }
 
   /**
@@ -164,6 +272,7 @@ export class PluginManager {
             url: row.sourceUrl,
           },
         );
+        assertPluginContract(plugin, row.sourceUrl);
         this.installed.set(plugin.id, plugin);
       } catch (error) {
         // eslint-disable-next-line no-console

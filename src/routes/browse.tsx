@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -58,6 +58,13 @@ import { useBrowseStore } from "../store/browse";
 const REPO_QUERY_KEY = ["repository", "list"] as const;
 const AVAILABLE_QUERY_KEY = ["plugin", "available"] as const;
 const INSTALLED_QUERY_KEY = ["plugin", "installed"] as const;
+const MAX_PLUGIN_SOURCE_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_PLUGIN_SOURCE_FILE_SIZE_LABEL = "5 MiB";
+
+function localPluginSourceUrl(file: File): string {
+  const safeName = file.name.trim().replace(/[\r\n]/g, " ") || "plugin.js";
+  return `local:${encodeURIComponent(safeName)}`;
+}
 
 interface AvailableEntry {
   item: PluginItem;
@@ -313,6 +320,29 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     },
   });
 
+  const uploadPluginMutation = useMutation({
+    mutationFn: async (file: File): Promise<Plugin> => {
+      if (!file.name.toLowerCase().endsWith(".js")) {
+        throw new Error(t("browse.localPlugin.invalidFile"));
+      }
+      if (file.size > MAX_PLUGIN_SOURCE_FILE_BYTES) {
+        throw new Error(
+          t("browse.localPlugin.fileTooLarge", {
+            maxSize: MAX_PLUGIN_SOURCE_FILE_SIZE_LABEL,
+          }),
+        );
+      }
+      const source = await file.text();
+      return pluginManager.installPluginFromSource(
+        source,
+        localPluginSourceUrl(file),
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["plugin"] });
+    },
+  });
+
   const uninstallMutation = useMutation({
     mutationFn: async (id: string): Promise<void> => {
       pluginManager.uninstallPlugin(id);
@@ -407,6 +437,12 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
               refreshing={available.isFetching}
               onRemove={(id) => removeRepoMutation.mutate(id)}
               removing={removeRepoMutation.isPending}
+            />
+
+            <LocalPluginSection
+              error={uploadPluginMutation.error}
+              onInstallFile={(file) => uploadPluginMutation.mutate(file)}
+              uploading={uploadPluginMutation.isPending}
             />
 
             <InstalledSection
@@ -513,6 +549,12 @@ interface RepositoriesSectionProps {
   onRemove: (id: number) => void;
   refreshing: boolean;
   removing: boolean;
+}
+
+interface LocalPluginSectionProps {
+  error: unknown;
+  onInstallFile: (file: File) => void;
+  uploading: boolean;
 }
 
 interface PluginSettingsSectionProps {
@@ -661,6 +703,70 @@ function RepositoriesSection({
             </Group>
           </div>
         )}
+      </Stack>
+    </ConsolePanel>
+  );
+}
+
+function LocalPluginSection({
+  error,
+  onInstallFile,
+  uploading,
+}: LocalPluginSectionProps) {
+  const { t } = useTranslation();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  return (
+    <ConsolePanel
+      className="lnr-browse-panel"
+      title={t("browse.localPlugin.title")}
+    >
+      <Stack gap="sm" p="sm">
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".js,text/javascript,application/javascript"
+          style={{ display: "none" }}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0] ?? null;
+            event.currentTarget.value = "";
+            if (file) onInstallFile(file);
+          }}
+        />
+        <div className="lnr-browse-repo-row">
+          <Group justify="space-between" align="center" wrap="nowrap">
+            <span
+              className="lnr-icon-state"
+              role="img"
+              aria-label={t("browse.localPlugin.badge")}
+              title={t("browse.localPlugin.badge")}
+            >
+              <PlusGlyph />
+            </span>
+            <Box style={{ minWidth: 0, flex: "1 1 auto" }}>
+              <Text size="sm" fw={500} truncate>
+                {t("browse.localPlugin.heading")}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {t("browse.localPlugin.description")}
+              </Text>
+            </Box>
+            <TextButton
+              loading={uploading}
+              variant="light"
+              onClick={() => inputRef.current?.click()}
+            >
+              {t("browse.localPlugin.upload")}
+            </TextButton>
+          </Group>
+        </div>
+        {error ? (
+          <StateView
+            color="red"
+            title={t("browse.localPlugin.installFailed")}
+            message={error instanceof Error ? error.message : String(error)}
+          />
+        ) : null}
       </Stack>
     </ConsolePanel>
   );

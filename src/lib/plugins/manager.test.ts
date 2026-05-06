@@ -141,6 +141,59 @@ describe("PluginManager.installPlugin", () => {
   });
 });
 
+describe("PluginManager.installPluginFromSource", () => {
+  it("sandbox-loads a local source and registers under the exported id", async () => {
+    const manager = new PluginManager();
+
+    const plugin = await manager.installPluginFromSource(
+      VALID_PLUGIN_SOURCE,
+      "local:demo.js",
+    );
+
+    expect(plugin.id).toBe("demo");
+    expect(manager.has("demo")).toBe(true);
+    expect(manager.size()).toBe(1);
+    expect(manager.getPlugin("demo")).toBe(plugin);
+    expect(mockedCreateFetchShim.mock.calls).toEqual([
+      [],
+      [VALID_ITEM.site],
+    ]);
+  });
+
+  it("rejects local sources that omit required contract functions", async () => {
+    const manager = new PluginManager();
+    const missingSearch = VALID_PLUGIN_SOURCE.replace(
+      "    searchNovels: () => Promise.resolve([]),\n",
+      "",
+    );
+
+    await expect(
+      manager.installPluginFromSource(missingSearch, "local:broken.js"),
+    ).rejects.toBeInstanceOf(PluginValidationError);
+    expect(manager.has("demo")).toBe(false);
+  });
+
+  it("installs local sources that rely on repository-only metadata", async () => {
+    const manager = new PluginManager();
+    const repositoryOnlyMetadata = VALID_PLUGIN_SOURCE.replace(
+      '    lang: "en",\n',
+      "",
+    ).replace(
+      '    iconUrl: "https://example.test/icon.png",\n',
+      "",
+    );
+
+    const plugin = await manager.installPluginFromSource(
+      repositoryOnlyMetadata,
+      "local:demo.js",
+    );
+
+    expect(plugin.lang).toBe("local");
+    expect(plugin.iconUrl).toBe("");
+    expect(manager.has("demo")).toBe(true);
+  });
+});
+
 describe("PluginManager.uninstallPlugin", () => {
   it("removes a previously installed plugin and reports false on a miss", async () => {
     const values = new Map<string, string>([
