@@ -37,9 +37,9 @@ export interface ReaderThemeDefinition {
 }
 
 export interface ReaderGeneralSettings {
-  fullScreen: boolean;
   keepScreenOn: boolean;
   pageReader: boolean;
+  twoPageReader: boolean;
   swipeGestures: boolean;
   tapToScroll: boolean;
   showSeekbar: boolean;
@@ -267,9 +267,9 @@ export const PORTRAIT_TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.portrait;
 export const LANDSCAPE_TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.landscape;
 
 export const READER_GENERAL_DEFAULTS: ReaderGeneralSettings = {
-  fullScreen: false,
   keepScreenOn: false,
   pageReader: false,
+  twoPageReader: false,
   swipeGestures: true,
   tapToScroll: true,
   showSeekbar: true,
@@ -308,7 +308,7 @@ function clamp(value: number, min: number, max: number): number {
 function normalizeGeneral(
   settings: Partial<ReaderGeneralSettings>,
 ): Partial<ReaderGeneralSettings> {
-  return {
+  const normalized: Partial<ReaderGeneralSettings> = {
     ...settings,
     ...(settings.autoScrollInterval !== undefined
       ? {
@@ -340,6 +340,15 @@ function normalizeGeneral(
         }
       : {}),
   };
+
+  if (settings.twoPageReader === true) {
+    normalized.pageReader = true;
+  }
+  if (settings.pageReader === false) {
+    normalized.twoPageReader = false;
+  }
+
+  return normalized;
 }
 
 function normalizeTapZonePresetId(value: unknown): ReaderTapPresetId {
@@ -497,22 +506,31 @@ export const useReaderStore = create<ReaderState>()(
           persisted.general?.tapZonePresetId,
         );
         const tapZonePreset = getTapZonePreset(tapZonePresetId);
+        const persistedGeneral = { ...(persisted.general ?? {}) } as Partial<
+          ReaderGeneralSettings
+        > & { fullScreen?: unknown };
+        delete persistedGeneral.fullScreen;
+        const general = {
+          ...READER_GENERAL_DEFAULTS,
+          ...persistedGeneral,
+          tapZonePresetId,
+          portraitTapZones: normalizeTapZones(
+            persistedGeneral.portraitTapZones ?? tapZonePreset.portrait,
+            tapZonePreset.portrait,
+          ),
+          landscapeTapZones: normalizeTapZones(
+            persistedGeneral.landscapeTapZones ?? tapZonePreset.landscape,
+            tapZonePreset.landscape,
+          ),
+        };
+        if (!general.pageReader) {
+          general.twoPageReader = false;
+        }
+
         return {
           ...currentState,
           ...persisted,
-          general: {
-            ...READER_GENERAL_DEFAULTS,
-            ...persisted.general,
-            tapZonePresetId,
-            portraitTapZones: normalizeTapZones(
-              persisted.general?.portraitTapZones ?? tapZonePreset.portrait,
-              tapZonePreset.portrait,
-            ),
-            landscapeTapZones: normalizeTapZones(
-              persisted.general?.landscapeTapZones ?? tapZonePreset.landscape,
-              tapZonePreset.landscape,
-            ),
-          },
+          general,
           appearance: {
             ...READER_APPEARANCE_DEFAULTS,
             ...persisted.appearance,

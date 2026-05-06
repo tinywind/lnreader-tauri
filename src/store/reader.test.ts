@@ -29,6 +29,16 @@ describe("useReaderStore", () => {
     );
   });
 
+  it("setGeneral keeps two-page reader tied to paged reading", () => {
+    useReaderStore.getState().setGeneral({ twoPageReader: true });
+    expect(useReaderStore.getState().general.pageReader).toBe(true);
+    expect(useReaderStore.getState().general.twoPageReader).toBe(true);
+
+    useReaderStore.getState().setGeneral({ pageReader: false });
+    expect(useReaderStore.getState().general.pageReader).toBe(false);
+    expect(useReaderStore.getState().general.twoPageReader).toBe(false);
+  });
+
   it("setGeneral clamps autoScrollInterval to [16, 500] and rounds", () => {
     useReaderStore.getState().setGeneral({ autoScrollInterval: 0 });
     expect(useReaderStore.getState().general.autoScrollInterval).toBe(16);
@@ -130,7 +140,9 @@ describe("useReaderStore", () => {
   });
 
   it("resetReaderSettings returns general + appearance to defaults", () => {
-    useReaderStore.getState().setGeneral({ pageReader: true });
+    useReaderStore
+      .getState()
+      .setGeneral({ pageReader: true, twoPageReader: true });
     useReaderStore.getState().setAppearance({ textSize: 30 });
     useReaderStore.getState().resetReaderSettings();
     const state = useReaderStore.getState();

@@ -51,6 +51,7 @@ interface PageInfo {
 
 const SCROLL_MAX_WIDTH = 760;
 const SCROLL_PAGE_FRACTION = 0.9;
+const TWO_PAGE_MEDIA_QUERY = "(min-width: 62em)";
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
@@ -60,6 +61,13 @@ const WHEEL_DELTA_PAGE = 2;
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
   return Math.max(0, Math.min(100, progress));
+}
+
+function getTwoPageMediaMatches(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia(TWO_PAGE_MEDIA_QUERY).matches
+  );
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -259,6 +267,10 @@ function ReaderContentInner(
   });
   const [now, setNow] = useState(() => new Date());
   const [battery, setBattery] = useState<string | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [twoPageMediaMatches, setTwoPageMediaMatches] = useState(
+    getTwoPageMediaMatches,
+  );
 
   const renderedHtml = useMemo(
     () => (general.bionicReading ? applyBionicReading(html) : html),
@@ -267,10 +279,12 @@ function ReaderContentInner(
 
   const viewportHeight =
     requestedViewportHeight ??
-    (general.fullScreen
-      ? "var(--lnr-app-content-height)"
-      : "calc(var(--lnr-app-content-height) - 56px)");
+    "calc(var(--lnr-app-content-height) - 56px)";
   const overlayBottom = bottomOverlayOffset ?? 8;
+  const isPagedReader = general.pageReader;
+  const isTwoPageReader =
+    isPagedReader && general.twoPageReader && twoPageMediaMatches;
+  const visiblePageColumns = isTwoPageReader ? 2 : 1;
 
   const scrollByPage = useCallback(
     (direction: 1 | -1) => {
@@ -279,7 +293,7 @@ function ReaderContentInner(
       if (direction === -1) {
         completedForNavigationRef.current = false;
       }
-      if (general.pageReader) {
+      if (isPagedReader) {
         const currentPage = getPagedPageIndex(node);
         const targetPage = currentPage + direction;
         if (targetPage < 1 || targetPage > getPagedPageCount(node)) {
@@ -304,7 +318,7 @@ function ReaderContentInner(
       const amount = node.clientHeight * SCROLL_PAGE_FRACTION;
       node.scrollBy({ top: amount * direction, behavior: "smooth" });
     },
-    [general.pageReader, onBoundaryPage],
+    [isPagedReader, onBoundaryPage],
   );
 
   const flushProgress = useCallback(
@@ -340,7 +354,7 @@ function ReaderContentInner(
     () => ({
       completeIfAtEnd() {
         const node = viewportRef.current;
-        if (!node || !isAtReadingEnd(node, general.pageReader)) return false;
+        if (!node || !isAtReadingEnd(node, isPagedReader)) return false;
         completedForNavigationRef.current = true;
         latestProgressRef.current = 100;
         setProgress(100);
@@ -358,7 +372,7 @@ function ReaderContentInner(
         node.scrollTo({ top: 0, left: 0, behavior: "smooth" });
       },
     }),
-    [flushProgress, general.pageReader, scrollByPage],
+    [flushProgress, isPagedReader, scrollByPage],
   );
 
   const applyPageInfo = useCallback(
@@ -378,29 +392,29 @@ function ReaderContentInner(
     (value: number) => {
       const node = viewportRef.current;
       if (!node) return;
-      scrollToProgress(node, value, general.pageReader, "auto");
+      scrollToProgress(node, value, isPagedReader, "auto");
       if (!completedForNavigationRef.current) {
         const restoredProgress = clampProgress(
-          getProgress(node, general.pageReader),
+          getProgress(node, isPagedReader),
         );
         latestProgressRef.current = restoredProgress;
         setProgress(restoredProgress);
       }
-      applyPageInfo(getPageInfo(node, general.pageReader));
+      applyPageInfo(getPageInfo(node, isPagedReader));
     },
-    [applyPageInfo, general.pageReader],
+    [applyPageInfo, isPagedReader],
   );
 
   const updateProgressFromScroll = useCallback(() => {
     const node = viewportRef.current;
     if (!node) return;
     if (completedForNavigationRef.current) return;
-    const nextProgress = clampProgress(getProgress(node, general.pageReader));
+    const nextProgress = clampProgress(getProgress(node, isPagedReader));
     latestProgressRef.current = nextProgress;
     setProgress(nextProgress);
-    applyPageInfo(getPageInfo(node, general.pageReader));
+    applyPageInfo(getPageInfo(node, isPagedReader));
     scheduleProgressSave(nextProgress);
-  }, [applyPageInfo, general.pageReader, scheduleProgressSave]);
+  }, [applyPageInfo, isPagedReader, scheduleProgressSave]);
 
   useEffect(() => {
     latestProgressRef.current = clampProgress(initialProgress);
@@ -410,6 +424,15 @@ function ReaderContentInner(
       completedForNavigationRef.current = false;
     }
   }, [initialProgress]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia(TWO_PAGE_MEDIA_QUERY);
+    const syncMedia = () => setTwoPageMediaMatches(media.matches);
+    syncMedia();
+    media.addEventListener("change", syncMedia);
+    return () => media.removeEventListener("change", syncMedia);
+  }, []);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -423,14 +446,24 @@ function ReaderContentInner(
     appearance.lineHeight,
     appearance.padding,
     appearance.textSize,
+    viewportWidth,
+    visiblePageColumns,
     restoreProgressPosition,
   ]);
 
   useEffect(() => {
     const node = viewportRef.current;
     const content = contentRef.current;
-    if (!node || !content || typeof ResizeObserver === "undefined") return;
+    if (!node) return;
+    const syncViewportWidth = () => {
+      setViewportWidth((current) =>
+        current === node.clientWidth ? current : node.clientWidth,
+      );
+    };
+    syncViewportWidth();
+    if (!content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      syncViewportWidth();
       window.requestAnimationFrame(() => {
         restoreProgressPosition(latestProgressRef.current);
       });
@@ -523,7 +556,7 @@ function ReaderContentInner(
     const interval = window.setInterval(() => {
       const node = viewportRef.current;
       if (!node) return;
-      if (general.pageReader) {
+      if (isPagedReader) {
         node.scrollBy({ left: general.autoScrollOffset, behavior: "auto" });
       } else {
         node.scrollBy({ top: general.autoScrollOffset, behavior: "auto" });
@@ -534,7 +567,7 @@ function ReaderContentInner(
     general.autoScroll,
     general.autoScrollInterval,
     general.autoScrollOffset,
-    general.pageReader,
+    isPagedReader,
   ]);
 
   useEffect(
@@ -621,10 +654,29 @@ function ReaderContentInner(
     padding: `${appearance.padding}px`,
   };
 
-  const pageStyle: CSSProperties = general.pageReader
+  const pagedViewportWidth =
+    viewportWidth > 0
+      ? viewportWidth
+      : typeof window !== "undefined"
+        ? window.innerWidth
+        : 0;
+  const pageColumnGap = appearance.padding * 2;
+  const pageContentWidth = Math.max(
+    1,
+    pagedViewportWidth - appearance.padding * 2,
+  );
+  const pageColumnWidth = Math.max(
+    1,
+    Math.floor(
+      visiblePageColumns > 1
+        ? (pageContentWidth - pageColumnGap) / visiblePageColumns
+        : pageContentWidth,
+    ),
+  );
+  const pageStyle: CSSProperties = isPagedReader
     ? {
-        columnWidth: `calc(100vw - ${appearance.padding * 2}px)`,
-        columnGap: `${appearance.padding * 2}px`,
+        columnWidth: `${pageColumnWidth}px`,
+        columnGap: `${pageColumnGap}px`,
         height: "100%",
         maxWidth: "none",
       }
@@ -633,15 +685,14 @@ function ReaderContentInner(
         minHeight: "100%",
         margin: "0 auto",
       };
+  const viewportClassName = `reader-viewport ${
+    isPagedReader ? "reader-viewport-paged" : "reader-viewport-scroll"
+  }${isTwoPageReader ? " reader-viewport-two-page" : ""}`;
 
   return (
     <Box
       ref={viewportRef}
-      className={
-        general.pageReader
-          ? "reader-viewport reader-viewport-paged"
-          : "reader-viewport reader-viewport-scroll"
-      }
+      className={viewportClassName}
       onClick={handleClick}
       onScroll={updateProgressFromScroll}
       onWheel={handleWheel}
@@ -670,8 +721,8 @@ function ReaderContentInner(
       style={{
         position: "relative",
         height: viewportHeight,
-        overflowX: general.pageReader ? "auto" : "hidden",
-        overflowY: general.pageReader ? "hidden" : "auto",
+        overflowX: "hidden",
+        overflowY: isPagedReader ? "hidden" : "auto",
         background: appearance.backgroundColor,
         color: appearance.textColor,
         cursor: "pointer",
@@ -731,7 +782,7 @@ function ReaderContentInner(
         >
           <span>
             {general.showScrollPercentage
-              ? general.pageReader
+              ? isPagedReader
                 ? `${pageInfo.current}/${pageInfo.total}`
                 : `${Math.round(progress)}%`
               : ""}

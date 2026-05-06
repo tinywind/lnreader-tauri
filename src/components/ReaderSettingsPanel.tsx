@@ -64,6 +64,8 @@ const READER_THEME_LABEL_KEYS: Record<string, TranslationKey> = {
   amoled: "readerSettings.theme.amoled",
 };
 
+type ReaderModeOption = "scroll" | "paged" | "two-page";
+
 export function ReaderSettingsPanel() {
   const { t } = useTranslation();
   const general = useReaderStore((state) => state.general);
@@ -83,6 +85,11 @@ export function ReaderSettingsPanel() {
     () => [...READER_PRESET_THEMES, ...appearance.customThemes],
     [appearance.customThemes],
   );
+  const readerMode: ReaderModeOption = general.pageReader
+    ? general.twoPageReader
+      ? "two-page"
+      : "paged"
+    : "scroll";
 
   function handleSaveCustomTheme(): void {
     const id = `custom-${Date.now()}`;
@@ -103,22 +110,30 @@ export function ReaderSettingsPanel() {
         title={t("readerSettings.reading.title")}
         description={t("readerSettings.reading.description")}
       >
-        <SettingsFieldRow label={t("readerSettings.readingMode")}>
+        <SettingsFieldRow
+          label={t("readerSettings.readingMode")}
+          description={t("readerSettings.readingMode.description")}
+        >
           <SegmentedToggle
             data={[
               { value: "scroll", label: t("readerSettings.scroll") },
               { value: "paged", label: t("readerSettings.paged") },
+              { value: "two-page", label: t("readerSettings.twoPage") },
             ]}
-            value={general.pageReader ? "paged" : "scroll"}
-            onChange={(value) => setGeneral({ pageReader: value === "paged" })}
-          />
-        </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.fullscreen")}>
-          <Switch
-            checked={general.fullScreen}
-            onChange={(event) =>
-              setGeneral({ fullScreen: event.currentTarget.checked })
-            }
+            value={readerMode}
+            onChange={(value) => {
+              switch (value) {
+                case "two-page":
+                  setGeneral({ pageReader: true, twoPageReader: true });
+                  break;
+                case "paged":
+                  setGeneral({ pageReader: true, twoPageReader: false });
+                  break;
+                default:
+                  setGeneral({ pageReader: false, twoPageReader: false });
+                  break;
+              }
+            }}
           />
         </SettingsFieldRow>
         <SettingsFieldRow label={t("readerSettings.keepScreenOn")}>

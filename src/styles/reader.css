@@ -1,11 +1,14 @@
 .lnr-reader-shell {
   background: var(--lnr-design-bg);
+  box-sizing: border-box;
   color: var(--lnr-design-ink);
   display: flex;
   flex-direction: column;
   height: var(--lnr-app-content-height);
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
+  width: 100%;
 }
 
 .lnr-reader-topbar {
@@ -132,6 +135,7 @@
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -223,6 +227,49 @@
   height: 100%;
   min-width: 0;
   overflow: hidden;
+}
+
+.reader-viewport {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  overscroll-behavior-x: none;
+  width: 100%;
+}
+
+.reader-content {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.reader-content :where(*) {
+  box-sizing: border-box;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+
+.reader-content :where(img, svg, video, canvas, iframe) {
+  height: auto;
+}
+
+.reader-content :where(code, samp, a) {
+  overflow-wrap: anywhere;
+}
+
+.reader-content pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.reader-content table {
+  table-layout: fixed;
+  width: 100% !important;
+}
+
+.reader-content :where(td, th) {
+  overflow-wrap: anywhere;
 }
 
 .lnr-reader-state-frame {
