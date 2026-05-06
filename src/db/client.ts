@@ -1,6 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 
-const DB_URL = "sqlite:lnreader.db";
+const DB_URL = "sqlite:norea.db";
 
 let dbPromise: Promise<Database> | null = null;
 

@@ -14,7 +14,7 @@ to the user's request.
 
 ## Project Shape
 
-LNReaderTauri is a Tauri 2 light-novel reader for Windows, Linux, and Android.
+Norea is a Tauri 2 light-novel reader for Windows, Linux, and Android.
 It uses a Rust host plus a React/TypeScript UI. The project is inspired by
 upstream `lnreader/lnreader`, but it is not a compatibility port. Upstream is
 reference material for behavior and edge cases only.
@@ -61,7 +61,7 @@ Release notes:
 ## Repo Layout
 
 ```text
-lnreader-tauri/
+norea/
   README.md
   CLAUDE.md
   docs/
@@ -163,4 +163,4 @@ Do without extra ceremony:
 - Trigger issue for the rewrite: <https://github.com/lnreader/lnreader/issues/1835>
 - Plugin catalog: <https://github.com/lnreader/lnreader-plugins>
 - Tauri 2 docs: <https://v2.tauri.app/>
-- This repo: <https://github.com/tinywind/lnreader-tauri>
+- This repo: <https://github.com/tinywind/norea>

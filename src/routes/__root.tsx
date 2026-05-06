@@ -300,7 +300,7 @@ export function RootLayout() {
       <AppShell.Navbar className="lnr-app-rail">
         <Anchor className="lnr-rail-brand" component={Link} to="/" underline="never">
           <span className="lnr-rail-mark">L</span>
-          <span className="lnr-rail-title">LNReader</span>
+          <span className="lnr-rail-title">Norea</span>
         </Anchor>
         <nav className="lnr-rail-nav" aria-label={t("nav.primary")}>
           {navItems.map((item) => (

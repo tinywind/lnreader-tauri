@@ -395,7 +395,7 @@
   "browse.repository.badge": "저장소",
   "browse.repository.singleCacheFirstIndex": "단일 캐시 우선 인덱스",
   "browse.repository.emptyTitle": "설정된 저장소 없음",
-  "browse.repository.emptyMessage": "플러그인 저장소 URL을 설정하세요. 보통 lnreader-plugins 인덱스 JSON입니다. lnreader://repo/add?url=... 딥링크는 URL이 미리 채워진 대화상자를 엽니다.",
+  "browse.repository.emptyMessage": "플러그인 저장소 URL을 설정하세요. 보통 Norea 플러그인 인덱스 JSON입니다. norea://repo/add?url=... 딥링크는 URL이 미리 채워진 대화상자를 엽니다.",
   "browse.noInstalledPlugins.title": "설치된 플러그인 없음",
   "browse.noInstalledPlugins.message": "소스를 탐색하기 전에 여기서 저장소를 설정하고 플러그인을 설치하세요.",
   "browse.availableSourcePlugins.title": "사용 가능한 소스 플러그인",

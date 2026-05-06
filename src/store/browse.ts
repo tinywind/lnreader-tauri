@@ -43,7 +43,7 @@ const EMPTY_GLOBAL_SEARCH: BrowseGlobalSearchState = {
 interface BrowseState {
   /**
    * URL pending insertion via the Add Repository modal, set by
-   * an `lnreader://repo/add?url=...` deep-link or other intent.
+   * a `norea://repo/add?url=...` deep-link or other intent.
    * The Browse route consumes and clears it on render.
    */
   pendingRepoUrl: string | null;

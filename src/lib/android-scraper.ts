@@ -31,7 +31,7 @@ interface NativeEnvelope<T> {
 
 declare global {
   interface Window {
-    __LNReaderAndroidScraper?: AndroidScraperBridge;
+    __NoreaAndroidScraper?: AndroidScraperBridge;
     __lnrAndroidScraperResolve?: (id: string, payload: string) => void;
   }
 }
@@ -78,7 +78,7 @@ function bridge(): AndroidScraperBridge {
   if (!isAndroidRuntime() || typeof window === "undefined") {
     throw new Error("Android scraper bridge is only available on Android");
   }
-  const nativeBridge = window.__LNReaderAndroidScraper;
+  const nativeBridge = window.__NoreaAndroidScraper;
   if (!nativeBridge) {
     throw new Error("Android scraper bridge is not available");
   }

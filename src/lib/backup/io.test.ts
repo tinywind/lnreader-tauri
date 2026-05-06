@@ -49,7 +49,7 @@ beforeEach(() => {
 describe("defaultBackupFilename", () => {
   it("uses the YYYY-MM-DD date as a filename suffix", () => {
     const fixed = new Date("2026-05-05T03:14:15Z");
-    expect(defaultBackupFilename(fixed)).toBe("lnreader-backup-2026-05-05.zip");
+    expect(defaultBackupFilename(fixed)).toBe("norea-backup-2026-05-05.zip");
   });
 });
 

@@ -395,7 +395,7 @@
   "browse.repository.badge": "Repository",
   "browse.repository.singleCacheFirstIndex": "Single cache-first index",
   "browse.repository.emptyTitle": "No repository configured",
-  "browse.repository.emptyMessage": "Set a plugin repository URL, typically the lnreader-plugins index JSON. Deep-link lnreader://repo/add?url=... opens the dialog pre-filled.",
+  "browse.repository.emptyMessage": "Set a plugin repository URL, typically the Norea plugin index JSON. Deep-link norea://repo/add?url=... opens the dialog pre-filled.",
   "browse.noInstalledPlugins.title": "No installed plugins",
   "browse.noInstalledPlugins.message": "Set a repository and install plugins here before browsing sources.",
   "browse.availableSourcePlugins.title": "Available source plugins",

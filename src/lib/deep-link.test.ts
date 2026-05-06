@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseDeepLink } from "./deep-link";
 
 describe("parseDeepLink", () => {
-  it("parses lnreader://repo/add?url=<...> as repo-add", () => {
+  it("parses norea://repo/add?url=<...> as repo-add", () => {
     const result = parseDeepLink(
-      "lnreader://repo/add?url=https%3A%2F%2Fexample.test%2Fp.json",
+      "norea://repo/add?url=https%3A%2F%2Fexample.test%2Fp.json",
     );
     expect(result).toEqual({
       kind: "repo-add",
@@ -14,7 +14,7 @@ describe("parseDeepLink", () => {
 
   it("trims surrounding whitespace in the url query param", () => {
     const result = parseDeepLink(
-      "lnreader://repo/add?url=%20https%3A%2F%2Fexample.test%2Fp.json%20",
+      "norea://repo/add?url=%20https%3A%2F%2Fexample.test%2Fp.json%20",
     );
     expect(result).toEqual({
       kind: "repo-add",
@@ -23,17 +23,17 @@ describe("parseDeepLink", () => {
   });
 
   it("returns unknown when the url query param is missing", () => {
-    const raw = "lnreader://repo/add";
+    const raw = "norea://repo/add";
     expect(parseDeepLink(raw)).toEqual({ kind: "unknown", raw });
   });
 
   it("returns unknown when the url query param is empty", () => {
-    const raw = "lnreader://repo/add?url=";
+    const raw = "norea://repo/add?url=";
     expect(parseDeepLink(raw)).toEqual({ kind: "unknown", raw });
   });
 
   it("returns unknown for non-matching paths under repo", () => {
-    const raw = "lnreader://repo/wrong?url=https://example.test/p.json";
+    const raw = "norea://repo/wrong?url=https://example.test/p.json";
     expect(parseDeepLink(raw)).toEqual({ kind: "unknown", raw });
   });
 

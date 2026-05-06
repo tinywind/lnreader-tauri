@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "LNReaderTauri",
+  "productName": "Norea",
   "version": "0.1.0",
-  "identifier": "io.github.tinywind.lnreader-tauri",
+  "identifier": "io.github.tinywind.norea",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LNReaderTauri",
+        "title": "Norea",
         "width": 1100,
         "height": 720,
         "minWidth": 480,
@@ -48,7 +48,7 @@
         }
       ],
       "desktop": {
-        "schemes": ["lnreader"]
+        "schemes": ["norea"]
       }
     }
   }

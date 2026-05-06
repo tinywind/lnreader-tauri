@@ -30,7 +30,7 @@ describe("isUrlAbsolute", () => {
 
   it("returns true for any custom scheme", () => {
     expect(isUrlAbsolute("data:text/plain,hi")).toBe(true);
-    expect(isUrlAbsolute("lnreader://repo/add")).toBe(true);
+    expect(isUrlAbsolute("norea://repo/add")).toBe(true);
   });
 
   it("returns false for relative paths", () => {

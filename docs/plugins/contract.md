@@ -1,6 +1,6 @@
 # Plugin Scraper Contract
 
-This is the living compatibility reference for LNReaderTauri source plugins.
+This is the living compatibility reference for Norea source plugins.
 It is based on the upstream lnreader plugin shape at commit `639a2538`, but the
 local implementation is the source of truth for host behavior:
 
@@ -130,7 +130,7 @@ renders the schema, stores values under the installed plugin id, and exposes
 the saved values through `@libs/pluginInputs`.
 
 `pluginSettings` remains supported as a compatibility alias for upstream plugin
-setting declarations. New LNReaderTauri-specific plugins should prefer
+setting declarations. New Norea-specific plugins should prefer
 `pluginInputs`.
 
 ```ts

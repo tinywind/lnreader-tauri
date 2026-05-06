@@ -88,7 +88,7 @@ export const useLibraryStore = create<LibraryState>()(
         set({ defaultChapterSort }),
     }),
     {
-      name: "lnreader-library-settings",
+      name: "norea-library-settings",
       partialize: (state) => ({
         displayMode: state.displayMode,
         novelsPerRow: state.novelsPerRow,

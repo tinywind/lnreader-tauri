@@ -1,4 +1,4 @@
-package io.github.tinywind.lnreader_tauri
+package io.github.tinywind.norea
 
 import android.annotation.SuppressLint
 import android.app.Activity

@@ -127,8 +127,8 @@ interface RuntimeWindowMetrics {
 
 declare global {
   interface Window {
-    __LNReaderAndroidSafeArea?: AndroidSafeAreaBridge;
-    __LNReaderAndroidWindow?: AndroidWindowBridge;
+    __NoreaAndroidSafeArea?: AndroidSafeAreaBridge;
+    __NoreaAndroidWindow?: AndroidWindowBridge;
     __lnrApplyAndroidSafeAreaInsets?: (insets: RuntimeSafeAreaInsets) => void;
   }
 }
@@ -162,7 +162,7 @@ function classifyAndroidLayout(width: number): AndroidLayoutClass {
 }
 
 function readAndroidWindowMetrics(): RuntimeWindowMetrics | null {
-  const raw = window.__LNReaderAndroidWindow?.getMetrics();
+  const raw = window.__NoreaAndroidWindow?.getMetrics();
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -273,7 +273,7 @@ function applyNativeSafeAreaInsets(insets: RuntimeSafeAreaInsets): void {
 }
 
 function readAndroidSafeAreaInsets(): RuntimeSafeAreaInsets | null {
-  const raw = window.__LNReaderAndroidSafeArea?.getInsets();
+  const raw = window.__NoreaAndroidSafeArea?.getInsets();
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -382,9 +382,9 @@ function AppProviders() {
       createTheme({
         fontFamily:
           "Inter, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-        primaryColor: "lnreader",
+        primaryColor: "norea",
         colors: {
-          lnreader: makeMantineColorScale(palette),
+          norea: makeMantineColorScale(palette),
         },
         defaultRadius: "sm",
         components: {

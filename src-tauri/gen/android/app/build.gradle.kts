@@ -23,10 +23,10 @@ val releaseKeyPassword = envOrNull("ANDROID_RELEASE_KEY_PASSWORD") ?: "android"
 
 android {
     compileSdk = 36
-    namespace = "io.github.tinywind.lnreader_tauri"
+    namespace = "io.github.tinywind.norea"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "io.github.tinywind.lnreader_tauri"
+        applicationId = "io.github.tinywind.norea"
         minSdk = 24
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

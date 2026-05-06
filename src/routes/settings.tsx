@@ -71,8 +71,7 @@ interface SettingsCategory {
   title: string;
 }
 
-const LATEST_RELEASE_URL =
-  "https://github.com/tinywind/lnreader-tauri/releases/latest";
+const LATEST_RELEASE_URL = "https://github.com/tinywind/norea/releases/latest";
 const PLUGIN_STORAGE_PREFIX = "plugin:";
 
 function describeError(error: unknown): string {

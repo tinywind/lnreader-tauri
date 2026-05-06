@@ -11,7 +11,7 @@ export function parseDeepLink(raw: string): DeepLink {
   } catch {
     return { kind: "unknown", raw };
   }
-  if (url.protocol !== "lnreader:") {
+  if (url.protocol !== "norea:") {
     return { kind: "unknown", raw };
   }
   if (url.host === "repo" && url.pathname === "/add") {
@@ -29,7 +29,7 @@ export interface DeepLinkHandlers {
 }
 
 /**
- * Subscribe to OS-level deep-link openings (URI scheme `lnreader://`).
+ * Subscribe to OS-level deep-link openings (URI scheme `norea://`).
  *
  * Returns an unlisten function suitable for cleanup in a React effect.
  * Errors during plugin invocation propagate so the caller decides

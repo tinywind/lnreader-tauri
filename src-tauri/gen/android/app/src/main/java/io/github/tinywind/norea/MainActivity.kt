@@ -1,4 +1,4 @@
-package io.github.tinywind.lnreader_tauri
+package io.github.tinywind.norea
 
 import android.os.Bundle
 import android.webkit.JavascriptInterface
@@ -23,9 +23,9 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     val bridge = AndroidScraperBridge(webView)
     androidScraperBridge = bridge
-    webView.addJavascriptInterface(bridge, "__LNReaderAndroidScraper")
-    webView.addJavascriptInterface(SafeAreaBridge(), "__LNReaderAndroidSafeArea")
-    webView.addJavascriptInterface(WindowMetricsBridge(webView), "__LNReaderAndroidWindow")
+    webView.addJavascriptInterface(bridge, "__NoreaAndroidScraper")
+    webView.addJavascriptInterface(SafeAreaBridge(), "__NoreaAndroidSafeArea")
+    webView.addJavascriptInterface(WindowMetricsBridge(webView), "__NoreaAndroidWindow")
     webView.settings.apply {
       setSupportZoom(false)
       builtInZoomControls = false

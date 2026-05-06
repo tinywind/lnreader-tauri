@@ -3,7 +3,7 @@ import { packBackup } from "./pack";
 import { applyBackupSnapshot, gatherBackupSnapshot } from "./snapshot";
 import { unpackBackup } from "./unpack";
 
-const ZIP_FILTER_NAME = "LNReaderTauri Backup";
+const ZIP_FILTER_NAME = "Norea Backup";
 
 function zipFilter(): { name: string; extensions: string[] } {
   return { name: ZIP_FILTER_NAME, extensions: ["zip"] };
@@ -14,9 +14,9 @@ function isoDate(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** `lnreader-backup-YYYY-MM-DD.zip` — what the save dialog pre-fills. */
+/** `norea-backup-YYYY-MM-DD.zip` — what the save dialog pre-fills. */
 export function defaultBackupFilename(now: Date = new Date()): string {
-  return `lnreader-backup-${isoDate(now)}.zip`;
+  return `norea-backup-${isoDate(now)}.zip`;
 }
 
 /**

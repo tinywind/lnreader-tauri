@@ -113,7 +113,7 @@ jobs:
 
           foreach ($type in @("msi", "nsis")) {
             $bundleFile = $byType[$type]
-            $destination = Join-Path $artifactDir "lnreader-tauri-$platform-$type-$($bundleFile.Name)"
+            $destination = Join-Path $artifactDir "norea-$platform-$type-$($bundleFile.Name)"
             Copy-Item -LiteralPath $bundleFile.FullName -Destination $destination
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
             Add-Content -Path $checksumFile -Value "$hash  $(Split-Path -Leaf $destination)"
@@ -122,8 +122,8 @@ jobs:
       - name: Upload Windows MSI
         uses: actions/upload-artifact@v7
         with:
-          name: lnreader-tauri-${{ matrix.platform }}-msi
-          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/lnreader-tauri-${{ matrix.platform }}-msi-*.msi
+          name: norea-${{ matrix.platform }}-msi
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-msi-*.msi
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -132,8 +132,8 @@ jobs:
       - name: Upload Windows NSIS installer
         uses: actions/upload-artifact@v7
         with:
-          name: lnreader-tauri-${{ matrix.platform }}-nsis
-          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/lnreader-tauri-${{ matrix.platform }}-nsis-*.exe
+          name: norea-${{ matrix.platform }}-nsis
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-nsis-*.exe
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -142,7 +142,7 @@ jobs:
       - name: Upload Windows bundle checksums
         uses: actions/upload-artifact@v7
         with:
-          name: lnreader-tauri-${{ matrix.platform }}-checksums
+          name: norea-${{ matrix.platform }}-checksums
           path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/SHA256SUMS-${{ matrix.platform }}.txt
           if-no-files-found: error
           archive: false
