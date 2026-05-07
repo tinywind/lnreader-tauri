@@ -19,6 +19,10 @@ interface SourceTaskOptions<T> {
   run: (context: TaskRunContext) => Promise<T>;
 }
 
+function debugOpenSiteTask(message: string, data?: unknown): void {
+  console.info(`[site-browser:task] ${message}`, data);
+}
+
 export function enqueueSourceTask<T>({
   dedupeKey,
   exclusive,
@@ -54,13 +58,24 @@ export function enqueueOpenSiteTask(
     title,
     subject: { url },
     dedupeKey: `source.openSite:${plugin.id}:${url}`,
-    run: async ({ signal }) =>
+    run: async ({ signal, taskId }) =>
       new Promise<void>((resolve, reject) => {
+        debugOpenSiteTask("started", {
+          sourceId: plugin.id,
+          sourceName: plugin.name,
+          taskId,
+          url,
+        });
         const handleAbort = () => {
           const siteBrowser = useSiteBrowserStore.getState();
           if (siteBrowser.visible && siteBrowser.currentUrl === url) {
             siteBrowser.hide();
           }
+          debugOpenSiteTask("cancelled", {
+            sourceId: plugin.id,
+            taskId,
+            url,
+          });
           cleanup();
           reject(new DOMException("Task was cancelled.", "AbortError"));
         };
@@ -70,12 +85,24 @@ export function enqueueOpenSiteTask(
         };
         const unsubscribe = useSiteBrowserStore.subscribe((state) => {
           if (!state.visible || state.currentUrl !== url) {
+            debugOpenSiteTask("closed", {
+              sourceId: plugin.id,
+              taskId,
+              url,
+              visible: state.visible,
+              currentUrl: state.currentUrl,
+            });
             cleanup();
             resolve();
           }
         });
 
         signal.addEventListener("abort", handleAbort, { once: true });
+        debugOpenSiteTask("openAt", {
+          sourceId: plugin.id,
+          taskId,
+          url,
+        });
         useSiteBrowserStore.getState().openAt(url);
         if (signal.aborted) handleAbort();
       }),

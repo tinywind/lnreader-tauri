@@ -293,7 +293,7 @@ describe("TaskScheduler", () => {
   });
 
   it("keeps only the latest open site task queued", async () => {
-    const scheduler = new TaskScheduler();
+    const scheduler = new TaskScheduler({ sourceQueuesPaused: true });
 
     const first = scheduler.enqueueSource({
       kind: "source.openSite",
@@ -371,7 +371,7 @@ describe("TaskScheduler", () => {
     await second.promise;
   });
 
-  it("starts with source queues paused until all source queues are resumed", async () => {
+  it("starts with source queues running by default", async () => {
     const scheduler = new TaskScheduler();
     const order: string[] = [];
 
@@ -393,13 +393,6 @@ describe("TaskScheduler", () => {
     });
 
     await main.promise;
-    await settle();
-
-    expect(order).toEqual(["main:start"]);
-    expect(scheduler.getTask(source.id)?.status).toBe("queued");
-    expect(scheduler.getSnapshot().sourceQueuesPaused).toBe(true);
-
-    expect(scheduler.resumeSourceQueue()).toBe(true);
     await source.promise;
 
     expect(order).toEqual(["main:start", "source:start"]);

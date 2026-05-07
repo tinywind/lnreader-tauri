@@ -193,7 +193,7 @@ export class TaskScheduler {
   private snapshot: TaskSnapshot = {
     pausedSourceIds: [],
     records: [],
-    sourceQueuesPaused: true,
+    sourceQueuesPaused: false,
     running: 0,
     queued: 0,
     failed: 0,
@@ -207,7 +207,7 @@ export class TaskScheduler {
     sourceQueuesPaused?: boolean;
     terminalTaskRetentionMs?: number;
   } = {}) {
-    this.sourceQueuesPaused = options.sourceQueuesPaused ?? true;
+    this.sourceQueuesPaused = options.sourceQueuesPaused ?? false;
     this.terminalTaskRetentionMs = Math.max(
       0,
       options.terminalTaskRetentionMs ?? TERMINAL_TASK_RETENTION_MS,
@@ -223,6 +223,33 @@ export class TaskScheduler {
         DEFAULT_SOURCE_BACKGROUND_CONCURRENCY,
     );
     this.snapshot = this.buildSnapshot();
+  }
+
+  private debug(
+    message: string,
+    entry?: TaskEntry,
+    extra?: Record<string, unknown>,
+  ): void {
+    console.info(`[task-scheduler] ${message}`, {
+      activeBackgroundCount: this.activeBackgroundCount,
+      activeForegroundCount: this.activeForegroundCount,
+      activeMainTaskId: this.activeMainTaskId,
+      exclusive: entry?.exclusive,
+      kind: entry?.record.kind,
+      lane: entry?.record.lane,
+      mainQueueLength: this.mainQueue.length,
+      pausedSourceIds: [...this.pausedSourceIds].sort(),
+      priority: entry?.record.priority,
+      sourceId: entry?.record.source?.id,
+      sourceName: entry?.record.source?.name,
+      sourceQueueLength: entry?.record.source
+        ? this.sourceQueues.get(entry.record.source.id)?.length ?? 0
+        : undefined,
+      sourceQueuesPaused: this.sourceQueuesPaused,
+      status: entry?.record.status,
+      taskId: entry?.record.id,
+      ...extra,
+    });
   }
 
   enqueueMain<T>(spec: MainTaskSpec<T>): TaskHandle<T> {
@@ -299,6 +326,7 @@ export class TaskScheduler {
       this.cancelOtherOpenSiteTasks(id);
     }
 
+    this.debug("queued", entry, { dedupeKey: entry.dedupeKey });
     this.publish(entry, null);
     this.drain();
     return { id, promise: promise as Promise<T> };
@@ -307,6 +335,7 @@ export class TaskScheduler {
   cancel(id: string): boolean {
     const entry = this.entries.get(id);
     if (!entry) return false;
+    this.debug("cancel requested", entry);
 
     if (entry.record.status === "running") {
       entry.controller.abort();
@@ -354,12 +383,14 @@ export class TaskScheduler {
     if (!sourceId) {
       if (this.sourceQueuesPaused) return false;
       this.sourceQueuesPaused = true;
+      this.debug("all source queues paused");
       this.publishSnapshot();
       return true;
     }
 
     if (this.pausedSourceIds.has(sourceId)) return false;
     this.pausedSourceIds.add(sourceId);
+    this.debug("source queue paused", undefined, { sourceId });
     this.publishSnapshot();
     return true;
   }
@@ -371,12 +402,14 @@ export class TaskScheduler {
       }
       this.sourceQueuesPaused = false;
       this.pausedSourceIds.clear();
+      this.debug("all source queues resumed");
       this.publishSnapshot();
       this.drain();
       return true;
     }
 
     if (!this.pausedSourceIds.delete(sourceId)) return false;
+    this.debug("source queue resumed", undefined, { sourceId });
     this.publishSnapshot();
     this.drain();
     return true;
@@ -511,6 +544,7 @@ export class TaskScheduler {
       canRetry: false,
       startedAt: Date.now(),
     });
+    this.debug("started", entry);
 
     const context: TaskRunContext = {
       signal: entry.controller.signal,
@@ -560,6 +594,7 @@ export class TaskScheduler {
   ): boolean {
     if (entry.record.status !== "running") return false;
     this.setStatus(entry, status, patch);
+    this.debug("finished", entry);
     this.releaseActive(entry);
     this.trimHistory();
     this.drain();
@@ -679,6 +714,7 @@ export class TaskScheduler {
       canRetry: true,
       finishedAt: Date.now(),
     });
+    this.debug("queued task cancelled", entry);
     if (
       entry.dedupeKey &&
       this.activeDedupeByKey.get(entry.dedupeKey) === entry.record.id
