@@ -52,6 +52,7 @@ import {
 import { isTauriRuntime } from "../lib/tauri-runtime";
 import { PluginSearchSection } from "./global-search";
 import { isValidPluginItem, pluginManager } from "../lib/plugins/manager";
+import { clearSourceFilterStorage } from "../lib/plugins/source-filter-storage";
 import type { Plugin, PluginItem } from "../lib/plugins/types";
 import { useBrowseStore } from "../store/browse";
 
@@ -351,6 +352,8 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     },
     onSuccess: () => {
       debugRepositoryFlow("add mutation success: invalidate queries");
+      clearSourceFilterStorage();
+      setPluginLanguageFilter([]);
       queryClient.setQueryData<AvailableResult>(AVAILABLE_QUERY_KEY, {
         entries: [],
         failures: [],
@@ -381,6 +384,8 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     },
     onSuccess: () => {
       debugRepositoryFlow("remove mutation success: invalidate queries");
+      clearSourceFilterStorage();
+      setPluginLanguageFilter([]);
       queryClient.setQueryData<AvailableResult>(AVAILABLE_QUERY_KEY, {
         entries: [],
         failures: [],
@@ -466,7 +471,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
           <Tabs.Tab
             value="search"
             rightSection={
-              <Badge size="xs">{filteredInstalledPlugins.length}</Badge>
+              <Badge size="xs">{installedPlugins.length}</Badge>
             }
           >
             {t("browse.tab.search")}
@@ -485,7 +490,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
           <div className="lnr-browse-tab-stack">
             <ConsolePanel className="lnr-browse-search-panel">
               <PluginSearchSection
-                installedPlugins={filteredInstalledPlugins}
+                installedPlugins={installedPlugins}
                 query={q}
                 onSearch={(nextQuery) => {
                   void navigate({

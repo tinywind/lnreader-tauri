@@ -26,13 +26,20 @@ interface PluginFiltersProps {
   onChange: (next: ResolvedFilterValues) => void;
 }
 
-/** Build the initial values map directly from a filter schema. */
-export function defaultFilterValues(schema: Filters): ResolvedFilterValues {
-  const out: ResolvedFilterValues = {};
-  for (const [key, def] of Object.entries(schema)) {
-    out[key] = { type: def.type, value: def.value };
+function emptyFilterValue(def: Filters[string]): unknown {
+  switch (def.type) {
+    case FilterTypes.TextInput:
+    case FilterTypes.Picker:
+      return "";
+    case FilterTypes.Switch:
+      return false;
+    case FilterTypes.CheckboxGroup:
+      return [];
+    case FilterTypes.ExcludableCheckboxGroup:
+      return { include: [], exclude: [] };
+    default:
+      return "";
   }
-  return out;
 }
 
 function setEntry(
@@ -61,7 +68,7 @@ export function PluginFilters({
         const current = values[key];
         switch (def.type) {
           case FilterTypes.TextInput: {
-            const v = (current?.value ?? def.value) as string;
+            const v = (current?.value ?? emptyFilterValue(def)) as string;
             return (
               <TextInput
                 key={key}
@@ -76,7 +83,7 @@ export function PluginFilters({
             );
           }
           case FilterTypes.Switch: {
-            const v = (current?.value ?? def.value) as boolean;
+            const v = (current?.value ?? emptyFilterValue(def)) as boolean;
             return (
               <Switch
                 key={key}
@@ -96,12 +103,12 @@ export function PluginFilters({
             );
           }
           case FilterTypes.Picker: {
-            const v = (current?.value ?? def.value) as string;
+            const v = (current?.value ?? emptyFilterValue(def)) as string;
             return (
               <Select
                 key={key}
                 label={def.label}
-                value={v}
+                value={v || null}
                 data={def.options.map((o) => ({
                   value: o.value,
                   label: o.label,
@@ -109,12 +116,12 @@ export function PluginFilters({
                 onChange={(next) =>
                   onChange(setEntry(values, key, def.type, next ?? ""))
                 }
-                allowDeselect={false}
+                clearable
               />
             );
           }
           case FilterTypes.CheckboxGroup: {
-            const v = (current?.value ?? def.value) as string[];
+            const v = (current?.value ?? emptyFilterValue(def)) as string[];
             return (
               <Stack gap={4} key={key}>
                 <Text size="sm" fw={500}>
@@ -144,7 +151,10 @@ export function PluginFilters({
               (current?.value as
                 | { include?: string[]; exclude?: string[] }
                 | undefined) ??
-              (def.value as { include?: string[]; exclude?: string[] });
+              (emptyFilterValue(def) as {
+                include?: string[];
+                exclude?: string[];
+              });
             const include = v.include ?? [];
             const exclude = v.exclude ?? [];
 

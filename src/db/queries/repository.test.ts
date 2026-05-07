@@ -70,15 +70,13 @@ describe("addRepository", () => {
     expect(params).toEqual(["https://example.test/p.json", null]);
   });
 
-  it("drops cached indexes for the previous repository URL", async () => {
+  it("drops cached indexes when the repository is saved", async () => {
     mockExecute.mockResolvedValue(undefined);
 
     await addRepository({ url: "https://example.test/p.json" });
 
-    const [sql, params] = mockExecute.mock.calls[1]!;
+    const [sql] = mockExecute.mock.calls[1]!;
     expect(sql).toContain("DELETE FROM repository_index_cache");
-    expect(sql).toContain("repo_url <> $1");
-    expect(params).toEqual(["https://example.test/p.json"]);
   });
 });
 

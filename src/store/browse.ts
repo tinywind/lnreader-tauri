@@ -5,11 +5,6 @@ import type { GlobalSearchResult } from "../lib/plugins/global-search";
 export const DEFAULT_GLOBAL_SEARCH_CONCURRENCY = 3;
 export const DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS = 30;
 
-function getDefaultPluginLanguage(): string {
-  if (typeof navigator === "undefined") return "en";
-  return navigator.language.split("-")[0]?.toLowerCase() || "en";
-}
-
 function normalizeStringArray(
   value: unknown,
   fallback: string[],
@@ -85,7 +80,7 @@ export const useBrowseStore = create<BrowseState>()(
   persist(
     (set) => ({
       pendingRepoUrl: null,
-      pluginLanguageFilter: [getDefaultPluginLanguage()],
+      pluginLanguageFilter: [],
       globalSearchConcurrency: DEFAULT_GLOBAL_SEARCH_CONCURRENCY,
       globalSearchTimeoutSeconds: DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS,
       pinnedPluginIds: [],

@@ -29,7 +29,6 @@ import {
 } from "../components/ConsolePrimitives";
 import {
   PluginFilters,
-  defaultFilterValues,
   type ResolvedFilterValues,
 } from "../components/PluginFilters";
 import { IconButton } from "../components/IconButton";
@@ -38,6 +37,11 @@ import { SearchBar } from "../components/SearchBar";
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { FilterTypes, type Filters } from "../lib/plugins/filterTypes";
 import { pluginManager } from "../lib/plugins/manager";
+import {
+  emptySourceFilterValues,
+  readSourceFilters,
+  writeSourceFilters,
+} from "../lib/plugins/source-filter-storage";
 import type { NovelItem, Plugin } from "../lib/plugins/types";
 import { useTranslation } from "../i18n";
 import { sourceRoute } from "../router";
@@ -114,7 +118,7 @@ function getActiveFilterLabels(
   filters: ResolvedFilterValues,
 ): Array<{ key: string; label: string }> {
   return Object.entries(schema).flatMap(([key, filter]) => {
-    const label = formatActiveFilter(filter, filters[key]?.value ?? filter.value);
+    const label = formatActiveFilter(filter, filters[key]?.value);
     return label ? [{ key, label }] : [];
   });
 }
@@ -188,13 +192,18 @@ export function SourcePage() {
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const initialFilters = useMemo<ResolvedFilterValues>(
-    () => (plugin?.filters ? defaultFilterValues(plugin.filters) : {}),
+    () => (plugin?.filters ? readSourceFilters(plugin, plugin.filters) : {}),
     [plugin],
   );
   const [pendingFilters, setPendingFilters] =
     useState<ResolvedFilterValues>(initialFilters);
   const [activeFilters, setActiveFilters] =
     useState<ResolvedFilterValues>(initialFilters);
+
+  useEffect(() => {
+    setPendingFilters(initialFilters);
+    setActiveFilters(initialFilters);
+  }, [initialFilters]);
 
   useEffect(() => {
     setSearch(query);
@@ -268,8 +277,9 @@ export function SourcePage() {
     );
   }
 
-  const filterCount = plugin.filters
-    ? Object.keys(plugin.filters).length
+  const sourceFilters = plugin.filters;
+  const filterCount = sourceFilters
+    ? Object.keys(sourceFilters).length
     : 0;
   const hasPluginSettings = hasPluginInputs(plugin);
   const activeFilterCount = countActiveFilters(activeFilters);
@@ -284,8 +294,8 @@ export function SourcePage() {
       : "done";
   const modeLabel = mode === "popular" ? t("source.popular") : t("source.latest");
   const backToGlobalSearch = from === "browse-search";
-  const activeFilterLabels = plugin.filters
-    ? getActiveFilterLabels(plugin.filters, activeFilters)
+  const activeFilterLabels = sourceFilters
+    ? getActiveFilterLabels(sourceFilters, activeFilters)
     : [];
 
   return (
@@ -534,7 +544,7 @@ export function SourcePage() {
         <span>{t("source.status.activeFilters", { count: activeFilterCount })}</span>
       </ConsoleStatusStrip>
 
-      {plugin.filters && (
+      {sourceFilters && (
         <Drawer
           opened={filterDrawerOpen}
           onClose={() => setFilterDrawerOpen(false)}
@@ -544,7 +554,7 @@ export function SourcePage() {
         >
           <Stack gap="md">
             <PluginFilters
-              schema={plugin.filters}
+              schema={sourceFilters}
               values={pendingFilters}
               onChange={setPendingFilters}
             />
@@ -552,7 +562,7 @@ export function SourcePage() {
               <TextButton
                 variant="subtle"
                 onClick={() => {
-                  setPendingFilters(initialFilters);
+                  setPendingFilters(emptySourceFilterValues(sourceFilters));
                 }}
               >
                 {t("common.reset")}
@@ -567,6 +577,7 @@ export function SourcePage() {
                 <TextButton
                   onClick={() => {
                     setActiveFilters(pendingFilters);
+                    writeSourceFilters(plugin, pendingFilters);
                     setFilterDrawerOpen(false);
                   }}
                 >

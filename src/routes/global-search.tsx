@@ -683,7 +683,6 @@ export function PluginSearchSection({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
-  const pluginLanguageFilter = useBrowseStore((s) => s.pluginLanguageFilter);
   const globalSearchConcurrency = useBrowseStore(
     (s) => s.globalSearchConcurrency,
   );
@@ -717,28 +716,19 @@ export function PluginSearchSection({
     () => sortPluginsByName(installedPluginSnapshot ?? pluginManager.list()),
     [installedPluginSnapshot],
   );
-  const searchablePlugins = useMemo(
-    () =>
-      installedPlugins.filter(
-        (plugin) =>
-          pluginLanguageFilter.length === 0 ||
-          pluginLanguageFilter.includes(plugin.lang),
-      ),
-    [installedPlugins, pluginLanguageFilter],
-  );
   const scopedPlugins = useMemo(() => {
     if (scopeMode === "pinned") {
-      return searchablePlugins.filter((plugin) =>
+      return installedPlugins.filter((plugin) =>
         pinnedPluginIds.includes(plugin.id),
       );
     }
     if (scopeMode === "selected") {
-      return searchablePlugins.filter((plugin) =>
+      return installedPlugins.filter((plugin) =>
         selectedPluginIds.includes(plugin.id),
       );
     }
-    return searchablePlugins;
-  }, [pinnedPluginIds, scopeMode, searchablePlugins, selectedPluginIds]);
+    return installedPlugins;
+  }, [installedPlugins, pinnedPluginIds, scopeMode, selectedPluginIds]);
   const lastUsedPlugin =
     installedPlugins.find((plugin) => plugin.id === lastUsedPluginId) ?? null;
   const searchKey = trimmedQuery;
@@ -808,7 +798,7 @@ export function PluginSearchSection({
       return rowResultCount(b) - rowResultCount(a);
     });
   }, [hideEmpty, pinnedPluginIds, rows, showFailures, sortMode]);
-  const installedCount = searchablePlugins.length;
+  const installedCount = installedPlugins.length;
   const hasSearchTerm = trimmedQuery !== "";
   const scopedPluginIdSet = useMemo(
     () => new Set(scopedPlugins.map((plugin) => plugin.id)),
@@ -858,11 +848,11 @@ export function PluginSearchSection({
   }, [query]);
 
   useEffect(() => {
-    const pluginIds = new Set(searchablePlugins.map((plugin) => plugin.id));
+    const pluginIds = new Set(installedPlugins.map((plugin) => plugin.id));
     setSelectedPluginIds((current) =>
       current.filter((pluginId) => pluginIds.has(pluginId)),
     );
-  }, [searchablePlugins]);
+  }, [installedPlugins]);
 
   useEffect(() => {
     setOpenError(null);
@@ -1048,7 +1038,7 @@ export function PluginSearchSection({
   return (
     <div className="lnr-search-console">
       <ScopePanel
-        installedPlugins={searchablePlugins}
+        installedPlugins={installedPlugins}
         lastUsedPlugin={lastUsedPlugin}
         pinnedPluginIds={pinnedPluginIds}
         scopeMode={scopeMode}

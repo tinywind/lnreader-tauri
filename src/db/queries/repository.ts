@@ -46,10 +46,7 @@ export async function addRepository(input: AddRepositoryInput): Promise<void> {
   );
   debugRepositoryQuery("upsert repository complete", { url: input.url });
   debugRepositoryQuery("delete stale cache start", { url: input.url });
-  await db.execute(
-    `DELETE FROM repository_index_cache WHERE repo_url <> $1`,
-    [input.url],
-  );
+  await db.execute(`DELETE FROM repository_index_cache`);
   debugRepositoryQuery("delete stale cache complete", { url: input.url });
 }
 
