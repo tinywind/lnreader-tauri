@@ -117,6 +117,8 @@
   "settings.app.customAccent.placeholder": "테마 강조색 사용",
   "settings.app.amoled.label": "AMOLED 검정",
   "settings.app.amoled.description": "어두운 모드에서 순수 검정 배경을 사용합니다.",
+  "settings.app.uiScale.label": "UI 크기",
+  "settings.app.uiScale.description": "Android 레이아웃 크기를 75%에서 150%까지 조정합니다.",
   "settings.app.localization.title": "지역화",
   "settings.app.localization.summary": "인터페이스 언어를 선택합니다.",
   "settings.app.locale.label": "언어",

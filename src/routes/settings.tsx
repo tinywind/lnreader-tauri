@@ -4,6 +4,7 @@ import {
   Box,
   ColorInput,
   Group,
+  NumberInput,
   ScrollArea,
   Select,
   Stack,
@@ -37,12 +38,15 @@ import {
   exportBackupToFile,
   importBackupFromFile,
 } from "../lib/backup/io";
+import { isAndroidRuntime } from "../lib/tauri-runtime";
 import { enqueueMainTask } from "../lib/tasks/main-tasks";
 import type { MainTaskKind } from "../lib/tasks/scheduler";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
 import {
   DEFAULT_APPEARANCE,
+  MAX_UI_SCALE_PERCENT,
+  MIN_UI_SCALE_PERCENT,
   normalizeAppThemeId,
   normalizeAppThemeMode,
   useAppearanceStore,
@@ -169,6 +173,7 @@ function AppSettingsSection() {
   const appearance = useAppearanceStore();
   const notifications = useNotificationStore();
   const { t } = useTranslation();
+  const showAndroidUiScale = isAndroidRuntime();
 
   return (
     <Stack gap="md">
@@ -225,6 +230,20 @@ function AppSettingsSection() {
             }
           />
         </SettingsFieldRow>
+        {showAndroidUiScale ? (
+          <SettingsFieldRow
+            label={t("settings.app.uiScale.label")}
+            description={t("settings.app.uiScale.description")}
+          >
+            <NumberInput
+              value={appearance.uiScalePercent}
+              min={MIN_UI_SCALE_PERCENT}
+              max={MAX_UI_SCALE_PERCENT}
+              step={5}
+              onChange={appearance.setUiScalePercent}
+            />
+          </SettingsFieldRow>
+        ) : null}
       </SettingsSection>
 
       <SettingsSection

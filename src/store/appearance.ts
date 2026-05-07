@@ -5,11 +5,15 @@ import { APP_THEMES, type AppThemeId } from "../theme/md3";
 
 export type AppThemeMode = "system" | "light" | "dark";
 
+export const MIN_UI_SCALE_PERCENT = 75;
+export const MAX_UI_SCALE_PERCENT = 150;
+
 interface AppearanceState {
   themeMode: AppThemeMode;
   appThemeId: AppThemeId;
   amoledBlack: boolean;
   customAccentColor: string;
+  uiScalePercent: number;
   appLocale: AppLocale;
   showHistoryTab: boolean;
   showUpdatesTab: boolean;
@@ -20,6 +24,7 @@ interface AppearanceState {
   setAppThemeId: (appThemeId: unknown) => void;
   setAmoledBlack: (amoledBlack: boolean) => void;
   setCustomAccentColor: (customAccentColor: string) => void;
+  setUiScalePercent: (uiScalePercent: unknown) => void;
   setAppLocale: (appLocale: string) => void;
   setShowHistoryTab: (showHistoryTab: boolean) => void;
   setShowUpdatesTab: (showUpdatesTab: boolean) => void;
@@ -34,6 +39,7 @@ export const DEFAULT_APPEARANCE = {
   appThemeId: "default" as AppThemeId,
   amoledBlack: false,
   customAccentColor: "",
+  uiScalePercent: 100,
   appLocale: "en" as AppLocale,
   showHistoryTab: true,
   showUpdatesTab: true,
@@ -61,6 +67,14 @@ export function normalizeAppThemeId(appThemeId: unknown): AppThemeId {
     : DEFAULT_APPEARANCE.appThemeId;
 }
 
+export function normalizeUiScalePercent(uiScalePercent: unknown): number {
+  const numeric = Number(uiScalePercent);
+  if (!Number.isFinite(numeric)) return DEFAULT_APPEARANCE.uiScalePercent;
+  return Math.round(
+    Math.min(MAX_UI_SCALE_PERCENT, Math.max(MIN_UI_SCALE_PERCENT, numeric)),
+  );
+}
+
 export const useAppearanceStore = create<AppearanceState>()(
   persist(
     (set) => ({
@@ -72,6 +86,8 @@ export const useAppearanceStore = create<AppearanceState>()(
       setAmoledBlack: (amoledBlack) => set({ amoledBlack }),
       setCustomAccentColor: (customAccentColor) =>
         set({ customAccentColor: customAccentColor.trim() }),
+      setUiScalePercent: (uiScalePercent) =>
+        set({ uiScalePercent: normalizeUiScalePercent(uiScalePercent) }),
       setAppLocale: (appLocale) =>
         set({ appLocale: normalizeAppLocale(appLocale) }),
       setShowHistoryTab: (showHistoryTab) => set({ showHistoryTab }),
@@ -88,6 +104,7 @@ export const useAppearanceStore = create<AppearanceState>()(
         appThemeId: state.appThemeId,
         amoledBlack: state.amoledBlack,
         customAccentColor: state.customAccentColor,
+        uiScalePercent: state.uiScalePercent,
         appLocale: state.appLocale,
         showHistoryTab: state.showHistoryTab,
         showUpdatesTab: state.showUpdatesTab,
@@ -105,6 +122,7 @@ export const useAppearanceStore = create<AppearanceState>()(
           ...persisted,
           themeMode: normalizeAppThemeMode(persisted.themeMode),
           appThemeId: normalizeAppThemeId(persisted.appThemeId),
+          uiScalePercent: normalizeUiScalePercent(persisted.uiScalePercent),
           appLocale: normalizeAppLocale(persisted.appLocale),
         };
       },

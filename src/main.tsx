@@ -15,7 +15,10 @@ import {
 import { pluginManager } from "./lib/plugins/manager";
 import { isAndroidRuntime, isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
-import { useAppearanceStore } from "./store/appearance";
+import {
+  normalizeUiScalePercent,
+  useAppearanceStore,
+} from "./store/appearance";
 import { makeMantineColorScale, resolveMd3Palette } from "./theme/md3";
 import { translate } from "./i18n";
 
@@ -174,7 +177,15 @@ function readAndroidWindowMetrics(): RuntimeWindowMetrics | null {
   }
 }
 
-function resolveFallbackAndroidLayout(): AndroidLayoutConfig {
+function scaleAndroidViewportWidth(
+  viewportWidth: number,
+  uiScalePercent: unknown,
+): number {
+  const scale = normalizeUiScalePercent(uiScalePercent) / 100;
+  return viewportWidth * (1 / scale);
+}
+
+function resolveFallbackAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
   const density =
     Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
       ? window.devicePixelRatio
@@ -186,41 +197,52 @@ function resolveFallbackAndroidLayout(): AndroidLayoutConfig {
   const widthPx = fallbackWidth >= MANTINE_SM_MIN_WIDTH
     ? fallbackWidth
     : fallbackWidth * density;
-  const viewportWidth = clamp(
+  const baseViewportWidth = clamp(
     widthPx / density,
     ANDROID_MIN_VIEWPORT_WIDTH,
     ANDROID_MAX_VIEWPORT_WIDTH,
   );
+  const viewportWidth = scaleAndroidViewportWidth(
+    baseViewportWidth,
+    uiScalePercent,
+  );
 
   return {
     className: classifyAndroidLayout(viewportWidth),
-    nativePxPerCssPx: Math.max(1, widthPx / viewportWidth),
+    nativePxPerCssPx: widthPx / viewportWidth,
     viewportWidth,
   };
 }
 
-function resolveAndroidLayout(): AndroidLayoutConfig {
+function resolveAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
   const metrics = readAndroidWindowMetrics();
-  if (!metrics) return resolveFallbackAndroidLayout();
+  if (!metrics) return resolveFallbackAndroidLayout(uiScalePercent);
 
   const widthDp = positiveNumber(metrics.widthDp);
   const widthPx = positiveNumber(metrics.widthPx);
   const density = positiveNumber(metrics.density);
   const rawViewportWidth = widthDp ?? (widthPx && density ? widthPx / density : null);
 
-  if (!rawViewportWidth) return resolveFallbackAndroidLayout();
+  if (!rawViewportWidth) return resolveFallbackAndroidLayout(uiScalePercent);
 
-  const viewportWidth = clamp(
+  const baseViewportWidth = clamp(
     rawViewportWidth,
     ANDROID_MIN_VIEWPORT_WIDTH,
     ANDROID_MAX_VIEWPORT_WIDTH,
   );
+  const viewportWidth = scaleAndroidViewportWidth(
+    baseViewportWidth,
+    uiScalePercent,
+  );
+  const physicalWidthPx = widthPx ?? (density ? baseViewportWidth * density : null);
   const nativePxPerCssPx =
-    widthPx && widthPx > 0 ? widthPx / viewportWidth : density ?? 1;
+    physicalWidthPx && physicalWidthPx > 0
+      ? physicalWidthPx / viewportWidth
+      : density ?? 1;
 
   return {
     className: classifyAndroidLayout(viewportWidth),
-    nativePxPerCssPx: Math.max(1, nativePxPerCssPx),
+    nativePxPerCssPx,
     viewportWidth,
   };
 }
@@ -304,7 +326,9 @@ function applyRuntimeSafeAreaInsets(): void {
   }
 }
 
-function applyRuntimeUiScale(): void {
+function applyRuntimeUiScale(
+  uiScalePercent = useAppearanceStore.getState().uiScalePercent,
+): void {
   const root = document.documentElement;
   if (!isAndroidRuntime()) {
     resetViewportScale();
@@ -318,7 +342,7 @@ function applyRuntimeUiScale(): void {
     return;
   }
 
-  const layout = resolveAndroidLayout();
+  const layout = resolveAndroidLayout(uiScalePercent);
   androidNativePxPerCssPx = layout.nativePxPerCssPx;
   root.dataset.lnrPlatform = "android";
   root.dataset.lnrAndroidLayout = layout.className;
@@ -387,6 +411,7 @@ function withAlpha(color: string, alpha: number): string {
 function AppProviders() {
   const appLocale = useAppearanceStore((state) => state.appLocale);
   const appThemeId = useAppearanceStore((state) => state.appThemeId);
+  const uiScalePercent = useAppearanceStore((state) => state.uiScalePercent);
   const amoledBlack = useAppearanceStore((state) => state.amoledBlack);
   const customAccentColor = useAppearanceStore(
     (state) => state.customAccentColor,
@@ -499,13 +524,18 @@ function AppProviders() {
   }, [appLocale, colorScheme, palette]);
 
   useEffect(() => {
+    applyRuntimeUiScale(uiScalePercent);
+    applyRuntimeSafeAreaInsets();
+  }, [uiScalePercent]);
+
+  useEffect(() => {
     if (!isAndroidRuntime()) return;
 
     let frame = 0;
     const scheduleRuntimeUpdate = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        applyRuntimeUiScale();
+        applyRuntimeUiScale(uiScalePercent);
         applyRuntimeSafeAreaInsets();
       });
     };
@@ -520,7 +550,7 @@ function AppProviders() {
       window.visualViewport?.removeEventListener("resize", scheduleRuntimeUpdate);
       window.visualViewport?.removeEventListener("scroll", scheduleRuntimeUpdate);
     };
-  }, []);
+  }, [uiScalePercent]);
 
   return (
     <MantineProvider theme={theme} forceColorScheme={colorScheme}>
