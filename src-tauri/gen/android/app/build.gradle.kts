@@ -25,7 +25,7 @@ android {
     compileSdk = 36
     namespace = "io.github.tinywind.norea"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
         applicationId = "io.github.tinywind.norea"
         minSdk = 24
         targetSdk = 36
