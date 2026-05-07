@@ -127,6 +127,10 @@ function filterByLanguage<T extends PluginItem>(
   );
 }
 
+function debugRepositoryFlow(message: string, data?: unknown): void {
+  console.debug("[browse:repository]", message, data);
+}
+
 function sortByName<T extends PluginItem>(plugins: readonly T[]): T[] {
   return [...plugins].sort((a, b) =>
     (a.name ?? a.id).localeCompare(b.name ?? b.id),
@@ -149,29 +153,77 @@ async function fetchAllAvailable(
   repos: readonly PluginRepository[],
   forceRefresh: boolean,
 ): Promise<AvailableResult> {
+  debugRepositoryFlow("available fetch start", {
+    forceRefresh,
+    repositoryCount: repos.length,
+  });
   const entries: AvailableEntry[] = [];
   const failures: RepoFetchFailure[] = [];
   for (const repo of repos) {
     try {
+      debugRepositoryFlow("available repo start", {
+        repoId: repo.id,
+        repoUrl: repo.url,
+        forceRefresh,
+      });
       let items: PluginItem[] | null = null;
       if (!forceRefresh) {
         const cached = await getCachedRepoIndex(repo.url);
-        if (cached) items = cached.items.filter(isValidPluginItem);
+        if (cached) {
+          items = cached.items.filter(isValidPluginItem);
+          debugRepositoryFlow("available repo cache hit", {
+            repoId: repo.id,
+            repoUrl: repo.url,
+            itemCount: items.length,
+          });
+        } else {
+          debugRepositoryFlow("available repo cache miss", {
+            repoId: repo.id,
+            repoUrl: repo.url,
+          });
+        }
       }
       if (items === null) {
+        debugRepositoryFlow("available repo network fetch start", {
+          repoId: repo.id,
+          repoUrl: repo.url,
+        });
         items = await pluginManager.fetchRepository(repo.url);
+        debugRepositoryFlow("available repo network fetch complete", {
+          repoId: repo.id,
+          repoUrl: repo.url,
+          itemCount: items.length,
+        });
         await setCachedRepoIndex(repo.url, items);
+        debugRepositoryFlow("available repo cache write complete", {
+          repoId: repo.id,
+          repoUrl: repo.url,
+        });
       }
       for (const item of items) {
         entries.push({ item, repoUrl: repo.url });
       }
+      debugRepositoryFlow("available repo complete", {
+        repoId: repo.id,
+        repoUrl: repo.url,
+        itemCount: items.length,
+      });
     } catch (error) {
+      console.error("[browse:repository] available repo failed", {
+        repoId: repo.id,
+        repoUrl: repo.url,
+        error,
+      });
       failures.push({
         repoUrl: repo.url,
         message: error instanceof Error ? error.message : String(error),
       });
     }
   }
+  debugRepositoryFlow("available fetch complete", {
+    entryCount: entries.length,
+    failureCount: failures.length,
+  });
   return { entries, failures };
 }
 
@@ -256,18 +308,19 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     () => filterByLanguage(installedPlugins, pluginLanguageFilter),
     [installedPlugins, pluginLanguageFilter],
   );
-  const filteredAvailableEntries = useMemo(
-    () =>
-      pluginLanguageFilter.length === 0
-        ? availableEntries
-        : availableEntries.filter(({ item }) =>
-            pluginLanguageFilter.includes(item.lang),
-          ),
-    [availableEntries, pluginLanguageFilter],
-  );
   const installedIds = useMemo(
     () => new Set(installed.data?.map((p) => p.id) ?? []),
     [installed.data],
+  );
+  const filteredAvailableEntries = useMemo(
+    () =>
+      availableEntries.filter(
+        ({ item }) =>
+          !installedIds.has(item.id) &&
+          (pluginLanguageFilter.length === 0 ||
+            pluginLanguageFilter.includes(item.lang)),
+      ),
+    [availableEntries, installedIds, pluginLanguageFilter],
   );
   const availableFailures = hasRepository
     ? (available.data?.failures ?? [])
@@ -285,10 +338,19 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   const addRepoMutation = useMutation({
     mutationFn: async () => {
       const trimmed = url.trim();
-      if (trimmed === "") return;
+      debugRepositoryFlow("add mutation start", {
+        rawUrl: url,
+        trimmedUrl: trimmed,
+      });
+      if (trimmed === "") {
+        debugRepositoryFlow("add mutation skipped: empty url");
+        return;
+      }
       await addRepository({ url: trimmed });
+      debugRepositoryFlow("add mutation complete", { url: trimmed });
     },
     onSuccess: () => {
+      debugRepositoryFlow("add mutation success: invalidate queries");
       queryClient.setQueryData<AvailableResult>(AVAILABLE_QUERY_KEY, {
         entries: [],
         failures: [],
@@ -298,17 +360,39 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
       setUrl("");
       setAddOpen(false);
     },
+    onError: (error) => {
+      console.error("[browse:repository] add mutation failed", {
+        url,
+        error,
+      });
+    },
   });
 
   const removeRepoMutation = useMutation({
-    mutationFn: async (id: number) => removeRepository(id),
+    mutationFn: async (id: number) => {
+      const repository = repos.data?.find((item) => item.id === id) ?? null;
+      debugRepositoryFlow("remove mutation start", {
+        id,
+        repository,
+        repositoryCount: repos.data?.length ?? null,
+      });
+      await removeRepository(id);
+      debugRepositoryFlow("remove mutation complete", { id });
+    },
     onSuccess: () => {
+      debugRepositoryFlow("remove mutation success: invalidate queries");
       queryClient.setQueryData<AvailableResult>(AVAILABLE_QUERY_KEY, {
         entries: [],
         failures: [],
       });
       queryClient.invalidateQueries({ queryKey: ["repository"] });
       queryClient.invalidateQueries({ queryKey: AVAILABLE_QUERY_KEY });
+    },
+    onError: (error, id) => {
+      console.error("[browse:repository] remove mutation failed", {
+        id,
+        error,
+      });
     },
   });
 
@@ -435,7 +519,10 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
                 });
               }}
               refreshing={available.isFetching}
-              onRemove={(id) => removeRepoMutation.mutate(id)}
+              onRemove={(id) => {
+                debugRepositoryFlow("remove clicked", { id });
+                removeRepoMutation.mutate(id);
+              }}
               removing={removeRepoMutation.isPending}
             />
 
@@ -513,7 +600,13 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
             <TextButton
               loading={addRepoMutation.isPending}
               disabled={url.trim() === ""}
-              onClick={() => addRepoMutation.mutate()}
+              onClick={() => {
+                debugRepositoryFlow("add save clicked", {
+                  url,
+                  disabled: url.trim() === "",
+                });
+                addRepoMutation.mutate();
+              }}
             >
               {t("common.save")}
             </TextButton>
@@ -788,6 +881,7 @@ interface InstalledSectionProps {
  * plugin-owned fetches prepare this origin before requesting data.
  */
 function openSite(url: string): void {
+  console.debug("[site-browser] open site clicked", { url });
   useSiteBrowserStore.getState().openAt(url);
 }
 
