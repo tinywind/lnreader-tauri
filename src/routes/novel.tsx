@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   type ReactNode,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -10,7 +11,6 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Group,
   Popover,
-  Stack,
   Text,
   Title,
   Tooltip,
@@ -21,6 +21,8 @@ import {
   DownloadedGlyph,
   LibraryAddGlyph,
   LibraryAddedGlyph,
+  PlayFromStartGlyph,
+  PlayGlyph,
 } from "../components/ActionGlyphs";
 import {
   ConsoleChip,
@@ -36,7 +38,7 @@ import { IconButton } from "../components/IconButton";
 import {
   clearChapterContent,
   listChaptersByNovel,
-  type ChapterRow,
+  type ChapterListRow,
 } from "../db/queries/chapter";
 import {
   getNovelById,
@@ -45,10 +47,12 @@ import {
 } from "../db/queries/novel";
 import {
   enqueueChapterDownload,
-  getChapterDownloadStatus,
+  enqueueChapterDownloadBatch,
+  listChapterDownloadStatuses,
   subscribeChapterDownloads,
   type ChapterDownloadStatus,
 } from "../lib/tasks/chapter-download";
+import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { pluginManager } from "../lib/plugins/manager";
 import { novelRoute } from "../router";
@@ -58,6 +62,10 @@ import { useReaderStore } from "../store/reader";
 import "../styles/novel.css";
 
 const FINISHED_PROGRESS = 100;
+const CHAPTER_ROW_HEIGHT = 54;
+const CHAPTER_LIST_OVERSCAN = 8;
+const CHAPTER_LIST_VISIBLE_ROWS = 14;
+const EMPTY_CHAPTERS: ChapterListRow[] = [];
 const NOVEL_TITLE_FONT_SIZES = [
   "1.55rem",
   "1.42rem",
@@ -69,15 +77,14 @@ const NOVEL_TITLE_FONT_SIZES = [
 type NovelTitleFontSize = (typeof NOVEL_TITLE_FONT_SIZES)[number];
 
 interface BatchDownloadTargets {
-  all: ChapterRow[];
-  hasCurrentChapter: boolean;
-  next10: ChapterRow[];
-  next30: ChapterRow[];
-  unread: ChapterRow[];
+  all: ChapterListRow[];
+  next10: ChapterListRow[];
+  next30: ChapterListRow[];
+  unread: ChapterListRow[];
 }
 
 interface BatchDownloadOption {
-  chapters: ChapterRow[];
+  chapters: ChapterListRow[];
   description: string;
   key: string;
   label: string;
@@ -117,14 +124,30 @@ function isActiveDownloadStatus(
   );
 }
 
+function getReadingOrderChapters(
+  chapters: readonly ChapterListRow[],
+): readonly ChapterListRow[] {
+  let asc = true;
+  let desc = true;
+
+  for (let index = 1; index < chapters.length; index += 1) {
+    const previous = chapters[index - 1]!;
+    const current = chapters[index]!;
+    if (previous.position > current.position) asc = false;
+    if (previous.position < current.position) desc = false;
+  }
+
+  if (asc) return chapters;
+  if (desc) return [...chapters].reverse();
+  return [...chapters].sort((left, right) => left.position - right.position);
+}
+
 function buildBatchDownloadTargets(
-  chapters: readonly ChapterRow[],
+  chapters: readonly ChapterListRow[],
   lastReadChapterId: number | undefined,
   downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>,
 ): BatchDownloadTargets {
-  const readingOrder = [...chapters].sort(
-    (left, right) => left.position - right.position,
-  );
+  const readingOrder = getReadingOrderChapters(chapters);
   const candidates = readingOrder.filter(
     (chapter) =>
       !chapter.isDownloaded &&
@@ -134,20 +157,17 @@ function buildBatchDownloadTargets(
     lastReadChapterId === undefined
       ? -1
       : readingOrder.findIndex((chapter) => chapter.id === lastReadChapterId);
-  const nextCandidates =
-    currentIndex >= 0
-      ? readingOrder
-          .slice(currentIndex + 1)
-          .filter(
-            (chapter) =>
-              !chapter.isDownloaded &&
-              !isActiveDownloadStatus(downloadStatuses.get(chapter.id)),
-          )
-      : [];
+  const nextStartIndex = currentIndex >= 0 ? currentIndex + 1 : 0;
+  const nextCandidates = readingOrder
+    .slice(nextStartIndex)
+    .filter(
+      (chapter) =>
+        !chapter.isDownloaded &&
+        !isActiveDownloadStatus(downloadStatuses.get(chapter.id)),
+    );
 
   return {
     all: candidates,
-    hasCurrentChapter: currentIndex >= 0,
     next10: nextCandidates.slice(0, 10),
     next30: nextCandidates.slice(0, 30),
     unread: candidates.filter((chapter) => chapter.unread),
@@ -222,12 +242,12 @@ function useAutoFitNovelTitle(title: string) {
   };
 }
 
-function getChapterReadingProgress(chapter: ChapterRow): number {
+function getChapterReadingProgress(chapter: ChapterListRow): number {
   if (chapter.progress >= FINISHED_PROGRESS) return 100;
   return Math.max(0, Math.min(100, Math.round(chapter.progress)));
 }
 
-function getNovelReadingPercent(chapters: readonly ChapterRow[]): number {
+function getNovelReadingPercent(chapters: readonly ChapterListRow[]): number {
   if (chapters.length === 0) return 0;
   const total = chapters.reduce(
     (sum, chapter) => sum + getChapterReadingProgress(chapter),
@@ -236,17 +256,17 @@ function getNovelReadingPercent(chapters: readonly ChapterRow[]): number {
   return Math.round(total / chapters.length);
 }
 
-function findFirstChapter(chapters: ChapterRow[]): ChapterRow | null {
-  return chapters.reduce<ChapterRow | null>((first, chapter) => {
+function findFirstChapter(chapters: ChapterListRow[]): ChapterListRow | null {
+  return chapters.reduce<ChapterListRow | null>((first, chapter) => {
     if (!first || chapter.position < first.position) return chapter;
     return first;
   }, null);
 }
 
 function findLastReadChapter(
-  chapters: ChapterRow[],
+  chapters: ChapterListRow[],
   lastReadChapterId: number | undefined,
-): ChapterRow | null {
+): ChapterListRow | null {
   if (lastReadChapterId === undefined) return null;
   return chapters.find((chapter) => chapter.id === lastReadChapterId) ?? null;
 }
@@ -274,7 +294,7 @@ function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
 }
 
 interface ChapterListItemProps {
-  chapter: ChapterRow;
+  chapter: ChapterListRow;
   isCurrent: boolean;
   status: ChapterDownloadStatus | undefined;
   deleteBusy: boolean;
@@ -449,6 +469,116 @@ function ChapterListItem({
   );
 }
 
+interface VirtualChapterListProps {
+  chapters: ChapterListRow[];
+  deleteBusyChapterId: number | undefined;
+  deletePending: boolean;
+  lastReadChapterId: number | undefined;
+  openingChapterId: number | null;
+  statuses: ReadonlyMap<number, ChapterDownloadStatus>;
+  onDeleteDownload: (chapterId: number) => void;
+  onDownload: (chapter: ChapterListRow) => void;
+  onOpen: (chapter: ChapterListRow) => void;
+}
+
+function VirtualChapterList({
+  chapters,
+  deleteBusyChapterId,
+  deletePending,
+  lastReadChapterId,
+  openingChapterId,
+  statuses,
+  onDeleteDownload,
+  onDownload,
+  onOpen,
+}: VirtualChapterListProps) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(
+    CHAPTER_ROW_HEIGHT * CHAPTER_LIST_VISIBLE_ROWS,
+  );
+  const totalHeight = chapters.length * CHAPTER_ROW_HEIGHT;
+  const startIndex = Math.max(
+    0,
+    Math.floor(scrollTop / CHAPTER_ROW_HEIGHT) - CHAPTER_LIST_OVERSCAN,
+  );
+  const endIndex = Math.min(
+    chapters.length,
+    Math.ceil((scrollTop + viewportHeight) / CHAPTER_ROW_HEIGHT) +
+      CHAPTER_LIST_OVERSCAN,
+  );
+  const visibleChapters = chapters.slice(startIndex, endIndex);
+  const offsetY = startIndex * CHAPTER_ROW_HEIGHT;
+  const listHeight = Math.min(chapters.length, CHAPTER_LIST_VISIBLE_ROWS) *
+    CHAPTER_ROW_HEIGHT;
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+
+    const updateViewportHeight = () => {
+      setViewportHeight(element.clientHeight || CHAPTER_ROW_HEIGHT);
+    };
+
+    updateViewportHeight();
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(updateViewportHeight);
+
+    resizeObserver?.observe(element);
+    window.addEventListener("resize", updateViewportHeight);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateViewportHeight);
+    };
+  }, []);
+
+  useEffect(() => {
+    const maxScrollTop = Math.max(0, totalHeight - viewportHeight);
+    setScrollTop((current) => Math.min(current, maxScrollTop));
+  }, [totalHeight, viewportHeight]);
+
+  return (
+    <div
+      className="lnr-novel-chapter-list"
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      ref={viewportRef}
+      style={
+        {
+          "--lnr-novel-chapter-list-height": `${listHeight}px`,
+        } as CSSProperties
+      }
+    >
+      <div
+        className="lnr-novel-chapter-list-spacer"
+        style={{ height: totalHeight }}
+      >
+        <div
+          className="lnr-novel-chapter-list-window"
+          style={{ transform: `translateY(${offsetY}px)` }}
+        >
+          {visibleChapters.map((chapter) => (
+            <ChapterListItem
+              key={chapter.id}
+              chapter={chapter}
+              isCurrent={chapter.id === lastReadChapterId}
+              status={statuses.get(chapter.id)}
+              deleteBusy={deletePending && deleteBusyChapterId === chapter.id}
+              opening={openingChapterId === chapter.id}
+              onOpen={() => onOpen(chapter)}
+              onDownload={() => onDownload(chapter)}
+              onDeleteDownload={() => onDeleteDownload(chapter.id)}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface ChapterFlagProps {
   children: ReactNode;
   label: string;
@@ -519,7 +649,7 @@ interface NovelActionButtonProps {
 
 interface NovelBatchDownloadMenuProps {
   disabled: boolean;
-  onDownload: (chapters: ChapterRow[]) => void;
+  onDownload: (chapters: ChapterListRow[]) => void;
   options: BatchDownloadOption[];
 }
 
@@ -631,29 +761,6 @@ function NovelReadButton({
   );
 }
 
-function StartReadingIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M5 5v14" />
-      <path d="M9 6h7a4 4 0 0 1 4 4v10h-7a4 4 0 0 0-4 4z" />
-      <path d="M13 10h4" />
-      <path d="M13 14h3" />
-    </svg>
-  );
-}
-
-function ContinueReadingIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
-      <path d="M9 9h5" />
-      <path d="M9 13h6" />
-      <path d="M15 16h5" />
-      <path d="M18 13l3 3-3 3" />
-    </svg>
-  );
-}
-
 function BookmarkIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -710,14 +817,14 @@ function ClockIcon() {
 }
 
 interface NovelWorkspaceProps {
-  chapters: ChapterRow[];
+  chapters: ChapterListRow[];
   downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>;
   lastReadChapterId: number | undefined;
   novel: NovelDetailRecord;
   onBack: () => void;
-  onBatchDownload: (chapters: ChapterRow[]) => void;
+  onBatchDownload: (chapters: ChapterListRow[]) => void;
   onOpenSource: () => void;
-  onRead: (chapter: ChapterRow) => void;
+  onRead: (chapter: ChapterListRow) => void;
   onToggleLibrary: () => void;
   sourceUrl: string | null;
   toggleBusy: boolean;
@@ -738,63 +845,65 @@ function NovelWorkspace({
 }: NovelWorkspaceProps) {
   const { t } = useTranslation();
   const { titleRef, titleStyle } = useAutoFitNovelTitle(novel.name);
-  const genres = splitGenres(novel.genres);
-  const firstChapter = findFirstChapter(chapters);
-  const lastReadChapter = findLastReadChapter(chapters, lastReadChapterId);
-  const readPercent = getNovelReadingPercent(chapters);
+  const genres = useMemo(() => splitGenres(novel.genres), [novel.genres]);
+  const firstChapter = useMemo(() => findFirstChapter(chapters), [chapters]);
+  const lastReadChapter = useMemo(
+    () => findLastReadChapter(chapters, lastReadChapterId),
+    [chapters, lastReadChapterId],
+  );
+  const readPercent = useMemo(() => getNovelReadingPercent(chapters), [chapters]);
   const libraryActionLabel = novel.inLibrary
     ? t("novel.removeFromLibrary")
     : t("novel.addToLibrary");
-  const batchTargets = buildBatchDownloadTargets(
-    chapters,
-    lastReadChapterId,
-    downloadStatuses,
+  const batchTargets = useMemo(
+    () =>
+      buildBatchDownloadTargets(
+        chapters,
+        lastReadChapterId,
+        downloadStatuses,
+      ),
+    [chapters, downloadStatuses, lastReadChapterId],
   );
-  const batchUnavailableDescription = batchTargets.hasCurrentChapter
-    ? t("novel.batchDownload.available", { count: 0 })
-    : t("novel.batchDownload.noCurrent");
-  const batchDownloadOptions: BatchDownloadOption[] = [
-    {
-      chapters: batchTargets.all,
-      description: t("novel.batchDownload.available", {
-        count: batchTargets.all.length,
-      }),
-      key: "all",
-      label: t("novel.batchDownload.all"),
-    },
-    {
-      chapters: batchTargets.unread,
-      description: t("novel.batchDownload.available", {
-        count: batchTargets.unread.length,
-      }),
-      key: "unread",
-      label: t("novel.batchDownload.unread"),
-    },
-    {
-      chapters: batchTargets.next10,
-      description:
-        batchTargets.next10.length > 0
-          ? t("novel.batchDownload.available", {
-              count: batchTargets.next10.length,
-            })
-          : batchUnavailableDescription,
-      key: "next10",
-      label: t("novel.batchDownload.next10"),
-    },
-    {
-      chapters: batchTargets.next30,
-      description:
-        batchTargets.next30.length > 0
-          ? t("novel.batchDownload.available", {
-              count: batchTargets.next30.length,
-            })
-          : batchUnavailableDescription,
-      key: "next30",
-      label: t("novel.batchDownload.next30"),
-    },
-  ];
-  const hasBatchDownloadTargets = batchDownloadOptions.some(
-    (option) => option.chapters.length > 0,
+  const batchDownloadOptions: BatchDownloadOption[] = useMemo(
+    () => [
+      {
+        chapters: batchTargets.all,
+        description: t("novel.batchDownload.available", {
+          count: batchTargets.all.length,
+        }),
+        key: "all",
+        label: t("novel.batchDownload.all"),
+      },
+      {
+        chapters: batchTargets.unread,
+        description: t("novel.batchDownload.available", {
+          count: batchTargets.unread.length,
+        }),
+        key: "unread",
+        label: t("novel.batchDownload.unread"),
+      },
+      {
+        chapters: batchTargets.next10,
+        description: t("novel.batchDownload.available", {
+          count: batchTargets.next10.length,
+        }),
+        key: "next10",
+        label: t("novel.batchDownload.next10"),
+      },
+      {
+        chapters: batchTargets.next30,
+        description: t("novel.batchDownload.available", {
+          count: batchTargets.next30.length,
+        }),
+        key: "next30",
+        label: t("novel.batchDownload.next30"),
+      },
+    ],
+    [batchTargets, t],
+  );
+  const hasBatchDownloadTargets = useMemo(
+    () => batchDownloadOptions.some((option) => option.chapters.length > 0),
+    [batchDownloadOptions],
   );
   const renderCoverPanel = () => (
     <ConsolePanel className="lnr-novel-cover-panel">
@@ -896,14 +1005,14 @@ function NovelWorkspace({
               onClick={() => lastReadChapter && onRead(lastReadChapter)}
               tone="accent"
             >
-              <ContinueReadingIcon />
+              <PlayGlyph />
             </NovelReadButton>
             <NovelReadButton
               disabled={!firstChapter}
               label={t("novel.startReading")}
               onClick={() => firstChapter && onRead(firstChapter)}
             >
-              <StartReadingIcon />
+              <PlayFromStartGlyph />
             </NovelReadButton>
           </div>
         </div>
@@ -975,6 +1084,7 @@ export function NovelDetailPage() {
       await setNovelInLibrary(novel.id, !novel.inLibrary);
     },
     onSuccess: () => {
+      markUpdatesIndexDirty("library-membership");
       void queryClient.invalidateQueries({ queryKey: ["novel"] });
     },
   });
@@ -997,6 +1107,7 @@ export function NovelDetailPage() {
 
   useEffect(() => {
     return subscribeChapterDownloads((event) => {
+      if (event.job.novelId !== undefined && event.job.novelId !== id) return;
       setStatuses((prev) => {
         const next = new Map(prev);
         if (event.status.kind === "cancelled") {
@@ -1014,27 +1125,44 @@ export function NovelDetailPage() {
     });
   }, [id, queryClient]);
 
+  const rows = chaptersQuery.data ?? EMPTY_CHAPTERS;
+  const chapters = useMemo(
+    () => (defaultChapterSort === "desc" ? [...rows].reverse() : rows),
+    [defaultChapterSort, rows],
+  );
+  const chapterStats = useMemo(
+    () => {
+      let downloaded = 0;
+      let unread = 0;
+      for (const chapter of rows) {
+        if (chapter.isDownloaded) downloaded += 1;
+        if (chapter.unread) unread += 1;
+      }
+      return { downloaded, unread };
+    },
+    [rows],
+  );
+
   useEffect(() => {
-    const rows = chaptersQuery.data ?? [];
     if (rows.length === 0) return;
+    const currentStatuses = listChapterDownloadStatuses();
 
     setStatuses((prev) => {
       let changed = false;
       const next = new Map(prev);
-      for (const chapter of rows) {
-        const status = getChapterDownloadStatus(chapter.id);
+      for (const [chapterId, status] of currentStatuses) {
         if (status?.kind === "cancelled") {
-          if (next.delete(chapter.id)) changed = true;
+          if (next.delete(chapterId)) changed = true;
           continue;
         }
-        if (status && next.get(chapter.id) !== status) {
-          next.set(chapter.id, status);
+        if (next.get(chapterId) !== status) {
+          next.set(chapterId, status);
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [chaptersQuery.data]);
+  }, [rows]);
 
   function goBack() {
     if (window.history.length > 1) {
@@ -1045,7 +1173,7 @@ export function NovelDetailPage() {
     void navigate({ to: "/" });
   }
 
-  async function openChapter(chapter: ChapterRow): Promise<void> {
+  async function openChapter(chapter: ChapterListRow): Promise<void> {
     const requestId = openRequestRef.current + 1;
     openRequestRef.current = requestId;
 
@@ -1066,6 +1194,7 @@ export function NovelDetailPage() {
         chapterName: chapter.name,
         novelId: novel.id,
         novelName: novel.name,
+        priority: "interactive",
         title: t("tasks.task.downloadChapter", { name: chapter.name }),
       }).promise;
       if (openRequestRef.current !== requestId) return;
@@ -1094,7 +1223,7 @@ export function NovelDetailPage() {
     ).promise.catch(() => undefined);
   }
 
-  function downloadChapter(chapter: ChapterRow): void {
+  function downloadChapter(chapter: ChapterListRow): void {
     const novel = novelQuery.data;
     if (!novel) return;
     void enqueueChapterDownload({
@@ -1108,12 +1237,12 @@ export function NovelDetailPage() {
     }).promise.catch(() => undefined);
   }
 
-  function downloadChapters(chaptersToDownload: ChapterRow[]): void {
+  function downloadChapters(chaptersToDownload: ChapterListRow[]): void {
     const novel = novelQuery.data;
     if (!novel || chaptersToDownload.length === 0) return;
 
-    for (const chapter of chaptersToDownload) {
-      void enqueueChapterDownload({
+    void enqueueChapterDownloadBatch({
+      jobs: chaptersToDownload.map((chapter) => ({
         id: chapter.id,
         pluginId: novel.pluginId,
         chapterPath: chapter.path,
@@ -1121,8 +1250,11 @@ export function NovelDetailPage() {
         novelId: novel.id,
         novelName: novel.name,
         title: t("tasks.task.downloadChapter", { name: chapter.name }),
-      }).promise.catch(() => undefined);
-    }
+      })),
+      title: t("tasks.task.downloadChapterBatch", {
+        count: chaptersToDownload.length,
+      }),
+    }).promise.catch(() => undefined);
   }
 
   if (id <= 0) {
@@ -1178,14 +1310,7 @@ export function NovelDetailPage() {
     );
   }
 
-  const rows = chaptersQuery.data ?? [];
-  const chapters =
-    defaultChapterSort === "desc" ? [...rows].reverse() : rows;
   const sourceUrl = resolveNovelSourceUrl(novel);
-  const downloadedCount = chapters.filter(
-    (chapter) => chapter.isDownloaded,
-  ).length;
-  const unreadCount = chapters.filter((chapter) => chapter.unread).length;
 
   return (
     <PageFrame className="lnr-novel-page" size="wide">
@@ -1209,8 +1334,8 @@ export function NovelDetailPage() {
           title={t("novel.chapters")}
           count={t("novel.chapterCount", {
             total: chapters.length,
-            cached: downloadedCount,
-            unread: unreadCount,
+            cached: chapterStats.downloaded,
+            unread: chapterStats.unread,
           })}
         />
 
@@ -1227,28 +1352,19 @@ export function NovelDetailPage() {
             message={t("novel.noChaptersMessage")}
           />
         ) : (
-          <Stack gap={0} mt="sm">
-            {chapters.map((chapter) => (
-              <ChapterListItem
-                key={chapter.id}
-                chapter={chapter}
-                isCurrent={chapter.id === lastReadChapterId}
-                status={statuses.get(chapter.id)}
-                deleteBusy={
-                  clearDownload.isPending &&
-                  clearDownload.variables === chapter.id
-                }
-                opening={openingChapterId === chapter.id}
-                onOpen={() => {
-                  void openChapter(chapter);
-                }}
-                onDownload={() => downloadChapter(chapter)}
-                onDeleteDownload={() =>
-                  clearDownload.mutate(chapter.id)
-                }
-              />
-            ))}
-          </Stack>
+          <VirtualChapterList
+            chapters={chapters}
+            deleteBusyChapterId={clearDownload.variables}
+            deletePending={clearDownload.isPending}
+            lastReadChapterId={lastReadChapterId}
+            openingChapterId={openingChapterId}
+            statuses={statuses}
+            onOpen={(chapter) => {
+              void openChapter(chapter);
+            }}
+            onDownload={downloadChapter}
+            onDeleteDownload={(chapterId) => clearDownload.mutate(chapterId)}
+          />
         )}
       </ConsolePanel>
     </PageFrame>

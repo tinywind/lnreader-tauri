@@ -20,7 +20,7 @@ import {
   PageFrame,
   PageHeader,
 } from "../components/AppFrame";
-import { DetailsGlyph } from "../components/ActionGlyphs";
+import { DetailsGlyph, PlayGlyph } from "../components/ActionGlyphs";
 import { ConsoleCover } from "../components/ConsolePrimitives";
 import { IconButton } from "../components/IconButton";
 import { SearchBar } from "../components/SearchBar";
@@ -298,16 +298,6 @@ function HistoryIconFlag({
   );
 }
 
-function ReadForwardIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
-      <path d="M9 9h5" />
-      <path d="M9 13h4" />
-    </svg>
-  );
-}
-
 function TrashIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -475,7 +465,7 @@ function HistoryRow({
               onClick={onContinueReading}
               tone="accent"
             >
-              <ReadForwardIcon />
+              <PlayGlyph />
             </HistoryIconButton>
             <HistoryIconButton
               label={detailsLabel}
@@ -557,7 +547,7 @@ function ResumePanel({
             onClick={onContinueReading}
             tone="accent"
           >
-            <ReadForwardIcon />
+            <PlayGlyph />
           </HistoryIconButton>
           <HistoryIconButton
             label={detailsLabel}

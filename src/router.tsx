@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-router";
 import { RootLayout } from "./routes/__root";
 import { BrowsePage } from "./routes/browse";
+import { DownloadsPage } from "./routes/downloads";
 import { HistoryPage } from "./routes/history";
 import { LibraryPage } from "./routes/library";
 import { NovelDetailPage } from "./routes/novel";
@@ -74,6 +75,12 @@ const updatesRoute = createRoute({
   component: UpdatesPage,
 });
 
+const downloadsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/downloads",
+  component: DownloadsPage,
+});
+
 const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks",
@@ -100,6 +107,7 @@ const routeTree = rootRoute.addChildren([
   novelRoute,
   historyRoute,
   updatesRoute,
+  downloadsRoute,
   tasksRoute,
   sourceRoute,
 ]);

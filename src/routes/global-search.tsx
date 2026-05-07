@@ -24,6 +24,7 @@ import {
   PinGlyph,
   RefreshGlyph,
   RetryGlyph,
+  UnpinGlyph,
 } from "../components/ActionGlyphs";
 import { IconButton } from "../components/IconButton";
 import { SearchBar } from "../components/SearchBar";
@@ -243,7 +244,7 @@ function ScopePanel({
             title={pinned ? t("browse.unpin") : t("browse.pin")}
             onClick={() => onTogglePinnedPlugin(plugin.id)}
           >
-            <PinGlyph />
+            {pinned ? <UnpinGlyph /> : <PinGlyph />}
           </IconButton>
           <IconButton
             label={`${t("common.source")}: ${plugin.name}`}
@@ -581,7 +582,7 @@ function SearchResultSection({
                 aria-label={t("common.pinned")}
                 title={t("common.pinned")}
               >
-                <PinGlyph />
+                <UnpinGlyph />
               </span>
             ) : null}
             <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>

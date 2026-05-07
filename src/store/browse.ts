@@ -1,9 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { GlobalSearchResult } from "../lib/plugins/global-search";
+import { taskScheduler } from "../lib/tasks/scheduler";
 
 export const DEFAULT_GLOBAL_SEARCH_CONCURRENCY = 3;
 export const DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS = 30;
+export const DEFAULT_CHAPTER_DOWNLOAD_COOLDOWN_SECONDS = 1;
 
 function normalizeStringArray(
   value: unknown,
@@ -20,6 +22,12 @@ function normalizeConcurrency(value: unknown): number {
   return Math.max(1, Math.min(10, Math.round(numeric)));
 }
 
+function applySourceTaskConcurrency(value: unknown): number {
+  const concurrency = normalizeConcurrency(value);
+  taskScheduler.setSourceForegroundConcurrency(concurrency);
+  return concurrency;
+}
+
 function normalizeTimeoutSeconds(value: unknown): number {
   const numeric =
     typeof value === "number"
@@ -29,6 +37,17 @@ function normalizeTimeoutSeconds(value: unknown): number {
     return DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS;
   }
   return Math.max(5, Math.min(120, Math.round(numeric)));
+}
+
+function normalizeChapterDownloadCooldownSeconds(value: unknown): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : DEFAULT_CHAPTER_DOWNLOAD_COOLDOWN_SECONDS;
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_CHAPTER_DOWNLOAD_COOLDOWN_SECONDS;
+  }
+  return Math.max(0, Math.min(60, Math.round(numeric)));
 }
 
 interface BrowseGlobalSearchState {
@@ -57,6 +76,7 @@ interface BrowseState {
   pluginLanguageFilter: string[];
   globalSearchConcurrency: number;
   globalSearchTimeoutSeconds: number;
+  chapterDownloadCooldownSeconds: number;
   pinnedPluginIds: string[];
   lastUsedPluginId: string | null;
   globalSearch: BrowseGlobalSearchState;
@@ -65,6 +85,7 @@ interface BrowseState {
   setPluginLanguageFilter: (languages: string[]) => void;
   setGlobalSearchConcurrency: (concurrency: number) => void;
   setGlobalSearchTimeoutSeconds: (seconds: number) => void;
+  setChapterDownloadCooldownSeconds: (seconds: number) => void;
   togglePinnedPlugin: (pluginId: string) => void;
   setLastUsedPluginId: (pluginId: string | null) => void;
   beginGlobalSearch: (search: BrowseGlobalSearchState) => void;
@@ -83,6 +104,8 @@ export const useBrowseStore = create<BrowseState>()(
       pluginLanguageFilter: [],
       globalSearchConcurrency: DEFAULT_GLOBAL_SEARCH_CONCURRENCY,
       globalSearchTimeoutSeconds: DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS,
+      chapterDownloadCooldownSeconds:
+        DEFAULT_CHAPTER_DOWNLOAD_COOLDOWN_SECONDS,
       pinnedPluginIds: [],
       lastUsedPluginId: null,
       globalSearch: EMPTY_GLOBAL_SEARCH,
@@ -95,17 +118,24 @@ export const useBrowseStore = create<BrowseState>()(
             [],
           ),
         }),
-      setGlobalSearchConcurrency: (globalSearchConcurrency) =>
+      setGlobalSearchConcurrency: (globalSearchConcurrency) => {
+        const concurrency = applySourceTaskConcurrency(globalSearchConcurrency);
         set({
-          globalSearchConcurrency: normalizeConcurrency(
-            globalSearchConcurrency,
-          ),
-        }),
+          globalSearchConcurrency: concurrency,
+        });
+      },
       setGlobalSearchTimeoutSeconds: (globalSearchTimeoutSeconds) =>
         set({
           globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
             globalSearchTimeoutSeconds,
           ),
+        }),
+      setChapterDownloadCooldownSeconds: (chapterDownloadCooldownSeconds) =>
+        set({
+          chapterDownloadCooldownSeconds:
+            normalizeChapterDownloadCooldownSeconds(
+              chapterDownloadCooldownSeconds,
+            ),
         }),
       togglePinnedPlugin: (pluginId) =>
         set((state) => ({
@@ -148,18 +178,23 @@ export const useBrowseStore = create<BrowseState>()(
           return currentState;
         }
         const persisted = persistedState as Partial<BrowseState>;
+        const globalSearchConcurrency = applySourceTaskConcurrency(
+          persisted.globalSearchConcurrency,
+        );
         return {
           ...currentState,
           pluginLanguageFilter: normalizeStringArray(
             persisted.pluginLanguageFilter,
             currentState.pluginLanguageFilter,
           ),
-          globalSearchConcurrency: normalizeConcurrency(
-            persisted.globalSearchConcurrency,
-          ),
+          globalSearchConcurrency,
           globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
             persisted.globalSearchTimeoutSeconds,
           ),
+          chapterDownloadCooldownSeconds:
+            normalizeChapterDownloadCooldownSeconds(
+              persisted.chapterDownloadCooldownSeconds,
+            ),
           pinnedPluginIds: normalizeStringArray(
             persisted.pinnedPluginIds,
             currentState.pinnedPluginIds,
@@ -181,6 +216,10 @@ export const useBrowseStore = create<BrowseState>()(
         globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
           state.globalSearchTimeoutSeconds,
         ),
+        chapterDownloadCooldownSeconds:
+          normalizeChapterDownloadCooldownSeconds(
+            state.chapterDownloadCooldownSeconds,
+          ),
         pinnedPluginIds: normalizeStringArray(state.pinnedPluginIds, []),
         lastUsedPluginId: state.lastUsedPluginId,
       }),

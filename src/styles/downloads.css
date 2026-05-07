@@ -1,0 +1,201 @@
+.lnr-downloads-page {
+  --lnr-page-max-width: 1280px;
+}
+
+.lnr-downloads-header-button svg,
+.lnr-downloads-icon-button svg {
+  fill: none;
+  height: 18px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 18px;
+}
+
+.lnr-downloads-spin-icon {
+  animation: lnr-downloads-spin 0.9s linear infinite;
+}
+
+@keyframes lnr-downloads-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lnr-downloads-loading,
+.lnr-downloads-novel {
+  min-width: 0;
+}
+
+.lnr-downloads-novel {
+  background: var(--lnr-design-surface);
+  border-color: var(--lnr-design-rule);
+  border-radius: var(--lnr-border-radius);
+  overflow: hidden;
+}
+
+.lnr-downloads-novel-row {
+  align-items: flex-start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 56px minmax(0, 1fr) max-content;
+  padding: 10px 12px;
+}
+
+.lnr-downloads-novel-main {
+  display: grid;
+  gap: 4px;
+}
+
+.lnr-downloads-chapter-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lnr-downloads-novel-title {
+  color: var(--lnr-design-ink);
+  display: block;
+  font-family: var(--lnr-font-display);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lnr-downloads-novel-status,
+.lnr-downloads-novel-badge-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lnr-downloads-novel-status {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.71875rem;
+  line-height: 1.35;
+}
+
+.lnr-downloads-library-badge {
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: top;
+}
+
+.lnr-downloads-library-badge .mantine-Badge-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lnr-downloads-chapter-status {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.71875rem;
+  line-height: 1.4;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lnr-downloads-row-actions {
+  align-self: flex-start;
+  justify-content: flex-end;
+}
+
+.lnr-downloads-chapter-list {
+  background: color-mix(in srgb, var(--lnr-design-panel), transparent 30%);
+  border-top: 1px solid var(--lnr-design-rule);
+  display: grid;
+}
+
+.lnr-downloads-chapter-row {
+  align-items: flex-start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 8px 12px 8px 80px;
+}
+
+.lnr-downloads-chapter-row + .lnr-downloads-chapter-row {
+  border-top: 1px solid var(--lnr-design-rule);
+}
+
+.lnr-downloads-chapter-title {
+  color: var(--lnr-design-ink);
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lnr-downloads-note {
+  color: var(--lnr-design-ink-subtle);
+  font-size: 0.8125rem;
+  padding: 10px 12px 10px 80px;
+}
+
+@media (max-width: 767px) {
+  .lnr-downloads-page .lnr-page-header {
+    align-items: flex-start;
+  }
+
+  .lnr-downloads-page .lnr-page-header-copy {
+    display: block;
+  }
+
+  .lnr-downloads-page .lnr-page-title,
+  .lnr-downloads-page .lnr-page-description {
+    display: none;
+  }
+
+  .lnr-downloads-page .lnr-page-header-copy > .mantine-Group-root {
+    flex-wrap: wrap;
+    margin-top: 0;
+  }
+
+  .lnr-downloads-page .lnr-page-header > .mantine-Group-root {
+    margin-left: auto;
+  }
+
+  .lnr-downloads-novel-row {
+    align-items: flex-start;
+    gap: 8px;
+    grid-template-columns: 42px minmax(0, 1fr) max-content;
+    padding: 8px;
+  }
+
+  .lnr-downloads-novel-row .lnr-console-cover {
+    height: 63px !important;
+    width: 42px !important;
+  }
+
+  .lnr-downloads-row-actions {
+    justify-content: flex-end;
+  }
+
+  .lnr-downloads-chapter-row {
+    padding: 8px;
+  }
+
+  .lnr-downloads-note {
+    padding: 10px 8px;
+  }
+}
+
+@media (max-width: 768px) {
+  .lnr-downloads-novel-status {
+    display: none;
+  }
+}

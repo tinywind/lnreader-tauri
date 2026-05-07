@@ -7,11 +7,13 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { SiteBrowserOverlay } from "../components/SiteBrowserOverlay";
+import { TaskNotifications } from "../components/TaskNotifications";
 import { useTranslation, type TranslationKey } from "../i18n";
 import { startDeepLinkListener } from "../lib/deep-link";
 import { useAppearanceStore } from "../store/appearance";
 import { useBrowseStore } from "../store/browse";
 import { BrowsePage } from "./browse";
+import { DownloadsPage } from "./downloads";
 import { HistoryPage } from "./history";
 import { LibraryPage } from "./library";
 import { SettingsPage } from "./settings";
@@ -20,10 +22,24 @@ import { UpdatesPage } from "./updates";
 
 type NavItem = {
   compactKey: TranslationKey;
-  icon: "library" | "browse" | "updates" | "history" | "tasks" | "settings";
+  icon:
+    | "library"
+    | "browse"
+    | "updates"
+    | "history"
+    | "downloads"
+    | "tasks"
+    | "settings";
   labelKey: TranslationKey;
-  to: "/" | "/browse" | "/updates" | "/history" | "/tasks" | "/settings";
-  visibleWhen?: "updates" | "history";
+  to:
+    | "/"
+    | "/browse"
+    | "/updates"
+    | "/history"
+    | "/downloads"
+    | "/tasks"
+    | "/settings";
+  visibleWhen?: "updates" | "history" | "downloads" | "tasks";
 };
 
 const NAV_ITEMS: readonly NavItem[] = [
@@ -49,10 +65,18 @@ const NAV_ITEMS: readonly NavItem[] = [
     visibleWhen: "history",
   },
   {
+    to: "/downloads",
+    labelKey: "nav.downloads",
+    compactKey: "nav.downloads",
+    icon: "downloads",
+    visibleWhen: "downloads",
+  },
+  {
     to: "/tasks",
     labelKey: "nav.tasks",
     compactKey: "nav.tasks",
     icon: "tasks",
+    visibleWhen: "tasks",
   },
   {
     to: "/settings",
@@ -62,7 +86,14 @@ const NAV_ITEMS: readonly NavItem[] = [
   },
 ] as const;
 
-type PersistentPage = "library" | "browse" | "updates" | "history" | "tasks" | "settings";
+type PersistentPage =
+  | "library"
+  | "browse"
+  | "updates"
+  | "history"
+  | "downloads"
+  | "tasks"
+  | "settings";
 
 function getPersistentPage(pathname: string): PersistentPage | null {
   switch (pathname) {
@@ -74,6 +105,8 @@ function getPersistentPage(pathname: string): PersistentPage | null {
       return "updates";
     case "/history":
       return "history";
+    case "/downloads":
+      return "downloads";
     case "/tasks":
       return "tasks";
     case "/settings":
@@ -114,10 +147,17 @@ function PersistentPageSlot({
 
 function isNavItemVisible(
   item: NavItem,
-  visible: { history: boolean; updates: boolean },
+  visible: {
+    downloads: boolean;
+    history: boolean;
+    tasks: boolean;
+    updates: boolean;
+  },
 ): boolean {
   if (item.visibleWhen === "history") return visible.history;
   if (item.visibleWhen === "updates") return visible.updates;
+  if (item.visibleWhen === "downloads") return visible.downloads;
+  if (item.visibleWhen === "tasks") return visible.tasks;
   return true;
 }
 
@@ -164,6 +204,15 @@ function NavIcon({ icon }: { icon: NavItem["icon"] }) {
         <svg {...common}>
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7v5l3 2" />
+        </svg>
+      );
+    case "downloads":
+      return (
+        <svg {...common}>
+          <path d="M4 5h16v4H4z" />
+          <path d="M6 9v10h12V9" />
+          <path d="M9 14h6" />
+          <path d="m12 11 3 3-3 3" />
         </svg>
       );
     case "tasks":
@@ -222,6 +271,8 @@ export function RootLayout() {
   const showLabelsInNav = useAppearanceStore((s) => s.showLabelsInNav);
   const showHistoryTab = useAppearanceStore((s) => s.showHistoryTab);
   const showUpdatesTab = useAppearanceStore((s) => s.showUpdatesTab);
+  const showDownloadsTab = useAppearanceStore((s) => s.showDownloadsTab);
+  const showTasksTab = useAppearanceStore((s) => s.showTasksTab);
   const location = useRouterState({
     select: (state) => ({
       pathname: state.location.pathname,
@@ -300,7 +351,9 @@ export function RootLayout() {
     visitedPages.has(page) || activePersistentPage === page;
   const navItems = NAV_ITEMS.filter((item) =>
     isNavItemVisible(item, {
+      downloads: showDownloadsTab,
       history: showHistoryTab,
+      tasks: showTasksTab,
       updates: showUpdatesTab,
     }),
   );
@@ -376,6 +429,11 @@ export function RootLayout() {
             <HistoryPage />
           </PersistentPageSlot>
         ) : null}
+        {pageVisited("downloads") ? (
+          <PersistentPageSlot active={activePersistentPage === "downloads"}>
+            <DownloadsPage />
+          </PersistentPageSlot>
+        ) : null}
         {pageVisited("tasks") ? (
           <PersistentPageSlot active={activePersistentPage === "tasks"}>
             <TasksPage />
@@ -404,6 +462,7 @@ export function RootLayout() {
         ))}
       </nav>
       <SiteBrowserOverlay />
+      <TaskNotifications />
     </AppShell>
   );
 }

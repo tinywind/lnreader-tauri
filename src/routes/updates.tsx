@@ -34,7 +34,7 @@ import {
 } from "../db/queries/chapter";
 import {
   enqueueChapterDownload,
-  getChapterDownloadStatus,
+  listChapterDownloadStatuses,
   subscribeChapterDownloads,
   type ChapterDownloadStatus,
 } from "../lib/tasks/chapter-download";
@@ -43,6 +43,10 @@ import {
   type UpdateCheckFailure,
   type UpdateCheckResult,
 } from "../lib/updates/check-library-updates";
+import {
+  getUpdatesIndexRevision,
+  subscribeUpdatesIndexChanges,
+} from "../lib/updates/update-index-events";
 import {
   formatDateTimeForLocale,
   useTranslation,
@@ -53,6 +57,8 @@ import { useUpdatesStore } from "../store/updates";
 import "../styles/updates.css";
 
 const UPDATES_PAGE_SIZE = 100;
+const UPDATES_INDEX_REFRESH_DEBOUNCE_MS = 500;
+const UPDATES_INDEX_REFRESH_LIMIT = UPDATES_PAGE_SIZE;
 const LOAD_MORE_THRESHOLD_PX = 480;
 
 function formatDateTime(epochSeconds: number, locale: AppLocale): string {
@@ -495,6 +501,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
     (state) => state.markChapterDownloaded,
   );
   const mergeFirstPage = useUpdatesStore((state) => state.mergeFirstPage);
+  const replaceWindow = useUpdatesStore((state) => state.replaceWindow);
   const initialLocalLoadRequested = useRef(false);
   const [downloadStatuses, setDownloadStatuses] = useState<
     ReadonlyMap<number, ChapterDownloadStatus>
@@ -506,11 +513,14 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
   });
 
   const check = useMutation({
-    mutationFn: () =>
-      checkLibraryUpdates(UPDATES_PAGE_SIZE, {
+    mutationFn: () => {
+      const loadedWindowSize = useUpdatesStore.getState().updates.length;
+      return checkLibraryUpdates(Math.max(UPDATES_PAGE_SIZE, loadedWindowSize), {
+        aggregateTaskTitle: t("tasks.task.checkLibraryUpdates"),
         taskTitle: (novel) =>
           t("tasks.task.checkUpdates", { name: novel.name }),
-      }),
+      });
+    },
     onSuccess: applyCheckResult,
   });
 
@@ -562,6 +572,63 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
   }, [active, hasLoaded, refreshFirstPage]);
 
   useEffect(() => {
+    let disposed = false;
+    let refreshRunning = false;
+    let dirtyWhileRefreshing = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    function clearRefreshTimer() {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = null;
+    }
+
+    function scheduleRefresh() {
+      if (disposed || !useUpdatesStore.getState().hasLoaded) return;
+      clearRefreshTimer();
+      timer = setTimeout(() => {
+        timer = null;
+        void refreshLoadedWindow();
+      }, UPDATES_INDEX_REFRESH_DEBOUNCE_MS);
+    }
+
+    async function refreshLoadedWindow() {
+      if (disposed || !useUpdatesStore.getState().hasLoaded) return;
+      if (refreshRunning) {
+        dirtyWhileRefreshing = true;
+        return;
+      }
+
+      refreshRunning = true;
+      const startedAtRevision = getUpdatesIndexRevision();
+      try {
+        const page = await listLibraryUpdatesPage(UPDATES_INDEX_REFRESH_LIMIT);
+        if (disposed) return;
+        if (getUpdatesIndexRevision() === startedAtRevision) {
+          replaceWindow(page);
+        } else {
+          dirtyWhileRefreshing = true;
+        }
+      } catch {
+        return;
+      } finally {
+        refreshRunning = false;
+        if (!disposed && dirtyWhileRefreshing) {
+          dirtyWhileRefreshing = false;
+          scheduleRefresh();
+        }
+      }
+    }
+
+    const unsubscribe = subscribeUpdatesIndexChanges(scheduleRefresh);
+    return () => {
+      disposed = true;
+      clearRefreshTimer();
+      unsubscribe();
+    };
+  }, [replaceWindow]);
+
+  useEffect(() => {
     return subscribeChapterDownloads((event) => {
       setDownloadStatuses((current) => {
         const next = new Map(current);
@@ -580,8 +647,10 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
   }, [markChapterDownloaded, queryClient]);
 
   useEffect(() => {
+    const currentStatuses = listChapterDownloadStatuses();
+
     for (const entry of updates) {
-      const status = getChapterDownloadStatus(entry.chapterId);
+      const status = currentStatuses.get(entry.chapterId);
       if (status?.kind === "done" && !entry.isDownloaded) {
         markChapterDownloaded(entry.chapterId);
       }
@@ -591,7 +660,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
       let changed = false;
       const next = new Map(current);
       for (const entry of updates) {
-        const status = getChapterDownloadStatus(entry.chapterId);
+        const status = currentStatuses.get(entry.chapterId);
         if (status?.kind === "cancelled") {
           if (next.delete(entry.chapterId)) changed = true;
           continue;

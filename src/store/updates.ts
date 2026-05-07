@@ -16,6 +16,7 @@ interface UpdatesState {
   applyCheckResult: (result: UpdateCheckResult) => void;
   markChapterDownloaded: (chapterId: number) => void;
   mergeFirstPage: (page: LibraryUpdatesPage) => void;
+  replaceWindow: (page: LibraryUpdatesPage) => void;
 }
 
 function mergeRows(
@@ -83,16 +84,12 @@ export const useUpdatesStore = create<UpdatesState>((set) => ({
       };
     }),
   applyCheckResult: (result) =>
-    set((state) => {
-      const hasMoreUpdates = result.hasMoreUpdates || state.hasMoreUpdates;
-      const updates = mergeRows(result.updates, state.updates);
-      return {
-        hasLoaded: true,
-        hasMoreUpdates,
-        lastCheckResult: result,
-        nextUpdateCursor: getNextCursor(updates, hasMoreUpdates),
-        updates,
-      };
+    set({
+      hasLoaded: true,
+      hasMoreUpdates: result.hasMoreUpdates,
+      lastCheckResult: result,
+      nextUpdateCursor: result.nextUpdateCursor,
+      updates: result.updates,
     }),
   markChapterDownloaded: (chapterId) =>
     set((state) => ({
@@ -117,5 +114,12 @@ export const useUpdatesStore = create<UpdatesState>((set) => ({
         nextUpdateCursor: getNextCursor(updates, hasMoreUpdates),
         updates,
       };
+    }),
+  replaceWindow: (page) =>
+    set({
+      hasLoaded: true,
+      hasMoreUpdates: page.hasMore,
+      nextUpdateCursor: page.nextCursor,
+      updates: page.updates,
     }),
 }));

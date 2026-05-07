@@ -15,9 +15,13 @@ import {
   listChaptersByNovel,
   markChapterOpened,
   setChapterBookmark,
+  type ChapterListRow,
   type ChapterRow,
   updateChapterProgress,
 } from "../db/queries/chapter";
+import { getNovelById } from "../db/queries/novel";
+import { enqueueChapterDownload } from "../lib/tasks/chapter-download";
+import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { readerRoute } from "../router";
 import { useLibraryStore } from "../store/library";
 import { useReaderStore } from "../store/reader";
@@ -65,7 +69,7 @@ function chapterDetailKey(chapterId: number) {
 }
 
 function getChapterLabel(
-  chapter: Pick<ChapterRow, "chapterNumber" | "position">,
+  chapter: Pick<ChapterListRow, "chapterNumber" | "position">,
   t: (key: TranslationKey) => string,
 ) {
   const prefix = t("history.chapterPrefix");
@@ -196,10 +200,10 @@ function ReaderChapterPanel({
   loading,
   onOpenChapter,
 }: {
-  chapters: ChapterRow[];
+  chapters: ChapterListRow[];
   currentChapterId: number | undefined;
   loading: boolean;
-  onOpenChapter: (chapterId: number) => void;
+  onOpenChapter: (chapter: ChapterListRow) => void;
 }) {
   const { t } = useTranslation();
 
@@ -229,7 +233,7 @@ function ReaderChapterPanel({
                 data-current={current}
                 data-status={status}
                 key={item.id}
-                onClick={() => onOpenChapter(item.id)}
+                onClick={() => onOpenChapter(item)}
                 title={item.name}
                 type="button"
               >
@@ -314,6 +318,7 @@ export function ReaderPage() {
   const queryClient = useQueryClient();
   const contentRef = useRef<ReaderContentHandle | null>(null);
   const openedChapterRef = useRef<number | null>(null);
+  const openRequestRef = useRef(0);
 
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const setLastReadChapter = useReaderStore(
@@ -339,7 +344,7 @@ export function ReaderPage() {
         recordHistory: !incognitoMode,
       }),
     onMutate: (progress) => {
-      const applyProgress = (chapter: ChapterRow): ChapterRow => ({
+      const applyProgress = <T extends ChapterListRow>(chapter: T): T => ({
         ...chapter,
         progress,
         unread: progress >= FINISHED_PROGRESS ? false : chapter.unread,
@@ -353,15 +358,15 @@ export function ReaderPage() {
         (chapter) => (chapter ? applyProgress(chapter) : chapter),
       );
       if (currentNovelId > 0) {
-        const updateChapterList = (chapters: ChapterRow[] | undefined) =>
+        const updateChapterList = (chapters: ChapterListRow[] | undefined) =>
           chapters?.map((chapter) =>
             chapter.id === chapterId ? applyProgress(chapter) : chapter,
           );
-        queryClient.setQueryData<ChapterRow[]>(
+        queryClient.setQueryData<ChapterListRow[]>(
           ["chapter", "list", currentNovelId],
           updateChapterList,
         );
-        queryClient.setQueryData<ChapterRow[]>(
+        queryClient.setQueryData<ChapterListRow[]>(
           ["novel", "detail", currentNovelId, "chapters"],
           updateChapterList,
         );
@@ -378,6 +383,7 @@ export function ReaderPage() {
         void queryClient.invalidateQueries({ queryKey: ["chapter", "history"] });
       }
       if (progress >= FINISHED_PROGRESS) {
+        markUpdatesIndexDirty("read-progress");
         void queryClient.invalidateQueries({ queryKey: ["chapter", "updates"] });
       }
     },
@@ -422,12 +428,53 @@ export function ReaderPage() {
   );
 
   const openChapter = useCallback(
-    (targetChapterId: number) => {
-      if (targetChapterId === chapterId) return;
+    async (targetChapter: ChapterListRow) => {
+      if (targetChapter.id === chapterId && targetChapter.isDownloaded) return;
+      const requestId = openRequestRef.current + 1;
+      openRequestRef.current = requestId;
       openedChapterRef.current = null;
-      void navigate({ to: "/reader", search: { chapterId: targetChapterId } });
+
+      if (targetChapter.isDownloaded) {
+        void navigate({ to: "/reader", search: { chapterId: targetChapter.id } });
+        return;
+      }
+
+      try {
+        const novel = await queryClient.fetchQuery({
+          queryKey: ["novel", "detail", targetChapter.novelId],
+          queryFn: () => getNovelById(targetChapter.novelId),
+        });
+        if (!novel) return;
+
+        await enqueueChapterDownload({
+          id: targetChapter.id,
+          pluginId: novel.pluginId,
+          chapterPath: targetChapter.path,
+          chapterName: targetChapter.name,
+          novelId: novel.id,
+          novelName: novel.name,
+          priority: "interactive",
+          title: t("tasks.task.downloadChapter", { name: targetChapter.name }),
+        }).promise;
+        if (openRequestRef.current !== requestId) return;
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: chapterDetailKey(targetChapter.id),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["chapter", "list", targetChapter.novelId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["novel", "detail", targetChapter.novelId, "chapters"],
+          }),
+        ]);
+        void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+        void navigate({ to: "/reader", search: { chapterId: targetChapter.id } });
+      } catch {
+        // The reader stays on the current chapter if download cannot finish.
+      }
     },
-    [chapterId, navigate],
+    [chapterId, navigate, queryClient, t],
   );
 
   const handleReaderBack = useCallback(() => {

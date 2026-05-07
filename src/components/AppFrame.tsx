@@ -112,6 +112,7 @@ interface StateViewProps {
     iconOnly?: boolean;
     label: string;
     onClick: () => void;
+    size?: "sm" | "lg";
   };
   color?: AlertProps["color"];
   message?: ReactNode;
@@ -133,7 +134,7 @@ export function StateView({
           label={action.label}
           mt="md"
           onClick={action.onClick}
-          size="sm"
+          size={action.size ?? "sm"}
           type="button"
         >
           {action.icon}

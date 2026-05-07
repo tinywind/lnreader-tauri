@@ -24,6 +24,48 @@ function isActiveTask(task: TaskRecord): boolean {
   return ACTIVE_STATUSES.has(task.status);
 }
 
+function taskQueueStatusRank(status: TaskStatus): number {
+  switch (status) {
+    case "running":
+      return 0;
+    case "queued":
+      return 1;
+    case "failed":
+      return 2;
+    case "cancelled":
+      return 3;
+    case "succeeded":
+      return 4;
+  }
+}
+
+function taskQueuePriorityRank(priority: TaskPriority): number {
+  switch (priority) {
+    case "interactive":
+      return 0;
+    case "normal":
+      return 1;
+    case "background":
+      return 2;
+  }
+}
+
+function compareTaskQueueOrder(left: TaskRecord, right: TaskRecord): number {
+  const status =
+    taskQueueStatusRank(left.status) - taskQueueStatusRank(right.status);
+  if (status !== 0) return status;
+
+  if (isActiveTask(left) && isActiveTask(right)) {
+    const priority =
+      taskQueuePriorityRank(left.priority) -
+      taskQueuePriorityRank(right.priority);
+    if (priority !== 0) return priority;
+    return left.createdAt - right.createdAt;
+  }
+
+  return right.createdAt - left.createdAt;
+}
+
 function taskStatusKey(status: TaskStatus): TranslationKey {
   switch (status) {
     case "queued":
@@ -95,6 +137,7 @@ function hasBlockingSourceTask(
 }
 
 function isSourceQueuePaused(task: TaskRecord, snapshot: TaskSnapshot): boolean {
+  if (task.priority === "interactive") return false;
   return Boolean(
     task.source &&
       isActiveTask(task) &&
@@ -288,13 +331,16 @@ export function TasksPage() {
   const [collapsedSourceIds, setCollapsedSourceIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const mainTasks = snapshot.records.filter((task) => task.lane === "main");
-  const sourceTasks = snapshot.records.filter((task) => task.lane === "source");
+  const mainTasks = snapshot.records
+    .filter((task) => task.lane === "main")
+    .sort(compareTaskQueueOrder);
+  const sourceTasks = snapshot.records
+    .filter((task) => task.lane === "source")
+    .sort(compareTaskQueueOrder);
   const sourceGroups = [
     ...new Set(sourceTasks.map((task) => task.source?.id)),
   ]
     .filter((sourceId): sourceId is string => typeof sourceId === "string")
-    .sort((left, right) => left.localeCompare(right))
     .map((sourceId) => ({
       sourceId,
       sourceName:

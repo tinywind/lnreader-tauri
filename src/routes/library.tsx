@@ -15,7 +15,11 @@ import {
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { PageFrame, StateView } from "../components/AppFrame";
-import { DownloadGlyph, DownloadedGlyph } from "../components/ActionGlyphs";
+import {
+  DownloadGlyph,
+  DownloadedGlyph,
+  RefreshGlyph,
+} from "../components/ActionGlyphs";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
 import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
 import { IconButton } from "../components/IconButton";
@@ -32,17 +36,22 @@ import {
   updateCategory,
   type LibraryCategory,
 } from "../db/queries/category";
-import { listChaptersByNovel, type ChapterRow } from "../db/queries/chapter";
+import {
+  listChaptersByNovel,
+  type ChapterListRow,
+} from "../db/queries/chapter";
 import {
   getNovelById,
   listLibraryNovels,
   type LibraryNovel,
 } from "../db/queries/novel";
 import {
-  enqueueChapterDownload,
+  enqueueChapterDownloadBatch,
   getChapterDownloadStatus,
+  type ChapterDownloadJob,
   type ChapterDownloadStatus,
 } from "../lib/tasks/chapter-download";
+import { refreshLibraryMetadata } from "../lib/updates/refresh-library-metadata";
 import {
   useLibraryStore,
   type LibraryDisplayMode,
@@ -137,7 +146,7 @@ function isActiveChapterDownloadStatus(
   );
 }
 
-function canQueueChapterDownload(chapter: ChapterRow): boolean {
+function canQueueChapterDownload(chapter: ChapterListRow): boolean {
   return (
     !chapter.isDownloaded &&
     !isActiveChapterDownloadStatus(getChapterDownloadStatus(chapter.id))
@@ -146,9 +155,9 @@ function canQueueChapterDownload(chapter: ChapterRow): boolean {
 
 function getLibraryBatchDownloadTargets(
   mode: LibraryBatchDownloadMode,
-  chapters: readonly ChapterRow[],
+  chapters: readonly ChapterListRow[],
   lastReadChapterId: number | undefined,
-): ChapterRow[] {
+): ChapterListRow[] {
   const readingOrder = [...chapters].sort(
     (left, right) => left.position - right.position,
   );
@@ -296,7 +305,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
 
   const batchDownloadMutation = useMutation({
     mutationFn: async (mode: LibraryBatchDownloadMode) => {
-      const scheduledDownloads: Promise<void>[] = [];
+      const jobs: ChapterDownloadJob[] = [];
 
       for (const novelId of selectedIds) {
         const novel = await getNovelById(novelId);
@@ -310,27 +319,44 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
         );
 
         for (const chapter of targetChapters) {
-          scheduledDownloads.push(
-            enqueueChapterDownload({
-              id: chapter.id,
-              pluginId: novel.pluginId,
-              chapterPath: chapter.path,
-              chapterName: chapter.name,
-              novelId: novel.id,
-              novelName: novel.name,
-              title: t("tasks.task.downloadChapter", { name: chapter.name }),
-            }).promise.catch(() => undefined),
-          );
+          jobs.push({
+            id: chapter.id,
+            pluginId: novel.pluginId,
+            chapterPath: chapter.path,
+            chapterName: chapter.name,
+            novelId: novel.id,
+            novelName: novel.name,
+            title: t("tasks.task.downloadChapter", { name: chapter.name }),
+          });
         }
       }
 
-      if (scheduledDownloads.length > 0) {
-        void Promise.all(scheduledDownloads).then(() => {
-          void queryClient.invalidateQueries({ queryKey: ["novel"] });
-        });
-      }
+      if (jobs.length === 0) return 0;
 
-      return scheduledDownloads.length;
+      const handle = enqueueChapterDownloadBatch({
+        jobs,
+        title: t("tasks.task.downloadChapterBatch", { count: jobs.length }),
+      });
+      try {
+        const result = await handle.promise;
+        return result.total;
+      } finally {
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+      }
+    },
+  });
+
+  const metadataRefreshMutation = useMutation({
+    mutationFn: () =>
+      refreshLibraryMetadata({
+        aggregateTaskTitle: t("tasks.task.refreshLibraryMetadata"),
+        categoryId: selectedCategoryId,
+        taskTitle: (novel) =>
+          t("tasks.task.refreshNovelMetadata", { name: novel.name }),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["category"] });
+      void queryClient.invalidateQueries({ queryKey: ["novel"] });
     },
   });
 
@@ -452,6 +478,25 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
   const showMobileSearch = mobileSearchOpen || search.trim() !== "";
   const tags = getLibraryTags(rows, t);
   const sortLabel = t(SORT_LABEL_KEYS[sortOrder]);
+  const activeCategoryCount =
+    selectedCategoryId == null
+      ? allCategoryCount
+      : selectedCategoryId === UNCATEGORIZED_CATEGORY_ID
+        ? uncategorizedCategoryCount
+        : (manualCategories.find((category) => category.id === selectedCategoryId)
+            ?.novelCount ?? 0);
+  const metadataRefreshStatus = metadataRefreshMutation.isPending
+    ? t("library.refreshMetadataRunning")
+    : metadataRefreshMutation.error
+      ? t("library.refreshMetadataFailed")
+      : metadataRefreshMutation.data
+        ? t("library.refreshMetadataResult", {
+            checked: metadataRefreshMutation.data.checkedNovels,
+            failed: metadataRefreshMutation.data.failures.length,
+            skipped: metadataRefreshMutation.data.skippedNovels,
+            total: metadataRefreshMutation.data.targetNovels,
+          })
+        : null;
 
   return (
     <>
@@ -538,6 +583,23 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                   onChange={setDisplayMode}
                   t={t}
                 />
+                <IconButton
+                  className="lnr-library-icon-button lnr-library-refresh-button"
+                  disabled={
+                    activeCategoryCount === 0 ||
+                    metadataRefreshMutation.isPending
+                  }
+                  label={t("library.refreshMetadata")}
+                  onClick={() => metadataRefreshMutation.mutate()}
+                  size="sm"
+                  title={t("library.refreshMetadata")}
+                >
+                  {metadataRefreshMutation.isPending ? (
+                    <Loader size={14} />
+                  ) : (
+                    <RefreshGlyph />
+                  )}
+                </IconButton>
                 <Popover position="bottom-end" shadow="md" width={390}>
                   <Popover.Target>
                     <IconButton
@@ -645,6 +707,9 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               <span>{t("library.statusUpdated", { time: stats.lastUpdatedLabel })}</span>
               <span>{activeCategory}</span>
               <span>{t("library.statusSort", { sort: sortLabel })}</span>
+              {metadataRefreshStatus ? (
+                <span>{metadataRefreshStatus}</span>
+              ) : null}
             </ConsoleStatusStrip>
           </section>
         </div>

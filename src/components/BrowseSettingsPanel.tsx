@@ -20,6 +20,12 @@ export function BrowseSettingsPanel() {
   const setGlobalSearchTimeoutSeconds = useBrowseStore(
     (s) => s.setGlobalSearchTimeoutSeconds,
   );
+  const chapterDownloadCooldownSeconds = useBrowseStore(
+    (s) => s.chapterDownloadCooldownSeconds,
+  );
+  const setChapterDownloadCooldownSeconds = useBrowseStore(
+    (s) => s.setChapterDownloadCooldownSeconds,
+  );
 
   return (
     <Stack gap="md">
@@ -48,6 +54,21 @@ export function BrowseSettingsPanel() {
           onChange={(value) => {
             if (typeof value === "number") {
               setGlobalSearchTimeoutSeconds(value);
+            }
+          }}
+        />
+      </SettingsFieldRow>
+      <SettingsFieldRow label={t("browseSettings.chapterDownloadCooldown")}>
+        <NumberInput
+          value={chapterDownloadCooldownSeconds}
+          min={0}
+          max={60}
+          step={1}
+          clampBehavior="strict"
+          suffix={` ${t("common.seconds")}`}
+          onChange={(value) => {
+            if (typeof value === "number") {
+              setChapterDownloadCooldownSeconds(value);
             }
           }}
         />

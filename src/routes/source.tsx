@@ -255,7 +255,7 @@ export function SourcePage() {
       return enqueueSourceTask<NovelItem[]>({
         plugin,
         kind: taskKind,
-        priority: isSearchMode ? "interactive" : "normal",
+        priority: "interactive",
         title,
         subject: { path: `${mode}:${page}` },
         dedupeKey: `source.list:${plugin.id}:${mode}:${trimmedSearch}:${JSON.stringify(activeFilters)}:${page}`,

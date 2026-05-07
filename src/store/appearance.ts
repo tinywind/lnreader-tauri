@@ -13,6 +13,8 @@ interface AppearanceState {
   appLocale: AppLocale;
   showHistoryTab: boolean;
   showUpdatesTab: boolean;
+  showDownloadsTab: boolean;
+  showTasksTab: boolean;
   showLabelsInNav: boolean;
   setThemeMode: (themeMode: unknown) => void;
   setAppThemeId: (appThemeId: unknown) => void;
@@ -21,6 +23,8 @@ interface AppearanceState {
   setAppLocale: (appLocale: string) => void;
   setShowHistoryTab: (showHistoryTab: boolean) => void;
   setShowUpdatesTab: (showUpdatesTab: boolean) => void;
+  setShowDownloadsTab: (showDownloadsTab: boolean) => void;
+  setShowTasksTab: (showTasksTab: boolean) => void;
   setShowLabelsInNav: (showLabelsInNav: boolean) => void;
   resetAppearance: () => void;
 }
@@ -33,6 +37,8 @@ export const DEFAULT_APPEARANCE = {
   appLocale: "en" as AppLocale,
   showHistoryTab: true,
   showUpdatesTab: true,
+  showDownloadsTab: true,
+  showTasksTab: true,
   showLabelsInNav: true,
 };
 
@@ -70,6 +76,8 @@ export const useAppearanceStore = create<AppearanceState>()(
         set({ appLocale: normalizeAppLocale(appLocale) }),
       setShowHistoryTab: (showHistoryTab) => set({ showHistoryTab }),
       setShowUpdatesTab: (showUpdatesTab) => set({ showUpdatesTab }),
+      setShowDownloadsTab: (showDownloadsTab) => set({ showDownloadsTab }),
+      setShowTasksTab: (showTasksTab) => set({ showTasksTab }),
       setShowLabelsInNav: (showLabelsInNav) => set({ showLabelsInNav }),
       resetAppearance: () => set({ ...DEFAULT_APPEARANCE }),
     }),
@@ -83,6 +91,8 @@ export const useAppearanceStore = create<AppearanceState>()(
         appLocale: state.appLocale,
         showHistoryTab: state.showHistoryTab,
         showUpdatesTab: state.showUpdatesTab,
+        showDownloadsTab: state.showDownloadsTab,
+        showTasksTab: state.showTasksTab,
         showLabelsInNav: state.showLabelsInNav,
       }),
       merge: (persistedState, currentState) => {

@@ -473,6 +473,10 @@
   flex: 0 0 auto;
 }
 
+.lnr-library-refresh-button {
+  flex: 0 0 auto;
+}
+
 .lnr-library-settings-popover {
   border-color: var(--lnr-design-rule-strong);
   border-radius: 6px;
@@ -993,6 +997,10 @@
 
   .lnr-library-icon-button {
     display: none;
+  }
+
+  .lnr-library-refresh-button {
+    display: inline-flex;
   }
 
   .lnr-library-mobile-search-button,

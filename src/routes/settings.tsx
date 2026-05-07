@@ -39,6 +39,7 @@ import {
 } from "../lib/backup/io";
 import { enqueueMainTask } from "../lib/tasks/main-tasks";
 import type { MainTaskKind } from "../lib/tasks/scheduler";
+import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
 import {
   DEFAULT_APPEARANCE,
@@ -50,6 +51,10 @@ import {
   DEFAULT_USER_AGENT,
   useUserAgentStore,
 } from "../store/user-agent";
+import {
+  normalizeTaskNotificationMode,
+  useNotificationStore,
+} from "../store/notifications";
 import { APP_THEME_OPTIONS } from "../theme/md3";
 import "../styles/settings.css";
 
@@ -162,6 +167,7 @@ function StatusBanner({ status }: { status: Status }) {
 
 function AppSettingsSection() {
   const appearance = useAppearanceStore();
+  const notifications = useNotificationStore();
   const { t } = useTranslation();
 
   return (
@@ -243,6 +249,39 @@ function AppSettingsSection() {
       </SettingsSection>
 
       <SettingsSection
+        title={t("settings.app.notifications.title")}
+        summary={t("settings.app.notifications.summary")}
+      >
+        <SettingsFieldRow
+          label={t("settings.app.taskNotifications.label")}
+          description={t("settings.app.taskNotifications.description")}
+        >
+          <Select
+            data={[
+              {
+                value: "off",
+                label: t("settings.app.taskNotifications.off"),
+              },
+              {
+                value: "completion",
+                label: t("settings.app.taskNotifications.completion"),
+              },
+              {
+                value: "progress",
+                label: t("settings.app.taskNotifications.progress"),
+              },
+            ]}
+            value={notifications.taskProgressMode}
+            onChange={(taskProgressMode) =>
+              notifications.setTaskProgressMode(
+                normalizeTaskNotificationMode(taskProgressMode),
+              )
+            }
+          />
+        </SettingsFieldRow>
+      </SettingsSection>
+
+      <SettingsSection
         title={t("settings.app.navigation.title")}
         summary={t("settings.app.navigation.summary")}
       >
@@ -265,6 +304,28 @@ function AppSettingsSection() {
             checked={appearance.showUpdatesTab}
             onChange={(event) =>
               appearance.setShowUpdatesTab(event.currentTarget.checked)
+            }
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.app.cacheTab.label")}
+          description={t("settings.app.cacheTab.description")}
+        >
+          <Switch
+            checked={appearance.showDownloadsTab}
+            onChange={(event) =>
+              appearance.setShowDownloadsTab(event.currentTarget.checked)
+            }
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.app.tasksTab.label")}
+          description={t("settings.app.tasksTab.description")}
+        >
+          <Switch
+            checked={appearance.showTasksTab}
+            onChange={(event) =>
+              appearance.setShowTasksTab(event.currentTarget.checked)
             }
           />
         </SettingsFieldRow>
@@ -710,6 +771,9 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
         title,
         run: action,
       }).promise;
+      if (kind === "maintenance.clearUpdates" && result.rowsAffected > 0) {
+        markUpdatesIndexDirty("updates-cleared");
+      }
       setStatus({
         kind: "ok",
         message: t("settings.data.maintenanceDone", {
