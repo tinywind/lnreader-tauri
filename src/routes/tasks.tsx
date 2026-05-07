@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Badge, Group, Progress, Stack, Text } from "@mantine/core";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
 import {
@@ -21,10 +22,6 @@ const ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running"]);
 
 function isActiveTask(task: TaskRecord): boolean {
   return ACTIVE_STATUSES.has(task.status);
-}
-
-function isChapterTask(task: TaskRecord): boolean {
-  return task.kind.startsWith("chapter.");
 }
 
 function taskStatusKey(status: TaskStatus): TranslationKey {
@@ -100,6 +97,7 @@ function hasBlockingSourceTask(
 function isSourceQueuePaused(task: TaskRecord, snapshot: TaskSnapshot): boolean {
   return Boolean(
     task.source &&
+      isActiveTask(task) &&
       (snapshot.sourceQueuesPaused ||
         snapshot.pausedSourceIds.includes(task.source.id)),
   );
@@ -208,32 +206,75 @@ function TaskRow({
   );
 }
 
-function TaskList({
+function CollapseButton({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <TextButton size="sm" variant="subtle" onClick={onToggle}>
+      {collapsed ? t("tasks.expand") : t("tasks.collapse")}
+    </TextButton>
+  );
+}
+
+function TaskRows({
   emptyMessage,
   records,
-  title,
+  snapshot,
 }: {
   emptyMessage: string;
   records: TaskRecord[];
+  snapshot: TaskSnapshot;
+}) {
+  return records.length === 0 ? (
+    <Text className="lnr-task-empty">{emptyMessage}</Text>
+  ) : (
+    <Stack gap="xs">
+      {records.map((task) => (
+        <TaskRow
+          blockingSourceTask={hasBlockingSourceTask(task, snapshot.records)}
+          key={task.id}
+          snapshot={snapshot}
+          task={task}
+        />
+      ))}
+    </Stack>
+  );
+}
+
+function TaskQueuePanel({
+  collapsed,
+  emptyMessage,
+  onToggle,
+  records,
+  title,
+}: {
+  collapsed: boolean;
+  emptyMessage: string;
+  onToggle: () => void;
+  records: TaskRecord[];
   title: string;
 }) {
+  const { t } = useTranslation();
   const snapshot = useTaskSnapshot();
 
   return (
-    <ConsolePanel className="lnr-task-list" title={title}>
-      {records.length === 0 ? (
-        <Text className="lnr-task-empty">{emptyMessage}</Text>
-      ) : (
-        <Stack gap="xs">
-          {records.map((task) => (
-            <TaskRow
-              blockingSourceTask={hasBlockingSourceTask(task, snapshot.records)}
-              key={task.id}
-              snapshot={snapshot}
-              task={task}
-            />
-          ))}
-        </Stack>
+    <ConsolePanel className="lnr-task-list">
+      <ConsoleSectionHeader
+        title={title}
+        count={t("tasks.count", { count: records.length })}
+        actions={<CollapseButton collapsed={collapsed} onToggle={onToggle} />}
+      />
+      {collapsed ? null : (
+        <TaskRows
+          emptyMessage={emptyMessage}
+          records={records}
+          snapshot={snapshot}
+        />
       )}
     </ConsolePanel>
   );
@@ -242,28 +283,36 @@ function TaskList({
 export function TasksPage() {
   const { t } = useTranslation();
   const snapshot = useTaskSnapshot();
-  const activeMainTasks = snapshot.records.filter(
-    (task) => task.lane === "main" && isActiveTask(task),
+  const [mainCollapsed, setMainCollapsed] = useState(false);
+  const [sourceQueuesCollapsed, setSourceQueuesCollapsed] = useState(false);
+  const [collapsedSourceIds, setCollapsedSourceIds] = useState<Set<string>>(
+    () => new Set(),
   );
-  const activeSourceTasks = snapshot.records.filter(
-    (task) =>
-      task.lane === "source" && !isChapterTask(task) && isActiveTask(task),
-  );
-  const backgroundTasks = snapshot.records.filter(
-    (task) => isChapterTask(task) && isActiveTask(task),
-  );
-  const historyTasks = snapshot.records.filter((task) => !isActiveTask(task));
+  const mainTasks = snapshot.records.filter((task) => task.lane === "main");
+  const sourceTasks = snapshot.records.filter((task) => task.lane === "source");
   const sourceGroups = [
-    ...new Set(activeSourceTasks.map((task) => task.source?.id)),
+    ...new Set(sourceTasks.map((task) => task.source?.id)),
   ]
     .filter((sourceId): sourceId is string => typeof sourceId === "string")
+    .sort((left, right) => left.localeCompare(right))
     .map((sourceId) => ({
       sourceId,
       sourceName:
-        activeSourceTasks.find((task) => task.source?.id === sourceId)?.source
+        sourceTasks.find((task) => task.source?.id === sourceId)?.source
           ?.name ?? sourceId,
-      tasks: activeSourceTasks.filter((task) => task.source?.id === sourceId),
+      tasks: sourceTasks.filter((task) => task.source?.id === sourceId),
     }));
+  const toggleSourceGroup = (sourceId: string) => {
+    setCollapsedSourceIds((current) => {
+      const next = new Set(current);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
+    });
+  };
 
   return (
     <PageFrame className="lnr-tasks-page" size="wide">
@@ -312,54 +361,59 @@ export function TasksPage() {
       ) : null}
 
       <div className="lnr-task-board">
-        <TaskList
+        <TaskQueuePanel
+          collapsed={mainCollapsed}
           title={t("tasks.mainQueue")}
           emptyMessage={t("tasks.empty.main")}
-          records={activeMainTasks}
+          records={mainTasks}
+          onToggle={() => setMainCollapsed((collapsed) => !collapsed)}
         />
 
-        <ConsolePanel className="lnr-task-list" title={t("tasks.sourceQueues")}>
-          {sourceGroups.length === 0 ? (
+        <ConsolePanel className="lnr-task-list">
+          <ConsoleSectionHeader
+            title={t("tasks.sourceQueues")}
+            count={t("tasks.count", { count: sourceTasks.length })}
+            actions={
+              <CollapseButton
+                collapsed={sourceQueuesCollapsed}
+                onToggle={() =>
+                  setSourceQueuesCollapsed((collapsed) => !collapsed)
+                }
+              />
+            }
+          />
+          {sourceQueuesCollapsed ? null : sourceGroups.length === 0 ? (
             <Text className="lnr-task-empty">{t("tasks.empty.source")}</Text>
           ) : (
             <Stack gap="md">
-              {sourceGroups.map((group) => (
-                <section className="lnr-task-source-group" key={group.sourceId}>
-                  <ConsoleSectionHeader
-                    eyebrow={t("common.source")}
-                    title={group.sourceName}
-                    count={t("tasks.count", { count: group.tasks.length })}
-                  />
-                  <Stack gap="xs">
-                    {group.tasks.map((task) => (
-                      <TaskRow
-                        blockingSourceTask={hasBlockingSourceTask(
-                          task,
-                          snapshot.records,
-                        )}
-                        key={task.id}
+              {sourceGroups.map((group) => {
+                const collapsed = collapsedSourceIds.has(group.sourceId);
+                return (
+                  <section className="lnr-task-source-group" key={group.sourceId}>
+                    <ConsoleSectionHeader
+                      eyebrow={t("common.source")}
+                      title={group.sourceName}
+                      count={t("tasks.count", { count: group.tasks.length })}
+                      actions={
+                        <CollapseButton
+                          collapsed={collapsed}
+                          onToggle={() => toggleSourceGroup(group.sourceId)}
+                        />
+                      }
+                    />
+                    {collapsed ? null : (
+                      <TaskRows
+                        emptyMessage={t("tasks.empty.source")}
+                        records={group.tasks}
                         snapshot={snapshot}
-                        task={task}
                       />
-                    ))}
-                  </Stack>
-                </section>
-              ))}
+                    )}
+                  </section>
+                );
+              })}
             </Stack>
           )}
         </ConsolePanel>
-
-        <TaskList
-          title={t("tasks.backgroundDownloads")}
-          emptyMessage={t("tasks.empty.downloads")}
-          records={backgroundTasks}
-        />
-
-        <TaskList
-          title={t("tasks.history")}
-          emptyMessage={t("tasks.empty.history")}
-          records={historyTasks.slice(0, 50)}
-        />
       </div>
     </PageFrame>
   );
