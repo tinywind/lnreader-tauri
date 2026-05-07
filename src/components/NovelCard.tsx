@@ -163,9 +163,9 @@ export function NovelCard({
       style={{
         cursor: interactive ? "pointer" : "default",
         outline: selected
-          ? `3px solid ${theme.colors[theme.primaryColor]?.[5] ?? theme.primaryColor}`
+          ? `0.1875rem solid ${theme.colors[theme.primaryColor]?.[5] ?? theme.primaryColor}`
           : undefined,
-        outlineOffset: -3,
+        outlineOffset: "-0.1875rem",
         userSelect: "none",
       }}
     >

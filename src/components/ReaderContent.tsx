@@ -285,8 +285,8 @@ function ReaderContentInner(
 
   const viewportHeight =
     requestedViewportHeight ??
-    "calc(var(--lnr-app-content-height) - 56px)";
-  const overlayBottom = bottomOverlayOffset ?? 8;
+    "calc(var(--lnr-app-content-height) - 3.75rem)";
+  const overlayBottom = bottomOverlayOffset ?? "0.5rem";
   const isPagedReader = general.pageReader;
   const isTwoPageReader =
     isPagedReader && general.twoPageReader && twoPageMediaMatches;
@@ -801,14 +801,14 @@ function ReaderContentInner(
         <Box
           style={{
             position: "fixed",
-            left: 12,
-            right: 12,
+            left: "0.75rem",
+            right: "0.75rem",
             bottom: overlayBottom,
             display: "flex",
             justifyContent: "space-between",
-            gap: 12,
+            gap: "0.75rem",
             color: appearance.textColor,
-            fontSize: 12,
+            fontSize: "0.75rem",
             pointerEvents: "none",
             opacity: 0.78,
             zIndex: 4,

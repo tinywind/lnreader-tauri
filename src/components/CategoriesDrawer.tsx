@@ -56,7 +56,7 @@ export function CategoriesDrawer({
           <PlusIcon />
           <span>{t("categories.add")}</span>
         </UnstyledButton>
-        <ScrollArea.Autosize mah="calc(100vh - 150px)">
+        <ScrollArea.Autosize mah="calc(100vh - 9.375rem)">
           <Stack gap={2}>
             <DrawerCategoryButton
               active={selectedCategoryId === null}

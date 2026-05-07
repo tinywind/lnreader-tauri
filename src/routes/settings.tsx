@@ -46,8 +46,10 @@ import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
 import {
   DEFAULT_APPEARANCE,
-  MAX_UI_SCALE_PERCENT,
-  MIN_UI_SCALE_PERCENT,
+  MAX_ANDROID_VIEW_SCALE_PERCENT,
+  MAX_FONT_SCALE_PERCENT,
+  MIN_ANDROID_VIEW_SCALE_PERCENT,
+  MIN_FONT_SCALE_PERCENT,
   normalizeAppThemeId,
   normalizeAppThemeMode,
   useAppearanceStore,
@@ -174,7 +176,7 @@ function AppSettingsSection() {
   const appearance = useAppearanceStore();
   const notifications = useNotificationStore();
   const { t } = useTranslation();
-  const showAndroidUiScale = isAndroidRuntime();
+  const showAndroidViewScale = isAndroidRuntime();
 
   return (
     <Stack gap="md">
@@ -231,35 +233,63 @@ function AppSettingsSection() {
             }
           />
         </SettingsFieldRow>
-        {showAndroidUiScale ? (
+        {showAndroidViewScale ? (
           <SettingsFieldRow
-            label={t("settings.app.uiScale.label")}
-            description={t("settings.app.uiScale.description")}
+            layout="stacked"
+            label={t("settings.app.androidViewScale.label")}
+            description={t("settings.app.androidViewScale.description")}
           >
             <div className="lnr-settings-ui-scale-control">
               <Slider
-                value={appearance.uiScalePercent}
-                min={MIN_UI_SCALE_PERCENT}
-                max={MAX_UI_SCALE_PERCENT}
+                value={appearance.androidViewScalePercent}
+                min={MIN_ANDROID_VIEW_SCALE_PERCENT}
+                max={MAX_ANDROID_VIEW_SCALE_PERCENT}
                 step={5}
                 label={(value) => `${value}%`}
                 marks={[
-                  { value: MIN_UI_SCALE_PERCENT, label: "75%" },
-                  { value: 100, label: "100%" },
-                  { value: MAX_UI_SCALE_PERCENT, label: "150%" },
+                  { value: MIN_ANDROID_VIEW_SCALE_PERCENT, label: "75%" },
+                  { value: MAX_ANDROID_VIEW_SCALE_PERCENT, label: "100%" },
                 ]}
-                onChange={appearance.setUiScalePercent}
+                onChange={appearance.setAndroidViewScalePercent}
               />
               <NumberInput
-                value={appearance.uiScalePercent}
-                min={MIN_UI_SCALE_PERCENT}
-                max={MAX_UI_SCALE_PERCENT}
+                value={appearance.androidViewScalePercent}
+                min={MIN_ANDROID_VIEW_SCALE_PERCENT}
+                max={MAX_ANDROID_VIEW_SCALE_PERCENT}
                 step={5}
-                onChange={appearance.setUiScalePercent}
+                onChange={appearance.setAndroidViewScalePercent}
               />
             </div>
           </SettingsFieldRow>
         ) : null}
+        <SettingsFieldRow
+          layout="stacked"
+          label={t("settings.app.fontScale.label")}
+          description={t("settings.app.fontScale.description")}
+        >
+          <div className="lnr-settings-ui-scale-control">
+            <Slider
+              value={appearance.fontScalePercent}
+              min={MIN_FONT_SCALE_PERCENT}
+              max={MAX_FONT_SCALE_PERCENT}
+              step={5}
+              label={(value) => `${value}%`}
+              marks={[
+                { value: MIN_FONT_SCALE_PERCENT, label: "75%" },
+                { value: 100, label: "100%" },
+                { value: MAX_FONT_SCALE_PERCENT, label: "150%" },
+              ]}
+              onChange={appearance.setFontScalePercent}
+            />
+            <NumberInput
+              value={appearance.fontScalePercent}
+              min={MIN_FONT_SCALE_PERCENT}
+              max={MAX_FONT_SCALE_PERCENT}
+              step={5}
+              onChange={appearance.setFontScalePercent}
+            />
+          </div>
+        </SettingsFieldRow>
       </SettingsSection>
 
       <SettingsSection

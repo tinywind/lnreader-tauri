@@ -644,8 +644,8 @@ export function ReaderPage() {
   const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
   const readerOverlayBottom =
     fullPageReader && !readerChromeVisible
-      ? "calc(var(--lnr-safe-area-bottom) + 8px)"
-      : "calc(var(--lnr-app-bottom-inset) + 32px)";
+      ? "calc(var(--lnr-safe-area-bottom) + 0.5rem)"
+      : "calc(var(--lnr-app-bottom-inset) + 2rem)";
   const sharedFullPageReaderChromeVisible =
     fullPageReader && readerChromeVisible;
 

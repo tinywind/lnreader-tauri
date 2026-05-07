@@ -587,8 +587,8 @@ function TapZonePreview({
               fw={600}
               style={{
                 border: "1px solid var(--mantine-color-default-border)",
-                borderRadius: 4,
-                padding: "8px 4px",
+                borderRadius: "0.25rem",
+                padding: "0.5rem 0.25rem",
                 background: getTapActionBackground(action),
                 color: getTapActionColor(action),
               }}

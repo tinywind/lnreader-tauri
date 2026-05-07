@@ -366,9 +366,11 @@ export function RootLayout() {
   );
 
   return (
-      <AppShell
-        navbar={{
-        width: showLabelsInNav ? { sm: 56, "1201px": 184 } : 56,
+    <AppShell
+      navbar={{
+        width: showLabelsInNav
+          ? { sm: "3.5rem", "1201px": "11.5rem" }
+          : "3.5rem",
         breakpoint: "sm",
         collapsed: { mobile: true, desktop: readerFullPageActive },
       }}

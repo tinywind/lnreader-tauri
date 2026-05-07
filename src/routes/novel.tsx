@@ -57,6 +57,10 @@ import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { pluginManager } from "../lib/plugins/manager";
 import { novelRoute } from "../router";
 import { useTranslation } from "../i18n";
+import {
+  normalizeFontScalePercent,
+  useAppearanceStore,
+} from "../store/appearance";
 import { useLibraryStore } from "../store/library";
 import { useReaderStore } from "../store/reader";
 import "../styles/novel.css";
@@ -493,31 +497,36 @@ function VirtualChapterList({
   onOpen,
 }: VirtualChapterListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const fontScalePercent = useAppearanceStore(
+    (state) => state.fontScalePercent,
+  );
+  const chapterRowHeight =
+    CHAPTER_ROW_HEIGHT * (normalizeFontScalePercent(fontScalePercent) / 100);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(
-    CHAPTER_ROW_HEIGHT * CHAPTER_LIST_VISIBLE_ROWS,
+    chapterRowHeight * CHAPTER_LIST_VISIBLE_ROWS,
   );
-  const totalHeight = chapters.length * CHAPTER_ROW_HEIGHT;
+  const totalHeight = chapters.length * chapterRowHeight;
   const startIndex = Math.max(
     0,
-    Math.floor(scrollTop / CHAPTER_ROW_HEIGHT) - CHAPTER_LIST_OVERSCAN,
+    Math.floor(scrollTop / chapterRowHeight) - CHAPTER_LIST_OVERSCAN,
   );
   const endIndex = Math.min(
     chapters.length,
-    Math.ceil((scrollTop + viewportHeight) / CHAPTER_ROW_HEIGHT) +
+    Math.ceil((scrollTop + viewportHeight) / chapterRowHeight) +
       CHAPTER_LIST_OVERSCAN,
   );
   const visibleChapters = chapters.slice(startIndex, endIndex);
-  const offsetY = startIndex * CHAPTER_ROW_HEIGHT;
+  const offsetY = startIndex * chapterRowHeight;
   const listHeight = Math.min(chapters.length, CHAPTER_LIST_VISIBLE_ROWS) *
-    CHAPTER_ROW_HEIGHT;
+    chapterRowHeight;
 
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
 
     const updateViewportHeight = () => {
-      setViewportHeight(element.clientHeight || CHAPTER_ROW_HEIGHT);
+      setViewportHeight(element.clientHeight || chapterRowHeight);
     };
 
     updateViewportHeight();
@@ -534,7 +543,7 @@ function VirtualChapterList({
       resizeObserver?.disconnect();
       window.removeEventListener("resize", updateViewportHeight);
     };
-  }, []);
+  }, [chapterRowHeight]);
 
   useEffect(() => {
     const maxScrollTop = Math.max(0, totalHeight - viewportHeight);

@@ -1,20 +1,20 @@
 .lnr-novel-page {
-  --lnr-page-max-width: 1280px;
-  --lnr-page-block: 14px;
+  --lnr-page-max-width: 80rem;
+  --lnr-page-block: 0.875rem;
 }
 
 .lnr-novel-workspace {
-  --lnr-novel-hero-height: 260px;
+  --lnr-novel-hero-height: 16.25rem;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0.75rem;
 }
 
 .lnr-novel-hero-desktop {
   align-items: stretch;
   display: grid;
-  gap: 12px;
-  grid-template-columns: 168px minmax(0, 1fr) minmax(260px, 0.72fr);
+  gap: 0.75rem;
+  grid-template-columns: 10.5rem minmax(0, 1fr) minmax(16.25rem, 0.72fr);
 }
 
 .lnr-novel-cover-panel,
@@ -36,27 +36,27 @@
   align-items: center;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.625rem;
   grid-column: 1;
   justify-content: flex-start;
-  padding: 14px;
+  padding: 0.875rem;
 }
 
 .lnr-novel-info-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0.875rem;
   grid-column: 2;
   min-height: 0;
   overflow: hidden;
-  padding: 16px 18px;
+  padding: 1rem 1.125rem;
 }
 
 .lnr-novel-title-row {
   align-items: stretch;
   display: grid;
   flex: 1 1 auto;
-  gap: 10px;
+  gap: 0.625rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 0;
 }
@@ -75,7 +75,7 @@
   align-items: center;
   align-self: start;
   display: inline-flex;
-  gap: 6px;
+  gap: 0.375rem;
   justify-content: flex-end;
 }
 
@@ -108,14 +108,14 @@
 .lnr-novel-identity-strip {
   border-block: 1px solid var(--lnr-design-rule);
   flex: 0 0 auto;
-  padding-block: 8px;
+  padding-block: 0.5rem;
 }
 
 .lnr-novel-status-block {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.625rem;
   margin-top: auto;
   min-height: 0;
   overflow: hidden;
@@ -127,7 +127,7 @@
   border: 0;
   display: grid;
   flex: 0 0 auto;
-  gap: 10px;
+  gap: 0.625rem;
   grid-template-columns: minmax(0, 1fr) auto;
   margin-top: 0;
   padding: 0;
@@ -137,8 +137,8 @@
   align-content: flex-start;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
+  gap: 0.375rem;
+  margin-top: 0.625rem;
   min-height: 0;
 }
 
@@ -160,18 +160,18 @@
   font-family: var(--lnr-font-meta);
   font-size: 0.75rem;
   font-weight: 700;
-  gap: 10px;
-  grid-template-columns: minmax(160px, 1fr) auto;
+  gap: 0.625rem;
+  grid-template-columns: minmax(10rem, 1fr) auto;
 }
 
 .lnr-novel-progress-line .lnr-console-progress {
-  height: 7px;
+  height: 0.4375rem;
 }
 
 .lnr-novel-read-actions {
   align-items: center;
   display: inline-flex;
-  gap: 4px;
+  gap: 0.25rem;
   justify-content: flex-end;
 }
 
@@ -179,13 +179,13 @@
   align-items: center;
   background: var(--lnr-design-surface);
   border: 1px solid var(--lnr-design-rule-strong);
-  border-radius: 4px;
+  border-radius: 0.25rem;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 40px;
+  height: 2.5rem;
   justify-content: center;
-  width: 40px;
+  width: 2.5rem;
 }
 
 .lnr-novel-read-icon-button:hover:not(:disabled) {
@@ -194,8 +194,8 @@
 }
 
 .lnr-novel-read-icon-button:focus-visible {
-  outline: 2px solid var(--lnr-design-accent);
-  outline-offset: 2px;
+  outline: 0.125rem solid var(--lnr-design-accent);
+  outline-offset: 0.125rem;
 }
 
 .lnr-novel-read-icon-button:disabled {
@@ -211,12 +211,12 @@
 
 .lnr-novel-read-icon-button svg {
   fill: none;
-  height: 18px;
+  height: 1.125rem;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
-  width: 18px;
+  width: 1.125rem;
 }
 
 .lnr-novel-summary-panel {
@@ -230,7 +230,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 12px 14px 14px;
+  padding: 0.75rem 0.875rem 0.875rem;
 }
 
 .lnr-novel-summary-text,
@@ -247,13 +247,13 @@
 }
 
 .lnr-novel-chapters-panel {
-  padding: 12px 14px 14px;
+  padding: 0.75rem 0.875rem 0.875rem;
 }
 
 .lnr-novel-chapter-list {
   height: var(--lnr-novel-chapter-list-height);
-  margin-top: 12px;
-  max-height: min(72vh, 760px);
+  margin-top: 0.75rem;
+  max-height: min(72vh, 47.5rem);
   overflow-y: auto;
   position: relative;
 }
@@ -276,12 +276,12 @@
   box-sizing: border-box;
   cursor: pointer;
   display: grid;
-  gap: 10px;
+  gap: 0.625rem;
   grid-template-areas: "position main flags progress actions";
-  grid-template-columns: 52px minmax(180px, 0.55fr) minmax(64px, auto) minmax(220px, 1fr) auto;
-  height: 54px;
-  min-height: 54px;
-  padding: 6px 0 6px 8px;
+  grid-template-columns: 3.25rem minmax(11.25rem, 0.55fr) minmax(4rem, auto) minmax(13.75rem, 1fr) auto;
+  height: 3.375rem;
+  min-height: 3.375rem;
+  padding: 0.375rem 0 0.375rem 0.5rem;
 }
 
 .lnr-novel-chapter-row:hover,
@@ -298,8 +298,8 @@
 }
 
 .lnr-novel-chapter-row:focus-visible {
-  outline: 2px solid var(--lnr-design-accent);
-  outline-offset: 2px;
+  outline: 0.125rem solid var(--lnr-design-accent);
+  outline-offset: 0.125rem;
 }
 
 .lnr-novel-chapter-position {
@@ -309,7 +309,7 @@
   flex-direction: column;
   font-family: var(--lnr-font-meta);
   font-size: 0.6875rem;
-  gap: 4px;
+  gap: 0.25rem;
   grid-area: position;
   justify-content: center;
   min-width: 0;
@@ -317,7 +317,7 @@
 
 .lnr-novel-chapter-main {
   display: grid;
-  gap: 4px;
+  gap: 0.25rem;
   grid-area: main;
   min-width: 0;
 }
@@ -325,7 +325,7 @@
 .lnr-novel-chapter-title-line {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   min-width: 0;
 }
 
@@ -353,7 +353,7 @@
   flex-wrap: wrap;
   font-family: var(--lnr-font-meta);
   font-size: 0.6875rem;
-  gap: 4px 8px;
+  gap: 0.25rem 0.5rem;
   line-height: 1.2;
   min-width: 0;
 }
@@ -370,7 +370,7 @@
 .lnr-novel-chapter-flags {
   align-items: center;
   display: inline-flex;
-  gap: 5px;
+  gap: 0.3125rem;
   min-width: 0;
 }
 
@@ -387,12 +387,12 @@
 .lnr-novel-chapter-flag {
   align-items: center;
   border: 1px solid var(--lnr-design-rule-strong);
-  border-radius: 4px;
+  border-radius: 0.25rem;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
-  height: 24px;
+  height: 1.5rem;
   justify-content: center;
-  width: 24px;
+  width: 1.5rem;
 }
 
 .lnr-novel-chapter-flag[data-tone="done"] {
@@ -413,9 +413,9 @@
   display: grid;
   font-family: var(--lnr-font-meta);
   font-size: 0.6875rem;
-  gap: 8px;
+  gap: 0.5rem;
   grid-area: progress;
-  grid-template-columns: minmax(120px, 1fr) 36px;
+  grid-template-columns: minmax(7.5rem, 1fr) 2.25rem;
 }
 
 .lnr-novel-chapter-progress span {
@@ -428,7 +428,7 @@
   align-items: center;
   align-self: stretch;
   display: flex;
-  gap: 4px;
+  gap: 0.25rem;
   grid-area: actions;
   justify-content: flex-end;
 }
@@ -436,19 +436,19 @@
 .lnr-novel-icon-button {
   align-items: center;
   border: 1px solid var(--lnr-design-rule-strong);
-  border-radius: 4px;
+  border-radius: 0.25rem;
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 40px;
+  height: 2.5rem;
   justify-content: center;
-  width: 40px;
+  width: 2.5rem;
 }
 
 .lnr-novel-chapter-actions .lnr-novel-icon-button {
-  height: 40px;
-  min-height: 40px;
-  width: 40px;
+  height: 2.5rem;
+  min-height: 2.5rem;
+  width: 2.5rem;
 }
 
 .lnr-novel-icon-button:hover:not(:disabled) {
@@ -479,25 +479,25 @@
 .lnr-novel-batch-download-menu {
   background: var(--lnr-design-surface);
   border-color: var(--lnr-design-rule-strong);
-  padding: 6px;
+  padding: 0.375rem;
 }
 
 .lnr-novel-batch-download-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.25rem;
 }
 
 .lnr-novel-batch-download-option {
   background: transparent;
   border: 0;
-  border-radius: 4px;
+  border-radius: 0.25rem;
   color: var(--lnr-design-ink);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px;
+  gap: 0.125rem;
+  padding: 0.5rem;
   text-align: left;
   width: 100%;
 }
@@ -527,22 +527,22 @@
 
 .lnr-novel-icon-button svg {
   fill: none;
-  height: 18px;
+  height: 1.125rem;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
-  width: 18px;
+  width: 1.125rem;
 }
 
 .lnr-novel-chapter-flag svg {
   fill: none;
-  height: 15px;
+  height: 0.9375rem;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
-  width: 15px;
+  width: 0.9375rem;
 }
 
 .lnr-novel-spin-icon {
@@ -558,8 +558,8 @@
 @media (max-width: 980px) {
   .lnr-novel-workspace {
     --lnr-novel-hero-height: auto;
-    --lnr-novel-mobile-cover-height: 204px;
-    --lnr-novel-mobile-cover-width: 136px;
+    --lnr-novel-mobile-cover-height: 12.75rem;
+    --lnr-novel-mobile-cover-width: 8.5rem;
   }
 
   .lnr-novel-hero-desktop {
@@ -569,19 +569,19 @@
   .lnr-novel-hero-mobile {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 0.75rem;
   }
 
   .lnr-novel-cover-summary-card {
     background: var(--lnr-design-surface);
     border: 1px solid var(--lnr-design-rule);
-    border-radius: 5px;
+    border-radius: 0.3125rem;
     display: grid;
-    gap: 12px;
+    gap: 0.75rem;
     grid-template-columns: var(--lnr-novel-mobile-cover-width) minmax(0, 1fr);
     min-height: 0;
     overflow: hidden;
-    padding: 12px;
+    padding: 0.75rem;
   }
 
   .lnr-novel-cover-summary-card > .lnr-console-panel {
@@ -592,16 +592,16 @@
   }
 
   .lnr-novel-cover-summary-card .lnr-console-panel-title {
-    padding: 0 0 8px;
+    padding: 0 0 0.5rem;
   }
 
   .lnr-novel-info-panel {
-    gap: 12px;
+    gap: 0.75rem;
     grid-column: auto;
     height: auto;
     justify-content: flex-start;
     overflow: visible;
-    padding: 14px 16px;
+    padding: 0.875rem 1rem;
   }
 
   .lnr-novel-title-row {
@@ -657,25 +657,25 @@
     align-items: center;
     background: var(--lnr-design-surface);
     border: 1px solid var(--lnr-design-rule-strong);
-    border-radius: 5px;
+    border-radius: 0.3125rem;
     display: flex;
     flex: 0 0 auto;
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 6px 8px;
+    gap: 0.375rem 0.5rem;
     margin-top: 0;
     min-height: auto;
     overflow: visible;
-    padding: 8px 10px;
+    padding: 0.5rem 0.625rem;
   }
 
   .lnr-novel-status-block .lnr-console-chip {
     font-size: 0.625rem;
-    padding: 2px 7px;
+    padding: 0.125rem 0.4375rem;
   }
 
   .lnr-novel-status-block button.lnr-console-chip {
-    padding-inline: 9px;
+    padding-inline: 0.5625rem;
   }
 
   .lnr-novel-genre-chip {
@@ -685,7 +685,7 @@
   .lnr-novel-progress-block {
     display: inline-flex;
     flex: 0 0 auto;
-    gap: 6px;
+    gap: 0.375rem;
     margin-left: auto;
   }
 
@@ -704,11 +704,11 @@
   }
 
   .lnr-novel-chapter-row {
-    gap: 8px;
+    gap: 0.5rem;
     grid-template-areas: "position main actions";
-    grid-template-columns: 42px minmax(0, 1fr) auto;
-    min-height: 52px;
-    padding: 4px 0 4px 8px;
+    grid-template-columns: 2.625rem minmax(0, 1fr) auto;
+    min-height: 3.25rem;
+    padding: 0.25rem 0 0.25rem 0.5rem;
   }
 
   .lnr-novel-chapter-percent--inline {
@@ -732,17 +732,17 @@
 
 @media (max-width: 768px) {
   .lnr-novel-workspace {
-    --lnr-novel-mobile-cover-height: 150px;
-    --lnr-novel-mobile-cover-width: 100px;
+    --lnr-novel-mobile-cover-height: 9.375rem;
+    --lnr-novel-mobile-cover-width: 6.25rem;
   }
 
   .lnr-novel-title-row {
-    gap: 8px;
+    gap: 0.5rem;
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .lnr-novel-title-actions {
-    gap: 4px;
+    gap: 0.25rem;
     justify-content: flex-end;
   }
 

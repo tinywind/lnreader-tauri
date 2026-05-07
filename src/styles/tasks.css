@@ -1,6 +1,6 @@
 .lnr-task-shell {
   display: grid;
-  gap: 18px;
+  gap: 1.125rem;
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -10,13 +10,13 @@
 
 .lnr-task-overview-panel {
   display: grid;
-  gap: 16px;
-  padding: 14px;
+  gap: 1rem;
+  padding: 0.875rem;
 }
 
 .lnr-task-stat-grid {
   display: grid;
-  gap: 8px;
+  gap: 0.5rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -35,7 +35,7 @@
 }
 
 .lnr-task-list > .lnr-console-section-header {
-  padding: 14px 16px;
+  padding: 0.875rem 1rem;
 }
 
 .lnr-task-rows {
@@ -45,7 +45,7 @@
 .lnr-task-empty {
   color: var(--lnr-design-ink-subtle);
   font-size: 0.875rem;
-  padding: 16px;
+  padding: 1rem;
 }
 
 .lnr-task-row {
@@ -53,9 +53,9 @@
   background: transparent;
   border-top: 1px solid var(--lnr-design-rule);
   display: grid;
-  gap: 16px;
+  gap: 1rem;
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 14px 16px;
+  padding: 0.875rem 1rem;
 }
 
 .lnr-task-row:first-child {
@@ -92,7 +92,7 @@
 .lnr-task-row-detail,
 .lnr-task-row-error {
   font-size: 0.8125rem;
-  margin-top: 4px;
+  margin-top: 0.25rem;
 }
 
 .lnr-task-row-meta {
@@ -122,7 +122,7 @@
 }
 
 .lnr-task-source-group > .lnr-console-section-header {
-  padding: 14px 16px 10px;
+  padding: 0.875rem 1rem 0.625rem;
 }
 
 @media (max-width: 720px) {
@@ -138,11 +138,11 @@
 @media (min-width: 1120px) {
   .lnr-task-shell {
     align-items: start;
-    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    grid-template-columns: minmax(15rem, 18.75rem) minmax(0, 1fr);
   }
 
   .lnr-task-overview {
     position: sticky;
-    top: calc(var(--lnr-safe-area-top) + 24px);
+    top: calc(var(--lnr-safe-area-top) + 1.5rem);
   }
 }

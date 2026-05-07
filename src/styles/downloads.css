@@ -1,16 +1,16 @@
 .lnr-downloads-page {
-  --lnr-page-max-width: 1280px;
+  --lnr-page-max-width: 80rem;
 }
 
 .lnr-downloads-header-button svg,
 .lnr-downloads-icon-button svg {
   fill: none;
-  height: 18px;
+  height: 1.125rem;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
-  width: 18px;
+  width: 1.125rem;
 }
 
 .lnr-downloads-spin-icon {
@@ -38,19 +38,19 @@
 .lnr-downloads-novel-row {
   align-items: flex-start;
   display: grid;
-  gap: 12px;
-  grid-template-columns: 56px minmax(0, 1fr) max-content;
-  padding: 10px 12px;
+  gap: 0.75rem;
+  grid-template-columns: 3.5rem minmax(0, 1fr) max-content;
+  padding: 0.625rem 0.75rem;
 }
 
 .lnr-downloads-novel-main {
   display: grid;
-  gap: 4px;
+  gap: 0.25rem;
 }
 
 .lnr-downloads-chapter-main {
   display: grid;
-  gap: 4px;
+  gap: 0.25rem;
   min-width: 0;
 }
 
@@ -120,9 +120,9 @@
 .lnr-downloads-chapter-row {
   align-items: flex-start;
   display: grid;
-  gap: 10px;
+  gap: 0.625rem;
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 8px 12px 8px 80px;
+  padding: 0.5rem 0.75rem 0.5rem 5rem;
 }
 
 .lnr-downloads-chapter-row + .lnr-downloads-chapter-row {
@@ -143,7 +143,7 @@
 .lnr-downloads-note {
   color: var(--lnr-design-ink-subtle);
   font-size: 0.8125rem;
-  padding: 10px 12px 10px 80px;
+  padding: 0.625rem 0.75rem 0.625rem 5rem;
 }
 
 @media (max-width: 767px) {
@@ -171,14 +171,14 @@
 
   .lnr-downloads-novel-row {
     align-items: flex-start;
-    gap: 8px;
-    grid-template-columns: 42px minmax(0, 1fr) max-content;
-    padding: 8px;
+    gap: 0.5rem;
+    grid-template-columns: 2.625rem minmax(0, 1fr) max-content;
+    padding: 0.5rem;
   }
 
   .lnr-downloads-novel-row .lnr-console-cover {
-    height: 63px !important;
-    width: 42px !important;
+    height: 3.9375rem !important;
+    width: 2.625rem !important;
   }
 
   .lnr-downloads-row-actions {
@@ -186,11 +186,11 @@
   }
 
   .lnr-downloads-chapter-row {
-    padding: 8px;
+    padding: 0.5rem;
   }
 
   .lnr-downloads-note {
-    padding: 10px 8px;
+    padding: 0.625rem 0.5rem;
   }
 }
 

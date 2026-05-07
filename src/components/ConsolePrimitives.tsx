@@ -45,9 +45,9 @@ export function ConsoleCover({
 
   const style = {
     "--lnr-console-cover-height":
-      typeof height === "number" ? `${height}px` : height,
+      typeof height === "number" ? pxToRem(height) : height,
     "--lnr-console-cover-width":
-      typeof width === "number" ? `${width}px` : width,
+      typeof width === "number" ? pxToRem(width) : width,
     ...fallbackStyle,
   } as CSSProperties;
 
@@ -89,6 +89,10 @@ function normalizeCoverSource(src: string | null): string | null {
   }
 
   return trimmed;
+}
+
+function pxToRem(value: number): string {
+  return `${value / 16}rem`;
 }
 
 function ConsoleCoverFallback({ title }: { title: string }) {
@@ -178,8 +182,8 @@ function createCoverFallbackStyle(title: string): CSSProperties {
     "--lnr-console-cover-bg-b": `hsl(${hueB}, 48%, 20%)`,
     "--lnr-console-cover-glow": `hsla(${(hueA + 26) % 360}, 70%, 72%, 0.42)`,
     "--lnr-console-cover-stripe-angle": `${stripeAngle}deg`,
-    "--lnr-console-cover-stripe-gap": `${stripeGap}px`,
-    "--lnr-console-cover-stripe-width": `${stripeWidth}px`,
+    "--lnr-console-cover-stripe-gap": pxToRem(stripeGap),
+    "--lnr-console-cover-stripe-width": pxToRem(stripeWidth),
   } as CSSProperties;
 }
 

@@ -5,15 +5,18 @@ import { APP_THEMES, type AppThemeId } from "../theme/md3";
 
 export type AppThemeMode = "system" | "light" | "dark";
 
-export const MIN_UI_SCALE_PERCENT = 75;
-export const MAX_UI_SCALE_PERCENT = 150;
+export const MIN_ANDROID_VIEW_SCALE_PERCENT = 75;
+export const MAX_ANDROID_VIEW_SCALE_PERCENT = 100;
+export const MIN_FONT_SCALE_PERCENT = 75;
+export const MAX_FONT_SCALE_PERCENT = 150;
 
 interface AppearanceState {
   themeMode: AppThemeMode;
   appThemeId: AppThemeId;
+  androidViewScalePercent: number;
   amoledBlack: boolean;
   customAccentColor: string;
-  uiScalePercent: number;
+  fontScalePercent: number;
   appLocale: AppLocale;
   showHistoryTab: boolean;
   showUpdatesTab: boolean;
@@ -22,9 +25,10 @@ interface AppearanceState {
   showLabelsInNav: boolean;
   setThemeMode: (themeMode: unknown) => void;
   setAppThemeId: (appThemeId: unknown) => void;
+  setAndroidViewScalePercent: (androidViewScalePercent: unknown) => void;
   setAmoledBlack: (amoledBlack: boolean) => void;
   setCustomAccentColor: (customAccentColor: string) => void;
-  setUiScalePercent: (uiScalePercent: unknown) => void;
+  setFontScalePercent: (fontScalePercent: unknown) => void;
   setAppLocale: (appLocale: string) => void;
   setShowHistoryTab: (showHistoryTab: boolean) => void;
   setShowUpdatesTab: (showUpdatesTab: boolean) => void;
@@ -37,9 +41,10 @@ interface AppearanceState {
 export const DEFAULT_APPEARANCE = {
   themeMode: "system" as AppThemeMode,
   appThemeId: "default" as AppThemeId,
+  androidViewScalePercent: 100,
   amoledBlack: false,
   customAccentColor: "",
-  uiScalePercent: 100,
+  fontScalePercent: 100,
   appLocale: "en" as AppLocale,
   showHistoryTab: true,
   showUpdatesTab: true,
@@ -67,11 +72,26 @@ export function normalizeAppThemeId(appThemeId: unknown): AppThemeId {
     : DEFAULT_APPEARANCE.appThemeId;
 }
 
-export function normalizeUiScalePercent(uiScalePercent: unknown): number {
-  const numeric = Number(uiScalePercent);
-  if (!Number.isFinite(numeric)) return DEFAULT_APPEARANCE.uiScalePercent;
+export function normalizeAndroidViewScalePercent(
+  androidViewScalePercent: unknown,
+): number {
+  const numeric = Number(androidViewScalePercent);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_APPEARANCE.androidViewScalePercent;
+  }
   return Math.round(
-    Math.min(MAX_UI_SCALE_PERCENT, Math.max(MIN_UI_SCALE_PERCENT, numeric)),
+    Math.min(
+      MAX_ANDROID_VIEW_SCALE_PERCENT,
+      Math.max(MIN_ANDROID_VIEW_SCALE_PERCENT, numeric),
+    ),
+  );
+}
+
+export function normalizeFontScalePercent(fontScalePercent: unknown): number {
+  const numeric = Number(fontScalePercent);
+  if (!Number.isFinite(numeric)) return DEFAULT_APPEARANCE.fontScalePercent;
+  return Math.round(
+    Math.min(MAX_FONT_SCALE_PERCENT, Math.max(MIN_FONT_SCALE_PERCENT, numeric)),
   );
 }
 
@@ -83,11 +103,17 @@ export const useAppearanceStore = create<AppearanceState>()(
         set({ themeMode: normalizeAppThemeMode(themeMode) }),
       setAppThemeId: (appThemeId) =>
         set({ appThemeId: normalizeAppThemeId(appThemeId) }),
+      setAndroidViewScalePercent: (androidViewScalePercent) =>
+        set({
+          androidViewScalePercent: normalizeAndroidViewScalePercent(
+            androidViewScalePercent,
+          ),
+        }),
       setAmoledBlack: (amoledBlack) => set({ amoledBlack }),
       setCustomAccentColor: (customAccentColor) =>
         set({ customAccentColor: customAccentColor.trim() }),
-      setUiScalePercent: (uiScalePercent) =>
-        set({ uiScalePercent: normalizeUiScalePercent(uiScalePercent) }),
+      setFontScalePercent: (fontScalePercent) =>
+        set({ fontScalePercent: normalizeFontScalePercent(fontScalePercent) }),
       setAppLocale: (appLocale) =>
         set({ appLocale: normalizeAppLocale(appLocale) }),
       setShowHistoryTab: (showHistoryTab) => set({ showHistoryTab }),
@@ -102,9 +128,10 @@ export const useAppearanceStore = create<AppearanceState>()(
       partialize: (state) => ({
         themeMode: state.themeMode,
         appThemeId: state.appThemeId,
+        androidViewScalePercent: state.androidViewScalePercent,
         amoledBlack: state.amoledBlack,
         customAccentColor: state.customAccentColor,
-        uiScalePercent: state.uiScalePercent,
+        fontScalePercent: state.fontScalePercent,
         appLocale: state.appLocale,
         showHistoryTab: state.showHistoryTab,
         showUpdatesTab: state.showUpdatesTab,
@@ -116,14 +143,22 @@ export const useAppearanceStore = create<AppearanceState>()(
         if (persistedState === null || typeof persistedState !== "object") {
           return currentState;
         }
-        const persisted = persistedState as Partial<AppearanceState>;
+        const persisted = persistedState as Partial<AppearanceState> & {
+          uiScalePercent?: unknown;
+        };
+        const { uiScalePercent, ...persistedAppearance } = persisted;
         return {
           ...currentState,
-          ...persisted,
-          themeMode: normalizeAppThemeMode(persisted.themeMode),
-          appThemeId: normalizeAppThemeId(persisted.appThemeId),
-          uiScalePercent: normalizeUiScalePercent(persisted.uiScalePercent),
-          appLocale: normalizeAppLocale(persisted.appLocale),
+          ...persistedAppearance,
+          themeMode: normalizeAppThemeMode(persistedAppearance.themeMode),
+          appThemeId: normalizeAppThemeId(persistedAppearance.appThemeId),
+          androidViewScalePercent: normalizeAndroidViewScalePercent(
+            persistedAppearance.androidViewScalePercent,
+          ),
+          fontScalePercent: normalizeFontScalePercent(
+            persistedAppearance.fontScalePercent ?? uiScalePercent,
+          ),
+          appLocale: normalizeAppLocale(persistedAppearance.appLocale),
         };
       },
     },
