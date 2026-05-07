@@ -275,6 +275,9 @@ export function RootLayout() {
   const showDownloadsTab = useAppearanceStore((s) => s.showDownloadsTab);
   const showTasksTab = useAppearanceStore((s) => s.showTasksTab);
   const fullPageReader = useReaderStore((state) => state.general.fullPageReader);
+  const fullPageReaderChromeVisible = useReaderStore(
+    (state) => state.fullPageReaderChromeVisible,
+  );
   const location = useRouterState({
     select: (state) => ({
       pathname: state.location.pathname,
@@ -352,6 +355,7 @@ export function RootLayout() {
   const pageVisited = (page: PersistentPage) =>
     visitedPages.has(page) || activePersistentPage === page;
   const readerFullPageActive = pathname === "/reader" && fullPageReader;
+  const mobileNavVisible = !readerFullPageActive || fullPageReaderChromeVisible;
   const navItems = NAV_ITEMS.filter((item) =>
     isNavItemVisible(item, {
       downloads: showDownloadsTab,
@@ -407,7 +411,18 @@ export function RootLayout() {
         style={{
           background: "var(--lnr-design-bg)",
           color: "var(--lnr-design-ink)",
-          padding: readerFullPageActive ? 0 : undefined,
+          paddingBlockStart: readerFullPageActive
+            ? "var(--lnr-safe-area-top)"
+            : undefined,
+          paddingBlockEnd: readerFullPageActive
+            ? "var(--lnr-safe-area-bottom)"
+            : undefined,
+          paddingInlineStart: readerFullPageActive
+            ? "var(--lnr-safe-area-left)"
+            : undefined,
+          paddingInlineEnd: readerFullPageActive
+            ? "var(--lnr-safe-area-right)"
+            : undefined,
         }}
       >
         {pageVisited("library") ? (
@@ -450,23 +465,23 @@ export function RootLayout() {
         ) : null}
         {activePersistentPage === null ? <Outlet /> : null}
       </AppShell.Main>
-      {readerFullPageActive ? null : (
-        <nav
-          className="lnr-mobile-nav"
-          data-show-labels={showLabelsInNav}
-          aria-label={t("nav.primary")}
-        >
-          {navItems.map((item) => (
-            <AppNavLink
-              activeClassName="lnr-mobile-nav-link--active"
-              className="lnr-mobile-nav-link"
-              item={item}
-              key={item.to}
-              label={t(item.compactKey)}
-            />
-          ))}
-        </nav>
-      )}
+      <nav
+        className="lnr-mobile-nav"
+        data-reader-full-page={readerFullPageActive}
+        data-reader-visible={mobileNavVisible}
+        data-show-labels={showLabelsInNav}
+        aria-label={t("nav.primary")}
+      >
+        {navItems.map((item) => (
+          <AppNavLink
+            activeClassName="lnr-mobile-nav-link--active"
+            className="lnr-mobile-nav-link"
+            item={item}
+            key={item.to}
+            label={t(item.compactKey)}
+          />
+        ))}
+      </nav>
       <SiteBrowserOverlay />
       <TaskNotifications />
     </AppShell>

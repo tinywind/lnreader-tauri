@@ -26,7 +26,7 @@ export interface ReaderContentHandle {
 }
 
 interface ReaderContentProps {
-  bottomOverlayOffset?: number;
+  bottomOverlayOffset?: number | string;
   html: string;
   initialProgress?: number;
   interactionBlocked?: boolean;
@@ -52,6 +52,7 @@ interface PageInfo {
 const SCROLL_MAX_WIDTH = 760;
 const SCROLL_PAGE_FRACTION = 0.9;
 const TWO_PAGE_MEDIA_QUERY = "(min-width: 62em)";
+const PAGED_SCROLL_ANIMATION_MS = 120;
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
@@ -61,6 +62,10 @@ const WHEEL_DELTA_PAGE = 2;
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
   return Math.max(0, Math.min(100, progress));
+}
+
+function easeOutCubic(progress: number): number {
+  return 1 - Math.pow(1 - progress, 3);
 }
 
 function getTwoPageMediaMatches(): boolean {
@@ -259,6 +264,7 @@ function ReaderContentInner(
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
+  const pageScrollAnimationRef = useRef<number | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [progress, setProgress] = useState(clampProgress(initialProgress));
   const [pageInfo, setPageInfo] = useState<PageInfo>({
@@ -286,6 +292,37 @@ function ReaderContentInner(
     isPagedReader && general.twoPageReader && twoPageMediaMatches;
   const visiblePageColumns = isTwoPageReader ? 2 : 1;
 
+  const scrollPagedTo = useCallback((targetLeft: number) => {
+    const node = viewportRef.current;
+    if (!node) return;
+    if (pageScrollAnimationRef.current !== null) {
+      window.cancelAnimationFrame(pageScrollAnimationRef.current);
+      pageScrollAnimationRef.current = null;
+    }
+
+    const startLeft = node.scrollLeft;
+    const distance = targetLeft - startLeft;
+    if (Math.abs(distance) <= 1) {
+      node.scrollTo({ left: targetLeft, behavior: "auto" });
+      return;
+    }
+
+    const startedAt = performance.now();
+    const step = (timestamp: number) => {
+      const elapsed = timestamp - startedAt;
+      const progress = Math.min(1, elapsed / PAGED_SCROLL_ANIMATION_MS);
+      node.scrollLeft = startLeft + distance * easeOutCubic(progress);
+      if (progress < 1) {
+        pageScrollAnimationRef.current = window.requestAnimationFrame(step);
+        return;
+      }
+      node.scrollLeft = targetLeft;
+      pageScrollAnimationRef.current = null;
+    };
+
+    pageScrollAnimationRef.current = window.requestAnimationFrame(step);
+  }, []);
+
   const scrollByPage = useCallback(
     (direction: 1 | -1) => {
       const node = viewportRef.current;
@@ -300,10 +337,7 @@ function ReaderContentInner(
           onBoundaryPage?.(direction);
           return;
         }
-        node.scrollTo({
-          left: getPagedLeft(node, targetPage),
-          behavior: "smooth",
-        });
+        scrollPagedTo(getPagedLeft(node, targetPage));
         return;
       }
       const axisMax = node.scrollHeight - node.clientHeight;
@@ -318,7 +352,7 @@ function ReaderContentInner(
       const amount = node.clientHeight * SCROLL_PAGE_FRACTION;
       node.scrollBy({ top: amount * direction, behavior: "smooth" });
     },
-    [isPagedReader, onBoundaryPage],
+    [isPagedReader, onBoundaryPage, scrollPagedTo],
   );
 
   const flushProgress = useCallback(
@@ -578,6 +612,10 @@ function ReaderContentInner(
       if (wheelCooldownTimerRef.current !== null) {
         window.clearTimeout(wheelCooldownTimerRef.current);
       }
+      if (pageScrollAnimationRef.current !== null) {
+        window.cancelAnimationFrame(pageScrollAnimationRef.current);
+        pageScrollAnimationRef.current = null;
+      }
       flushProgress(latestProgressRef.current);
     },
     [flushProgress],
@@ -726,7 +764,7 @@ function ReaderContentInner(
         background: appearance.backgroundColor,
         color: appearance.textColor,
         cursor: "pointer",
-        scrollBehavior: "smooth",
+        scrollBehavior: isPagedReader ? "auto" : "smooth",
       }}
     >
       {appearance.customCss.trim() ? <style>{appearance.customCss}</style> : null}

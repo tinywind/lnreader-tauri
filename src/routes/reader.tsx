@@ -325,6 +325,9 @@ export function ReaderPage() {
 
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const fullPageReader = useReaderStore((state) => state.general.fullPageReader);
+  const setFullPageReaderChromeVisible = useReaderStore(
+    (state) => state.setFullPageReaderChromeVisible,
+  );
   const setLastReadChapter = useReaderStore(
     (state) => state.setLastReadChapter,
   );
@@ -469,7 +472,11 @@ export function ReaderPage() {
           contentRef.current?.completeIfAtEnd();
         }
         openedChapterRef.current = null;
-        void navigate({ to: "/reader", search: { chapterId: adjacent.id } });
+        void navigate({
+          to: "/reader",
+          search: { chapterId: adjacent.id },
+          replace: true,
+        });
       }
     },
     [chapterQuery.data, navigate],
@@ -483,7 +490,11 @@ export function ReaderPage() {
       openedChapterRef.current = null;
 
       if (targetChapter.isDownloaded) {
-        void navigate({ to: "/reader", search: { chapterId: targetChapter.id } });
+        void navigate({
+          to: "/reader",
+          search: { chapterId: targetChapter.id },
+          replace: true,
+        });
         return;
       }
 
@@ -517,7 +528,11 @@ export function ReaderPage() {
           }),
         ]);
         void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
-        void navigate({ to: "/reader", search: { chapterId: targetChapter.id } });
+        void navigate({
+          to: "/reader",
+          search: { chapterId: targetChapter.id },
+          replace: true,
+        });
       } catch {
         // The reader stays on the current chapter if download cannot finish.
       }
@@ -627,6 +642,25 @@ export function ReaderPage() {
       Boolean(chapter && !chapter.isDownloaded));
   const readerChromeAutoHide = fullPageReader && !readerStateVisible;
   const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
+  const readerOverlayBottom =
+    fullPageReader && !readerChromeVisible
+      ? "calc(var(--lnr-safe-area-bottom) + 8px)"
+      : "calc(var(--lnr-app-bottom-inset) + 32px)";
+  const sharedFullPageReaderChromeVisible =
+    fullPageReader && readerChromeVisible;
+
+  useEffect(() => {
+    setFullPageReaderChromeVisible(sharedFullPageReaderChromeVisible);
+  }, [
+    setFullPageReaderChromeVisible,
+    sharedFullPageReaderChromeVisible,
+  ]);
+
+  useEffect(
+    () => () => setFullPageReaderChromeVisible(false),
+    [setFullPageReaderChromeVisible],
+  );
+
   const handleProgressChange = useCallback(
     (nextProgress: number) => {
       if (chapterId > 0) {
@@ -683,7 +717,7 @@ export function ReaderPage() {
       <ReaderContent
         key={chapter?.id ?? "sample"}
         ref={contentRef}
-        bottomOverlayOffset={readerChromeVisible ? 32 : 8}
+        bottomOverlayOffset={readerOverlayBottom}
         html={html}
         initialProgress={progress}
         onToggleChrome={

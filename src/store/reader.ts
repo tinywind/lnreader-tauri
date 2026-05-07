@@ -74,6 +74,7 @@ export interface ReaderAppearanceSettings {
 interface ReaderState {
   general: ReaderGeneralSettings;
   appearance: ReaderAppearanceSettings;
+  fullPageReaderChromeVisible: boolean;
   lastReadChapterByNovel: Record<number, number>;
   novelPageIndexByNovel: Record<number, number>;
   setGeneral: (settings: Partial<ReaderGeneralSettings>) => void;
@@ -82,6 +83,7 @@ interface ReaderState {
   saveCustomTheme: (theme: ReaderThemeDefinition) => void;
   deleteCustomTheme: (themeId: string) => void;
   applyTapZonePreset: (presetId: ReaderTapPresetId) => void;
+  setFullPageReaderChromeVisible: (visible: boolean) => void;
   setLastReadChapter: (novelId: number, chapterId: number) => void;
   setNovelPageIndex: (novelId: number, pageIndex: number) => void;
   resetReaderSettings: () => void;
@@ -412,6 +414,7 @@ export const useReaderStore = create<ReaderState>()(
     (set) => ({
       general: READER_GENERAL_DEFAULTS,
       appearance: READER_APPEARANCE_DEFAULTS,
+      fullPageReaderChromeVisible: false,
       lastReadChapterByNovel: {},
       novelPageIndexByNovel: {},
       setGeneral: (settings) =>
@@ -477,6 +480,8 @@ export const useReaderStore = create<ReaderState>()(
             },
           };
         }),
+      setFullPageReaderChromeVisible: (visible) =>
+        set({ fullPageReaderChromeVisible: visible }),
       setLastReadChapter: (novelId, chapterId) =>
         set((state) => ({
           lastReadChapterByNovel: {
@@ -495,6 +500,7 @@ export const useReaderStore = create<ReaderState>()(
         set({
           general: READER_GENERAL_DEFAULTS,
           appearance: READER_APPEARANCE_DEFAULTS,
+          fullPageReaderChromeVisible: false,
         }),
     }),
     {

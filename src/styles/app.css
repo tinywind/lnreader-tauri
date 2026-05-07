@@ -249,7 +249,23 @@ a {
     calc(10px + var(--lnr-safe-area-left));
   position: fixed;
   right: 0;
+  transform: translateY(0);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
   z-index: 200;
+}
+
+.lnr-mobile-nav[data-reader-full-page="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(100%);
+}
+
+.lnr-mobile-nav[data-reader-full-page="true"][data-reader-visible="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .lnr-mobile-nav-link {
