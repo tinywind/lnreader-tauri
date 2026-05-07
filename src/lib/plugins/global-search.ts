@@ -14,11 +14,47 @@ export interface GlobalSearchOptions {
   plugins?: readonly Plugin[];
   /** When the signal aborts, no further results are yielded. */
   signal?: AbortSignal;
+  /** Per-plugin search timeout. Default 30 seconds. */
+  timeoutMs?: number;
   /** Called as each plugin's task settles. */
   onResult?: (result: GlobalSearchResult) => void;
 }
 
 const DEFAULT_CONCURRENCY = 3;
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+function normalizeTimeoutMs(value: unknown): number {
+  const numeric = typeof value === "number" ? value : DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(numeric)) return DEFAULT_TIMEOUT_MS;
+  return Math.max(1, Math.round(numeric));
+}
+
+function formatTimeoutSeconds(timeoutMs: number): string {
+  const seconds = timeoutMs / 1000;
+  return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `Search timed out after ${formatTimeoutSeconds(timeoutMs)} seconds.`,
+        ),
+      );
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+  }
+}
 
 /**
  * Tiny in-process semaphore. Each task is a thunk returning a
@@ -59,8 +95,8 @@ function makeLimiter(concurrency: number) {
  * If the {@link AbortSignal} fires, in-flight plugin tasks still
  * finish (their internal HTTP requests aren't auto-aborted by the
  * upstream plugin contract), but their results are discarded and
- * no further plugin tasks are started. The promise resolves once
- * the in-flight tasks complete.
+ * no further plugin tasks are started. The per-plugin timeout keeps
+ * stalled plugins from blocking the full search result set.
  */
 export async function globalSearch(
   manager: PluginManager,
@@ -76,6 +112,7 @@ export async function globalSearch(
   );
   const limit = makeLimiter(concurrency);
   const { signal, onResult } = options;
+  const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   const collected: GlobalSearchResult[] = [];
 
   const tasks = plugins.map((plugin) =>
@@ -83,7 +120,10 @@ export async function globalSearch(
       if (signal?.aborted) return;
       let result: GlobalSearchResult;
       try {
-        const novels = await plugin.searchNovels(term, 1);
+        const novels = await withTimeout(
+          plugin.searchNovels(term, 1),
+          timeoutMs,
+        );
         result = {
           pluginId: plugin.id,
           pluginName: plugin.name,

@@ -687,6 +687,9 @@ export function PluginSearchSection({
   const globalSearchConcurrency = useBrowseStore(
     (s) => s.globalSearchConcurrency,
   );
+  const globalSearchTimeoutSeconds = useBrowseStore(
+    (s) => s.globalSearchTimeoutSeconds,
+  );
   const setLastUsedPluginId = useBrowseStore((s) => s.setLastUsedPluginId);
   const pinnedPluginIds = useBrowseStore((s) => s.pinnedPluginIds);
   const togglePinnedPlugin = useBrowseStore((s) => s.togglePinnedPlugin);
@@ -923,6 +926,7 @@ export function PluginSearchSection({
 
     globalSearch(pluginManager, trimmedQuery, {
       concurrency: globalSearchConcurrency,
+      timeoutMs: globalSearchTimeoutSeconds * 1000,
       plugins: pluginsToStart,
       signal: controller.signal,
       onResult: (result) => {
@@ -967,6 +971,7 @@ export function PluginSearchSection({
     currentSearchKey,
     finishGlobalSearch,
     globalSearchConcurrency,
+    globalSearchTimeoutSeconds,
     globalSearchState,
     pluginsToSearch,
     retryPluginIdSet,

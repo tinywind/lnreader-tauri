@@ -75,6 +75,22 @@ describe("globalSearch", () => {
     expect(ok.error).toBeUndefined();
   });
 
+  it("captures plugin timeouts into the per-row error field", async () => {
+    const manager = makeManager([
+      makePlugin("slow", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return [{ name: "Late", path: "/late" }];
+      }),
+    ]);
+
+    const results = await globalSearch(manager, "x", { timeoutMs: 5 });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.pluginId).toBe("slow");
+    expect(results[0]?.novels).toEqual([]);
+    expect(results[0]?.error).toContain("Search timed out");
+  });
+
   it("invokes onResult once per plugin", async () => {
     const manager = makeManager([
       makePlugin("a", async () => []),

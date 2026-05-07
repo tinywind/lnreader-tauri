@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type { GlobalSearchResult } from "../lib/plugins/global-search";
 
 export const DEFAULT_GLOBAL_SEARCH_CONCURRENCY = 3;
+export const DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS = 30;
 
 function getDefaultPluginLanguage(): string {
   if (typeof navigator === "undefined") return "en";
@@ -22,6 +23,17 @@ function normalizeConcurrency(value: unknown): number {
     typeof value === "number" ? value : DEFAULT_GLOBAL_SEARCH_CONCURRENCY;
   if (!Number.isFinite(numeric)) return DEFAULT_GLOBAL_SEARCH_CONCURRENCY;
   return Math.max(1, Math.min(10, Math.round(numeric)));
+}
+
+function normalizeTimeoutSeconds(value: unknown): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS;
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS;
+  }
+  return Math.max(5, Math.min(120, Math.round(numeric)));
 }
 
 interface BrowseGlobalSearchState {
@@ -49,6 +61,7 @@ interface BrowseState {
   pendingRepoUrl: string | null;
   pluginLanguageFilter: string[];
   globalSearchConcurrency: number;
+  globalSearchTimeoutSeconds: number;
   pinnedPluginIds: string[];
   lastUsedPluginId: string | null;
   globalSearch: BrowseGlobalSearchState;
@@ -56,6 +69,7 @@ interface BrowseState {
   clearPendingRepoUrl: () => void;
   setPluginLanguageFilter: (languages: string[]) => void;
   setGlobalSearchConcurrency: (concurrency: number) => void;
+  setGlobalSearchTimeoutSeconds: (seconds: number) => void;
   togglePinnedPlugin: (pluginId: string) => void;
   setLastUsedPluginId: (pluginId: string | null) => void;
   beginGlobalSearch: (search: BrowseGlobalSearchState) => void;
@@ -73,6 +87,7 @@ export const useBrowseStore = create<BrowseState>()(
       pendingRepoUrl: null,
       pluginLanguageFilter: [getDefaultPluginLanguage()],
       globalSearchConcurrency: DEFAULT_GLOBAL_SEARCH_CONCURRENCY,
+      globalSearchTimeoutSeconds: DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS,
       pinnedPluginIds: [],
       lastUsedPluginId: null,
       globalSearch: EMPTY_GLOBAL_SEARCH,
@@ -89,6 +104,12 @@ export const useBrowseStore = create<BrowseState>()(
         set({
           globalSearchConcurrency: normalizeConcurrency(
             globalSearchConcurrency,
+          ),
+        }),
+      setGlobalSearchTimeoutSeconds: (globalSearchTimeoutSeconds) =>
+        set({
+          globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
+            globalSearchTimeoutSeconds,
           ),
         }),
       togglePinnedPlugin: (pluginId) =>
@@ -141,6 +162,9 @@ export const useBrowseStore = create<BrowseState>()(
           globalSearchConcurrency: normalizeConcurrency(
             persisted.globalSearchConcurrency,
           ),
+          globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
+            persisted.globalSearchTimeoutSeconds,
+          ),
           pinnedPluginIds: normalizeStringArray(
             persisted.pinnedPluginIds,
             currentState.pinnedPluginIds,
@@ -158,6 +182,9 @@ export const useBrowseStore = create<BrowseState>()(
         ),
         globalSearchConcurrency: normalizeConcurrency(
           state.globalSearchConcurrency,
+        ),
+        globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
+          state.globalSearchTimeoutSeconds,
         ),
         pinnedPluginIds: normalizeStringArray(state.pinnedPluginIds, []),
         lastUsedPluginId: state.lastUsedPluginId,

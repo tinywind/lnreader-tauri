@@ -1,29 +1,25 @@
 import {
   NumberInput,
   Stack,
-  Switch,
-  Text,
 } from "@mantine/core";
-import {
-  SettingsFieldRow,
-  SettingsWideField,
-} from "./SettingsPrimitives";
-import { formatPluginLanguageForLocale, useTranslation } from "../i18n";
-import { pluginManager } from "../lib/plugins/manager";
+import { SettingsFieldRow } from "./SettingsPrimitives";
+import { useTranslation } from "../i18n";
 import { useBrowseStore } from "../store/browse";
 
 export function BrowseSettingsPanel() {
-  const { locale, t } = useTranslation();
+  const { t } = useTranslation();
   const globalSearchConcurrency = useBrowseStore(
     (s) => s.globalSearchConcurrency,
   );
   const setGlobalSearchConcurrency = useBrowseStore(
     (s) => s.setGlobalSearchConcurrency,
   );
-  const pinnedPluginIds = useBrowseStore((s) => s.pinnedPluginIds);
-  const togglePinnedPlugin = useBrowseStore((s) => s.togglePinnedPlugin);
-
-  const installedPlugins = pluginManager.list();
+  const globalSearchTimeoutSeconds = useBrowseStore(
+    (s) => s.globalSearchTimeoutSeconds,
+  );
+  const setGlobalSearchTimeoutSeconds = useBrowseStore(
+    (s) => s.setGlobalSearchTimeoutSeconds,
+  );
 
   return (
     <Stack gap="md">
@@ -41,31 +37,20 @@ export function BrowseSettingsPanel() {
           }}
         />
       </SettingsFieldRow>
-      <SettingsFieldRow
-        label={t("browseSettings.pinnedPlugins")}
-        layout="stacked"
-      >
-        <SettingsWideField>
-          {installedPlugins.length > 0 ? (
-            <Stack className="lnr-settings-switch-list" gap={6}>
-              {installedPlugins.map((plugin) => (
-                <Switch
-                  key={plugin.id}
-                  label={`${plugin.name} (${formatPluginLanguageForLocale(
-                    locale,
-                    plugin.lang,
-                  )})`}
-                  checked={pinnedPluginIds.includes(plugin.id)}
-                  onChange={() => togglePinnedPlugin(plugin.id)}
-                />
-              ))}
-            </Stack>
-          ) : (
-            <Text size="sm" c="dimmed">
-              {t("browseSettings.noPluginsInstalled")}
-            </Text>
-          )}
-        </SettingsWideField>
+      <SettingsFieldRow label={t("browseSettings.globalSearchTimeout")}>
+        <NumberInput
+          value={globalSearchTimeoutSeconds}
+          min={5}
+          max={120}
+          step={5}
+          clampBehavior="strict"
+          suffix={` ${t("common.seconds")}`}
+          onChange={(value) => {
+            if (typeof value === "number") {
+              setGlobalSearchTimeoutSeconds(value);
+            }
+          }}
+        />
       </SettingsFieldRow>
     </Stack>
   );
