@@ -9,7 +9,7 @@ Use after changing DB access, plugin fetches, scraper runtime, repository cache,
 
 ## Rules
 
-- App DB access must stay on the documented SQLite path: Drizzle/sqlite-proxy through `tauri-plugin-sql`, or an established Rust IPC/storage boundary.
+- App DB access must stay on the current SQLite path: `src/db/client.ts` loads `sqlite:norea.db` through `@tauri-apps/plugin-sql`, and app-owned operations use established query helpers unless the reviewed code has an explicit persistence boundary such as backup snapshot/apply, library update checks, plugin-to-library import orchestration, or a justified Rust IPC/storage boundary.
 - Do not introduce a second ORM, browser storage replacement, or direct DB path without an explicit tech-stack change.
 - Plugin-owned site fetch changes should also run `verify-plugin-fetch-contract`; this skill only flags obvious data-access helpers that bypass the sanctioned scraper bridge.
 - Repository/plugin index/list queries must define deterministic ordering at the query/helper boundary.

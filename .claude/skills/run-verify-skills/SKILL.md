@@ -27,7 +27,8 @@ If `changed` scope is requested but changed files are unknown, ask instead of gu
 3. Run isolated `skill-verifier` agents with a maximum of five concurrent agents.
 4. Do not run build, compile, test, or git-mutating commands unless the current user message explicitly asks for them.
 5. Continue after one verifier errors; record `ERROR`.
-6. Keep generated reports in English.
+6. Every report must state the reviewed scope. For `changed`, `frontend`, `rust`, `tauri`, `android`, `docs`, and `custom` scopes, findings must be introduced by or directly touch that scope; put unrelated existing debt in a separate baseline note only when the user asked for baseline review.
+7. Keep generated reports in English.
 
 ## Reports
 

@@ -12,7 +12,8 @@ Use after changing `src/**` files that touch routes, components, TanStack Query,
 - This repo has no GraphQL runtime contract; do not import generated GraphQL document assumptions.
 - If plugin-owned fetch paths change, also run `verify-plugin-fetch-contract`; this skill only checks obvious frontend misuse.
 - App/repository fetches should remain conceptually separate from plugin-owned site fetches.
-- Use TanStack Query for plugin/network IO and cache invalidation; use Zustand for client state.
+- Use TanStack Query for route-level async app/plugin data and cache invalidation; use Zustand for durable client UI state.
+- Local component state is allowed for form fields, dialogs, file pickers, transient progress, and one-shot Tauri actions.
 - Do not flag direct `useQuery` until checking whether it is a route/composite loader.
 - Keep visible strings in `strings/languages/<locale>/`.
 - Prefer Mantine components for ordinary UI.

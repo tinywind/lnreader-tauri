@@ -32,6 +32,6 @@ Include:
 - `skip: false-positive, needs-decision`
 - the instruction to obey current repo source-of-truth docs and the command gate
 
-Do not use bypass-permission modes. Do not run build, compile, test, or git-mutating commands unless explicitly requested in the current invocation.
+Do not use privilege-escalation modes. Do not run build, compile, test, or git-mutating commands unless explicitly requested in the current invocation.
 
 Write English-only fixer summaries and master reports under `.tmp/skill-reports/`.

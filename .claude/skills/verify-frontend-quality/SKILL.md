@@ -18,6 +18,7 @@ Use after modifying `src/**/*.{ts,tsx}`.
 3. Keep null at real boundaries.
    - Report exported reusable contracts that carry `| null` without a boundary reason.
    - Allow null from DB, plugin, browser, or Tauri APIs when the boundary requires it.
+   - Allow UI props and state to mirror explicit app empty states such as no selected category, no cover image, missing active plugin, absent route result, or optional reader/browser handles.
 4. Keep numeric business values numeric.
    - Report exported reusable `number | string` fields for counts, sizes, rates, progress, chapter indexes, or expiry hours.
    - Allow strings at form input, parser, or raw plugin HTML boundaries.

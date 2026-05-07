@@ -13,5 +13,5 @@ Use after changing plugin browsing, global search, library update checks, novel 
 - Repository JSON fetches and plugin JavaScript source downloads may use ordinary app-side HTTP utilities.
 - Plugin-owned site fetches must use the sanctioned scraper/cookie bridge. Inspect the current scraper implementation before judging. Do not allow any new host HTTP path outside that bridge, and do not ban or allow `reqwest` by name without checking the current bridge.
 - Scraper site context navigation and plugin fetches must not race each other.
-- Do not reintroduce stale hidden-WebView auto-solve assumptions when current repository status docs document a newer architecture.
+- Do not reintroduce hidden automatic challenge-solving claims. Current behavior relies on the scraper WebView path and the site browser overlay when protected sources need manual session setup.
 - Ignore GitHub release links, backup import/export, and non-plugin metadata requests.

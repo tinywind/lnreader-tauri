@@ -14,7 +14,7 @@ Use after changing React components, route components, or frontend helpers under
 
 ## Thresholds
 
-- Route/page/feature component: fail at 8 or more top-level props.
+- Route/page/feature component: fail at 8 or more unrelated top-level props.
 - Reusable UI primitive/wrapper: fail at 12 or more custom top-level props, ignoring inherited Mantine/HTML props.
 - Utility/helper function: fail at 6 or more positional parameters unless justified.
 
@@ -25,3 +25,5 @@ Count a grouped object as one input.
 Do not flag cohesive DTOs such as plugin metadata, novel/chapter records, backup manifests, route search params, reader settings, form values, or filter state.
 
 Prefer grouped contracts named around app domains such as `reader`, `navigation`, `settings`, `plugin`, `source`, `novel`, `chapter`, `downloadQueue`, `backup`, and `filters`.
+
+Domain UI components may temporarily expose cohesive field sets from a single row, card, reader surface, or settings panel. Flag them only when the changed props mix unrelated concerns, grow an already-large API, or would be clearer as one named domain contract.

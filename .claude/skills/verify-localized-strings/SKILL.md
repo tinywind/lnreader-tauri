@@ -19,7 +19,7 @@ Use after changing UI text, notifications, dialogs, reader/settings labels, back
 - Korean and other non-English text must appear only under `strings/languages/<locale>/`.
 - New or changed translation keys must exist across supported locale files, currently `en` and `ko`.
 - Do not concatenate translated fragments in code; prefer full-sentence keys with placeholders.
-- Rust/Tauri errors that surface to the UI should expose stable codes or keys; localization belongs at display boundaries.
+- Rust/Tauri errors that surface to the UI should preserve stable operation context; localization belongs at display boundaries.
 
 ## Output
 

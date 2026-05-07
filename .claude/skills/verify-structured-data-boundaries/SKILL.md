@@ -10,7 +10,7 @@ Use after editing app data models, plugin runtime payloads, IPC DTOs, backup man
 ## Rules
 
 - Stable app data must use named TypeScript, Rust, or domain types instead of `any`, broad `Record<string, unknown>`, `serde_json::Value`, or ad hoc maps.
-- Drizzle rows, IPC inputs/outputs, backup manifests, repository metadata, reader settings, library/category/chapter data should stay schema-backed.
+- Persisted SQLite rows should trace to `src/db/schema.ts`; IPC inputs/outputs, backup manifests, repository metadata, reader settings, and library/category/chapter data should use named, validated contracts.
 - Plugin-owned dynamic data may remain opaque only at explicit boundaries: plugin settings, plugin contract payloads, raw HTML, repository source JSON before validation, and external site response passthrough.
 - Do not widen opaque boundaries into app-owned state. Normalize or validate before storing in SQLite, passing through IPC, or rendering.
 - Plugin-owned fetch boundary changes should also run `verify-plugin-fetch-contract`.

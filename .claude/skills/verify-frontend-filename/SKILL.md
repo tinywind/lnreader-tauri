@@ -16,9 +16,10 @@ Use after adding or moving frontend files under `src/`.
 
 - Route files under `src/routes/` follow TanStack Router conventions; do not flag lowercase route filenames solely by generic component rules.
 - Component `.tsx` files whose primary export is a React component should use `PascalCase`.
-- Utility modules, stores, IPC wrappers, plugin helpers, formatters, validators, and non-component modules should use `camelCase`.
+- Route files under `src/routes/` use existing TanStack route naming, including lowercase and kebab-case filenames.
+- Non-component modules should follow the convention already used in their directory: `src/lib/**` and `src/routes/**` may use kebab-case, while stores and simple TypeScript modules often use camelCase.
 - Files in a dedicated `hooks/` directory should start with `use`.
-- Folders should be lowercase or camelCase unless dedicated to one named component.
+- Folders should be lowercase, kebab-case, or camelCase unless dedicated to one named component.
 
 ## Output
 

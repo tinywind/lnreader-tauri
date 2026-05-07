@@ -1,6 +1,6 @@
 ---
 name: verify-norea-instruction-hygiene
-description: Verify repo-local agent instruction files stay concise and do not duplicate product plans or status snapshots.
+description: Verify repo-local agent instruction files stay concise and point to current repo docs instead of stale planning snapshots.
 ---
 
 # Verify Norea Instruction Hygiene
@@ -10,13 +10,14 @@ Use after editing `AGENTS.md`, `CLAUDE.md`, nested instruction files, or `.claud
 ## Checks
 
 - Inspect only project-local instruction files.
-- Keep `CLAUDE.md` as an agent entry point, not a replacement for the product plan.
-- Do not duplicate long product plans, route inventories, sprint acceptance tables, package script catalogs, or status snapshots.
-- Link to the current product-plan document for product, architecture, stack, sprint, and acceptance policy.
-- Link to the current status document for deferred work, smoke state, and tooling notes.
+- Keep `CLAUDE.md` as an agent entry point, not a replacement for `README.md` or implementation docs.
+- Do not duplicate long product plans, route inventories, old milestone acceptance tables, package script catalogs, or stale status snapshots.
+- Use `README.md` for public status, supported tooling, and project map.
+- Use `docs/plugins/contract.md` for plugin runtime compatibility.
+- Do not reference removed planning snapshots unless the user explicitly asks to restore or archive them.
 - Keep skill catalogs out of `AGENTS.md` and `CLAUDE.md`; point to `.claude/skills/` instead.
 - Allow stable policy in instruction files: language policy, source-of-truth order, surgical changes, plugin fetch invariant, command/git restrictions, and communication policy.
 
 ## Output
 
-Report duplicated owner doc, file path, line range, and shorter replacement direction.
+Report duplicated or stale instruction content, file path, line range, and shorter replacement direction.
