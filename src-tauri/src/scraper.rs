@@ -1126,6 +1126,7 @@ async fn prepare_fetch_context(
         return Ok(());
     }
 
+    log::info!("[scraper:fetch] prepare context navigate url={context_url}");
     scraper
         .navigate(target.clone())
         .map_err(|err| format!("scraper: navigate fetch context: {err}"))?;
@@ -1137,6 +1138,7 @@ async fn prepare_fetch_context(
     while started.elapsed() < deadline {
         tokio::time::sleep(poll_interval).await;
         if scraper_is_at_origin(scraper, &target) && document_is_ready(scraper).await {
+            log::info!("[scraper:fetch] prepare context ready url={context_url}");
             return Ok(());
         }
     }
@@ -1144,6 +1146,32 @@ async fn prepare_fetch_context(
     Err(format!(
         "scraper: timed out preparing fetch context {context_url}"
     ))
+}
+
+#[cfg(desktop)]
+fn origin_url(url: &Url) -> String {
+    let host = url.host_str().unwrap_or("local");
+    match url.port() {
+        Some(port) => format!("{}://{}:{}/", url.scheme(), host, port),
+        None => format!("{}://{}/", url.scheme(), host),
+    }
+}
+
+#[cfg(desktop)]
+fn fetch_context_url(url: &str, context_url: Option<&str>) -> Result<String, String> {
+    let request_url: Url = url
+        .parse()
+        .map_err(|err| format!("scraper: invalid fetch url '{url}': {err}"))?;
+    let Some(context_url) = context_url else {
+        return Ok(origin_url(&request_url));
+    };
+    let parsed_context_url: Url = context_url
+        .parse()
+        .map_err(|err| format!("scraper: invalid context url '{context_url}': {err}"))?;
+    if same_origin(&request_url, &parsed_context_url) {
+        return Ok(context_url.to_string());
+    }
+    Ok(origin_url(&request_url))
 }
 
 #[cfg(desktop)]
@@ -1255,6 +1283,25 @@ fn build_webview_fetch_cleanup_script(request_id: &str) -> Result<String, String
     ))
 }
 
+#[cfg(desktop)]
+fn clear_webview_extract_result_marker(scraper: &ScraperWebview, current_url: &str) {
+    let result_marker = "#__lnr_result__=";
+    let Some((clean_url, _result)) = current_url.split_once(result_marker) else {
+        return;
+    };
+    let Ok(clean_url_json) = serde_json::to_string(clean_url) else {
+        return;
+    };
+    let script = format!(
+        r#"(function () {{
+  try {{
+    history.replaceState(null, "", {clean_url_json});
+  }} catch (error) {{}}
+}})();"#
+    );
+    let _ = scraper.eval(script);
+}
+
 /// Issue an HTTP request through the scraper WebView's own browser
 /// `fetch()`, preserving Cloudflare/browser-network behavior.
 #[cfg(desktop)]
@@ -1327,9 +1374,13 @@ pub async fn webview_fetch(
     init: Option<FetchInit>,
     context_url: Option<String>,
 ) -> Result<FetchResult, String> {
-    let scraper_url = context_url.as_deref().unwrap_or(&url);
-    let (_key, scraper) = scraper_handle_for_url(&app, &state, scraper_url, "fetch context")?;
-    webview_fetch_with_ready_scraper(&scraper, url, init, context_url).await
+    let fetch_context = fetch_context_url(&url, context_url.as_deref())?;
+    log::info!(
+        "[scraper:fetch] context selected request_url={url} configured_context={:?} fetch_context={fetch_context}",
+        context_url
+    );
+    let (_key, scraper) = scraper_handle_for_url(&app, &state, &fetch_context, "fetch context")?;
+    webview_fetch_with_ready_scraper(&scraper, url, init, Some(fetch_context)).await
 }
 
 #[cfg(not(desktop))]
@@ -1455,13 +1506,10 @@ pub async fn webview_extract(
             let decoded = decode_uri_component(encoded).map_err(|err| {
                 format!("webview_extract: decode result: {err}")
             })?;
-            // Park the scraper on a clean URL so the next call does
-            // not see a stale `#__lnr_result__=...` if it polls
-            // before the new navigation lands.
-            let blank = "about:blank";
-            if let Ok(blank_url) = blank.parse::<Url>() {
-                let _ = scraper.navigate(blank_url);
-            }
+            // Clear the result marker without leaving the source origin.
+            // Parking on about:blank forces the next fetch to prepare the
+            // source context again.
+            clear_webview_extract_result_marker(&scraper, &current);
             return Ok(decoded);
         }
     }
