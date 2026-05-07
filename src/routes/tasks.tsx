@@ -347,7 +347,16 @@ export function TasksPage() {
         sourceTasks.find((task) => task.source?.id === sourceId)?.source
           ?.name ?? sourceId,
       tasks: sourceTasks.filter((task) => task.source?.id === sourceId),
-    }));
+    }))
+    .sort((left, right) => {
+      const sourceName = left.sourceName.localeCompare(
+        right.sourceName,
+        undefined,
+        { sensitivity: "base" },
+      );
+      if (sourceName !== 0) return sourceName;
+      return left.sourceId.localeCompare(right.sourceId);
+    });
   const toggleSourceGroup = (sourceId: string) => {
     setCollapsedSourceIds((current) => {
       const next = new Set(current);
