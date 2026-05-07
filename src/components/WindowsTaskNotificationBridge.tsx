@@ -1,0 +1,217 @@
+import { useEffect } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  onAction,
+  requestPermission,
+  sendNotification,
+  type Options as NotificationOptions,
+} from "@tauri-apps/plugin-notification";
+import { useNavigate } from "@tanstack/react-router";
+import { useTranslation } from "../i18n";
+import { isWindowsRuntime } from "../lib/tauri-runtime";
+import {
+  taskScheduler,
+  type TaskEvent,
+} from "../lib/tasks/scheduler";
+import {
+  buildActiveTaskNotificationGroups,
+  buildTaskEventNotificationBody,
+  isTaskEventNotificationCandidate,
+  isTerminalTaskStatus,
+  taskNotificationKey,
+  taskNotificationProgressPercent,
+  taskNotificationRouteForTask,
+  taskNotificationTitleForTask,
+  type TaskNotificationRoute,
+} from "../lib/tasks/task-notification-model";
+import type { TaskNotificationMode } from "../store/notifications";
+
+interface WindowsTaskNotificationBridgeProps {
+  taskProgressMode: TaskNotificationMode;
+}
+
+interface SentNotificationState {
+  lastPercent?: number;
+  lastSentAt: number;
+  terminalSent: boolean;
+}
+
+const NOTIFICATION_GROUP = "task-progress";
+const MIN_PROGRESS_INTERVAL_MS = 2_500;
+const MIN_PROGRESS_PERCENT_DELTA = 10;
+
+let permissionPromise: Promise<boolean> | null = null;
+
+function notificationId(key: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 1;
+}
+
+function shouldSendNotification(
+  event: TaskEvent,
+  mode: TaskNotificationMode,
+  state: SentNotificationState | undefined,
+  now: number,
+): boolean {
+  if (mode === "off" || !isTaskEventNotificationCandidate(event.task)) {
+    return false;
+  }
+
+  if (isTerminalTaskStatus(event.task.status)) {
+    return !state?.terminalSent;
+  }
+
+  if (mode === "completion" || event.task.status !== "running") {
+    return false;
+  }
+
+  const percent = taskNotificationProgressPercent(event.task);
+  if (percent === undefined) {
+    return false;
+  }
+
+  if (!state) return true;
+  if (now - state.lastSentAt >= MIN_PROGRESS_INTERVAL_MS) return true;
+  if (state.lastPercent === undefined) return true;
+  return percent - state.lastPercent >= MIN_PROGRESS_PERCENT_DELTA;
+}
+
+async function ensureNotificationPermission(): Promise<boolean> {
+  permissionPromise ??= (async () => {
+    try {
+      if (await isPermissionGranted()) return true;
+      return (await requestPermission()) === "granted";
+    } catch (error) {
+      console.info("[task-notifications] permission unavailable", error);
+      return false;
+    }
+  })();
+  return permissionPromise;
+}
+
+function routeFromNotification(
+  notification: NotificationOptions,
+): TaskNotificationRoute | null {
+  const route = notification.extra?.route;
+  if (route === "/downloads" || route === "/tasks" || route === "/updates") {
+    return route;
+  }
+  return null;
+}
+
+function groupKeyFromNotificationKey(key: string): string | null {
+  return key.startsWith("group:") ? key.slice("group:".length) : null;
+}
+
+export function WindowsTaskNotificationBridge({
+  taskProgressMode,
+}: WindowsTaskNotificationBridgeProps) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!isWindowsRuntime() || taskProgressMode === "off") return;
+
+    let disposed = false;
+    let actionListener: { unregister: () => Promise<void> } | undefined;
+    let activeGroupKeys = new Set<string>();
+    const sentByKey = new Map<string, SentNotificationState>();
+
+    void onAction((notification) => {
+      const route = routeFromNotification(notification);
+      if (!route) return;
+      void (async () => {
+        try {
+          const window = getCurrentWindow();
+          await window.show();
+          await window.unminimize();
+          await window.setFocus();
+        } catch (error) {
+          console.info("[task-notifications] window focus failed", error);
+        }
+        void navigate({ to: route });
+      })();
+    })
+      .then((listener) => {
+        if (disposed) {
+          void listener.unregister();
+          return;
+        }
+        actionListener = listener;
+      })
+      .catch((error) => {
+        console.info("[task-notifications] action listener failed", error);
+      });
+
+    const unsubscribeSnapshots = taskScheduler.subscribe(() => {
+      const nextGroupKeys = new Set(
+        buildActiveTaskNotificationGroups(
+          taskScheduler.getSnapshot(),
+          t,
+        ).map((group) => `group:${group.key}`),
+      );
+      for (const key of nextGroupKeys) {
+        if (!activeGroupKeys.has(key)) sentByKey.delete(key);
+      }
+      activeGroupKeys = nextGroupKeys;
+    });
+
+    const unsubscribeEvents = taskScheduler.subscribeEvents((event) => {
+      const key = taskNotificationKey(event.task);
+      if (isTerminalTaskStatus(event.task.status) && activeGroupKeys.has(key)) {
+        return;
+      }
+      const state = sentByKey.get(key);
+      const now = Date.now();
+      if (!shouldSendNotification(event, taskProgressMode, state, now)) {
+        return;
+      }
+
+      const percent = taskNotificationProgressPercent(event.task);
+      sentByKey.set(key, {
+        lastPercent: percent,
+        lastSentAt: now,
+        terminalSent: isTerminalTaskStatus(event.task.status),
+      });
+
+      void ensureNotificationPermission().then((granted) => {
+        if (!granted || disposed) return;
+        const groupKey = groupKeyFromNotificationKey(key);
+        const group = groupKey
+          ? buildActiveTaskNotificationGroups(
+              taskScheduler.getSnapshot(),
+              t,
+            ).find((item) => item.key === groupKey)
+          : undefined;
+        try {
+          sendNotification({
+            id: notificationId(key),
+            title: group?.title ?? taskNotificationTitleForTask(t, event.task),
+            body: group?.body ?? buildTaskEventNotificationBody(t, event.task),
+            group: NOTIFICATION_GROUP,
+            autoCancel: true,
+            extra: {
+              route: group?.route ?? taskNotificationRouteForTask(event.task),
+            },
+          });
+        } catch (error) {
+          console.info("[task-notifications] send failed", error);
+        }
+      });
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribeEvents();
+      unsubscribeSnapshots();
+      void actionListener?.unregister();
+    };
+  }, [navigate, t, taskProgressMode]);
+
+  return null;
+}

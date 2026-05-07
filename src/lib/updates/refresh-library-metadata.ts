@@ -1,86 +1,62 @@
-import { getDb } from "../../db/client";
 import {
-  listLibraryUpdatesPage,
-  type LibraryUpdateEntry,
-  type LibraryUpdatesCursor,
-} from "../../db/queries/chapter";
+  listLibraryNovelRefreshTargets,
+  type LibraryNovelRefreshTarget,
+} from "../../db/queries/novel";
 import { pluginManager } from "../plugins/manager";
 import { syncNovelFromSource } from "../plugins/sync-novel";
 import { LOCAL_PLUGIN_ID } from "../plugins/types";
 import { enqueueSourceTask } from "../tasks/source-tasks";
 import { taskScheduler, type TaskRunContext } from "../tasks/scheduler";
+import { markUpdatesIndexDirty } from "./update-index-events";
 
-interface LibraryNovelForUpdate {
-  id: number;
-  pluginId: string;
-  path: string;
-  name: string;
-}
-
-export interface UpdateCheckFailure {
+export interface MetadataRefreshFailure {
   novelId: number;
   novelName: string;
   pluginId: string;
   reason: string;
 }
 
-export interface UpdateCheckResult {
+export interface MetadataRefreshResult {
   checkedNovels: number;
+  failures: MetadataRefreshFailure[];
   skippedNovels: number;
-  failures: UpdateCheckFailure[];
-  hasMoreUpdates: boolean;
-  nextUpdateCursor: LibraryUpdatesCursor | null;
-  updates: LibraryUpdateEntry[];
+  targetNovels: number;
 }
 
-export interface UpdateCheckOptions {
+export interface RefreshLibraryMetadataOptions {
   aggregateTaskTitle?: string;
+  categoryId?: number | null;
   onProgress?: (progress: {
     current: number;
     detail?: string;
     total: number;
   }) => void;
-  taskTitle?: (novel: LibraryNovelForUpdate) => string;
+  taskTitle?: (novel: LibraryNovelRefreshTarget) => string;
 }
-
-const SELECT_LIBRARY_NOVELS_FOR_UPDATE = `
-  SELECT
-    id,
-    plugin_id AS pluginId,
-    path,
-    name
-  FROM novel
-  WHERE in_library = 1
-  ORDER BY name COLLATE NOCASE ASC
-`;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function listLibraryNovelsForUpdate(): Promise<
-  LibraryNovelForUpdate[]
-> {
-  const db = await getDb();
-  return db.select<LibraryNovelForUpdate[]>(
-    SELECT_LIBRARY_NOVELS_FOR_UPDATE,
-  );
-}
-
-async function runLibraryUpdateCheck(
-  limit: number,
-  options: UpdateCheckOptions = {},
+async function runLibraryMetadataRefresh(
+  options: RefreshLibraryMetadataOptions = {},
   context?: TaskRunContext,
-): Promise<UpdateCheckResult> {
-  const novels = await listLibraryNovelsForUpdate();
-  const failures: UpdateCheckFailure[] = [];
+): Promise<MetadataRefreshResult> {
+  const novels = await listLibraryNovelRefreshTargets({
+    categoryId: options.categoryId,
+  });
+  const failures: MetadataRefreshFailure[] = [];
   let checkedNovels = 0;
+  let changedNovels = 0;
   let processedNovels = 0;
   let skippedNovels = 0;
 
   const reportProgress = (detail?: string) => {
-    const progress = { current: processedNovels, detail, total: novels.length };
-    options.onProgress?.(progress);
+    options.onProgress?.({
+      current: processedNovels,
+      detail,
+      total: novels.length,
+    });
     context?.setProgress({
       current: processedNovels,
       total: novels.length,
@@ -93,7 +69,7 @@ async function runLibraryUpdateCheck(
   const sourceTasks: Promise<void>[] = [];
 
   for (const novel of novels) {
-    if (novel.pluginId === LOCAL_PLUGIN_ID) {
+    if (novel.isLocal || novel.pluginId === LOCAL_PLUGIN_ID) {
       skippedNovels += 1;
       processedNovels += 1;
       reportProgress(novel.name);
@@ -116,7 +92,7 @@ async function runLibraryUpdateCheck(
     try {
       const handle = enqueueSourceTask({
         plugin,
-        kind: "source.checkLibraryUpdates",
+        kind: "source.refreshNovel",
         priority: "normal",
         title: options.taskTitle?.(novel) ?? novel.name,
         subject: {
@@ -124,17 +100,22 @@ async function runLibraryUpdateCheck(
           novelName: novel.name,
           path: novel.path,
         },
-        dedupeKey: `source.checkLibraryUpdates:${plugin.id}:${novel.path}`,
+        dedupeKey: `source.refreshNovel:${plugin.id}:${novel.path}`,
         run: () =>
           syncNovelFromSource(
             plugin,
-            { name: novel.name, path: novel.path },
+            {
+              cover: novel.cover ?? undefined,
+              name: novel.name,
+              path: novel.path,
+            },
             { notifyUpdatesIndex: false, preserveMissingMetadata: true },
           ),
       });
       sourceTasks.push(
         handle.promise
-          .then(() => {
+          .then((result) => {
+            if (result.changed) changedNovels += 1;
             checkedNovels += 1;
           })
           .catch((error) => {
@@ -164,26 +145,26 @@ async function runLibraryUpdateCheck(
 
   await Promise.all(sourceTasks);
 
-  const updatesPage = await listLibraryUpdatesPage(limit);
+  if (changedNovels > 0) {
+    markUpdatesIndexDirty("novel-sync");
+  }
 
   return {
     checkedNovels,
-    skippedNovels,
     failures,
-    hasMoreUpdates: updatesPage.hasMore,
-    nextUpdateCursor: updatesPage.nextCursor,
-    updates: updatesPage.updates,
+    skippedNovels,
+    targetNovels: novels.length,
   };
 }
 
-export async function checkLibraryUpdates(
-  limit: number,
-  options: UpdateCheckOptions = {},
-): Promise<UpdateCheckResult> {
-  return taskScheduler.enqueueMain<UpdateCheckResult>({
-    kind: "library.checkUpdates",
-    title: options.aggregateTaskTitle ?? "Check library updates",
-    dedupeKey: "library.checkUpdates",
-    run: (context) => runLibraryUpdateCheck(limit, options, context),
+export async function refreshLibraryMetadata(
+  options: RefreshLibraryMetadataOptions = {},
+): Promise<MetadataRefreshResult> {
+  return taskScheduler.enqueueMain<MetadataRefreshResult>({
+    kind: "library.refreshMetadata",
+    title: options.aggregateTaskTitle ?? "Refresh library metadata",
+    subject: { categoryId: options.categoryId },
+    dedupeKey: `library.refreshMetadata:${options.categoryId ?? "all"}`,
+    run: (context) => runLibraryMetadataRefresh(options, context),
   }).promise;
 }

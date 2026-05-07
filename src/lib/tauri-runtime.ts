@@ -12,3 +12,11 @@ export function isAndroidRuntime(): boolean {
     /\bAndroid\b/i.test(navigator.userAgent)
   );
 }
+
+export function isWindowsRuntime(): boolean {
+  return (
+    isTauriRuntime() &&
+    typeof navigator !== "undefined" &&
+    /\bWindows\b/i.test(navigator.userAgent)
+  );
+}

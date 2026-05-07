@@ -12,6 +12,8 @@ export type TaskStatus =
 export type MainTaskKind =
   | "backup.export"
   | "backup.restore"
+  | "library.checkUpdates"
+  | "library.refreshMetadata"
   | "maintenance.clearCachedNovels"
   | "maintenance.clearUpdates"
   | "maintenance.deleteReadDownloads"
@@ -34,7 +36,6 @@ export type SourceTaskKind =
 
 export type ChapterTaskKind =
   | "chapter.download"
-  | "chapter.downloadBatch"
   | "chapter.deleteDownload";
 
 export type TaskKind = MainTaskKind | SourceTaskKind | ChapterTaskKind;
@@ -45,8 +46,11 @@ export interface TaskSource {
 }
 
 export interface TaskSubject {
+  batchId?: string;
+  batchTitle?: string;
   chapterId?: number;
   chapterName?: string;
+  categoryId?: number | null;
   novelId?: number;
   novelName?: string;
   path?: string;
@@ -110,6 +114,8 @@ export interface TaskSpec<T> {
   subject?: TaskSubject;
   dedupeKey?: string;
   exclusive?: boolean;
+  sourceCooldownKey?: string;
+  sourceCooldownMs?: number;
   run: (context: TaskRunContext) => Promise<T>;
 }
 
@@ -136,11 +142,13 @@ interface TaskEntry {
   record: TaskRecord;
   reject: (error: unknown) => void;
   resolve: (value: unknown) => void;
+  sourceSlot?: "background" | "foreground" | "interactiveBoost";
   spec: TaskSpec<unknown>;
 }
 
 const DEFAULT_SOURCE_FOREGROUND_CONCURRENCY = 3;
 const DEFAULT_SOURCE_BACKGROUND_CONCURRENCY = 2;
+const INTERACTIVE_SOURCE_FOREGROUND_BOOST = 1;
 const HISTORY_LIMIT = 200;
 const TERMINAL_TASK_RETENTION_MS = 2_000;
 
@@ -181,14 +189,20 @@ export class TaskScheduler {
   private readonly pausedSourceIds = new Set<string>();
   private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly snapshotListeners = new Set<() => void>();
+  private readonly sourceCooldownTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private readonly sourceCooldownUntilByKey = new Map<string, number>();
   private readonly sourceQueues = new Map<string, string[]>();
-  private readonly sourceForegroundConcurrency: number;
+  private sourceForegroundConcurrency: number;
   private readonly sourceBackgroundConcurrency: number;
   private readonly terminalTaskRetentionMs: number;
   private sourceQueuesPaused: boolean;
   private activeBackgroundCount = 0;
   private activeExclusiveSourceTaskId: string | null = null;
-  private activeForegroundCount = 0;
+  private activeForegroundBaseCount = 0;
+  private activeForegroundBoostCount = 0;
   private activeMainTaskId: string | null = null;
   private snapshot: TaskSnapshot = {
     pausedSourceIds: [],
@@ -232,7 +246,8 @@ export class TaskScheduler {
   ): void {
     console.info(`[task-scheduler] ${message}`, {
       activeBackgroundCount: this.activeBackgroundCount,
-      activeForegroundCount: this.activeForegroundCount,
+      activeForegroundBaseCount: this.activeForegroundBaseCount,
+      activeForegroundBoostCount: this.activeForegroundBoostCount,
       activeMainTaskId: this.activeMainTaskId,
       exclusive: entry?.exclusive,
       kind: entry?.record.kind,
@@ -269,6 +284,20 @@ export class TaskScheduler {
       const activeId = this.activeDedupeByKey.get(spec.dedupeKey);
       const activeEntry = activeId ? this.entries.get(activeId) : undefined;
       if (activeEntry) {
+        const requestedPriority = spec.priority ?? "normal";
+        if (
+          activeEntry.record.status === "queued" &&
+          priorityRank(requestedPriority) <
+            priorityRank(activeEntry.record.priority)
+        ) {
+          activeEntry.spec = { ...activeEntry.spec, priority: requestedPriority };
+          activeEntry.record = {
+            ...activeEntry.record,
+            priority: requestedPriority,
+          };
+          this.publishSnapshot();
+          this.drain();
+        }
         return {
           id: activeEntry.record.id,
           promise: activeEntry.promise as Promise<T>,
@@ -415,6 +444,18 @@ export class TaskScheduler {
     return true;
   }
 
+  setSourceForegroundConcurrency(concurrency: number): void {
+    const nextConcurrency = Number.isFinite(concurrency)
+      ? Math.max(1, Math.round(concurrency))
+      : DEFAULT_SOURCE_FOREGROUND_CONCURRENCY;
+    if (nextConcurrency === this.sourceForegroundConcurrency) return;
+    this.sourceForegroundConcurrency = nextConcurrency;
+    this.debug("source foreground concurrency changed", undefined, {
+      sourceForegroundConcurrency: nextConcurrency,
+    });
+    this.drain();
+  }
+
   getSnapshot = (): TaskSnapshot => this.snapshot;
 
   getTask(id: string): TaskRecord | undefined {
@@ -458,28 +499,46 @@ export class TaskScheduler {
   }
 
   private drainSourceForeground(): void {
-    if (this.sourceQueuesPaused) return;
-
-    while (this.activeForegroundCount < this.sourceForegroundConcurrency) {
+    while (this.activeForegroundBaseCount < this.sourceForegroundConcurrency) {
+      const queuedExclusive = this.hasQueuedExclusiveForegroundSourceTask();
       const next = this.pickSourceTask((entry) => {
         if (entry.record.priority === "background") return false;
         if (this.activeExclusiveSourceTaskId) return false;
-        if (entry.exclusive && this.activeForegroundCount > 0) return false;
+        if (entry.exclusive) {
+          return (
+            this.activeForegroundBaseCount === 0 &&
+            this.activeForegroundBoostCount === 0
+          );
+        }
+        if (queuedExclusive) return false;
         return true;
       });
+      if (!next) break;
+      this.startSource(next, "foreground");
+    }
+
+    while (
+      this.activeForegroundBoostCount < INTERACTIVE_SOURCE_FOREGROUND_BOOST &&
+      !this.hasActiveInteractiveSourceTask()
+    ) {
+      const next = this.pickSourceTask((entry) => {
+        if (this.activeExclusiveSourceTaskId) return false;
+        if (entry.exclusive) return false;
+        return entry.record.priority === "interactive";
+      });
       if (!next) return;
-      this.removeFromSourceQueue(next);
-      this.activeSourceById.set(next.record.source!.id, next.record.id);
-      this.activeForegroundCount += 1;
-      if (next.exclusive) this.activeExclusiveSourceTaskId = next.record.id;
-      this.start(next);
+      this.startSource(next, "interactiveBoost");
     }
   }
 
   private drainSourceBackground(): void {
     if (this.sourceQueuesPaused) return;
 
-    if (this.activeForegroundCount > 0 || this.hasQueuedForegroundSourceTask()) {
+    if (
+      this.activeForegroundBaseCount > 0 ||
+      this.activeForegroundBoostCount > 0 ||
+      this.hasQueuedForegroundSourceTask()
+    ) {
       return;
     }
 
@@ -488,19 +547,33 @@ export class TaskScheduler {
         (entry) => entry.record.priority === "background",
       );
       if (!next) return;
-      this.removeFromSourceQueue(next);
-      this.activeSourceById.set(next.record.source!.id, next.record.id);
-      this.activeBackgroundCount += 1;
-      this.start(next);
+      this.startSource(next, "background");
     }
+  }
+
+  private startSource(
+    entry: TaskEntry,
+    slot: "background" | "foreground" | "interactiveBoost",
+  ): void {
+    this.removeFromSourceQueue(entry);
+    this.activeSourceById.set(entry.record.source!.id, entry.record.id);
+    entry.sourceSlot = slot;
+    if (slot === "background") {
+      this.activeBackgroundCount += 1;
+    } else if (slot === "interactiveBoost") {
+      this.activeForegroundBoostCount += 1;
+    } else {
+      this.activeForegroundBaseCount += 1;
+    }
+    if (entry.exclusive) this.activeExclusiveSourceTaskId = entry.record.id;
+    this.start(entry);
   }
 
   private pickSourceTask(
     predicate: (entry: TaskEntry) => boolean,
   ): TaskEntry | null {
     const candidates: TaskEntry[] = [];
-    for (const [sourceId, queue] of this.sourceQueues) {
-      if (this.pausedSourceIds.has(sourceId)) continue;
+    for (const queue of this.sourceQueues.values()) {
       let sourceCandidate: TaskEntry | null = null;
       for (const id of queue) {
         const entry = this.entries.get(id);
@@ -508,6 +581,15 @@ export class TaskScheduler {
           continue;
         }
         if (this.activeSourceById.has(entry.record.source.id)) break;
+        if (this.isSourceTaskPaused(entry)) continue;
+        const cooldownDelay = this.sourceCooldownDelay(entry);
+        if (cooldownDelay > 0) {
+          this.scheduleSourceCooldownDrain(
+            entry.spec.sourceCooldownKey!,
+            cooldownDelay,
+          );
+          continue;
+        }
         if (!predicate(entry)) continue;
         if (!sourceCandidate || this.compareTaskOrder(entry, sourceCandidate) < 0) {
           sourceCandidate = entry;
@@ -520,19 +602,102 @@ export class TaskScheduler {
     return candidates[0] ?? null;
   }
 
+  private isSourceTaskPaused(entry: TaskEntry): boolean {
+    if (entry.record.priority === "interactive") return false;
+    const sourceId = entry.record.source?.id;
+    return (
+      this.sourceQueuesPaused ||
+      (sourceId !== undefined && this.pausedSourceIds.has(sourceId))
+    );
+  }
+
+  private hasActiveInteractiveSourceTask(): boolean {
+    for (const entry of this.entries.values()) {
+      if (
+        entry.record.lane === "source" &&
+        entry.record.priority === "interactive" &&
+        entry.record.status === "running"
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private compareTaskOrder(a: TaskEntry, b: TaskEntry): number {
     const priority = priorityRank(a.record.priority) - priorityRank(b.record.priority);
     if (priority !== 0) return priority;
     return a.record.createdAt - b.record.createdAt;
   }
 
+  private sourceCooldownDelay(entry: TaskEntry): number {
+    const key = entry.spec.sourceCooldownKey;
+    if (!key) return 0;
+    const until = this.sourceCooldownUntilByKey.get(key);
+    if (!until) return 0;
+
+    const delay = until - Date.now();
+    if (delay > 0) return delay;
+
+    this.clearSourceCooldown(key);
+    return 0;
+  }
+
+  private setSourceCooldown(entry: TaskEntry): void {
+    const key = entry.spec.sourceCooldownKey;
+    const cooldownMs = entry.spec.sourceCooldownMs ?? 0;
+    if (!key || cooldownMs <= 0) return;
+
+    const delayMs = Math.max(0, Math.round(cooldownMs));
+    const until = Date.now() + delayMs;
+    this.clearSourceCooldown(key);
+    this.sourceCooldownUntilByKey.set(key, until);
+    this.scheduleSourceCooldownDrain(key, delayMs);
+  }
+
+  private clearSourceCooldown(key: string): void {
+    const timer = this.sourceCooldownTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.sourceCooldownTimers.delete(key);
+    this.sourceCooldownUntilByKey.delete(key);
+  }
+
+  private scheduleSourceCooldownDrain(key: string, delayMs: number): void {
+    if (this.sourceCooldownTimers.has(key)) return;
+    const timer = setTimeout(() => {
+      this.sourceCooldownTimers.delete(key);
+      const until = this.sourceCooldownUntilByKey.get(key);
+      if (until !== undefined && until <= Date.now()) {
+        this.sourceCooldownUntilByKey.delete(key);
+      }
+      this.drain();
+    }, Math.max(0, delayMs));
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+    this.sourceCooldownTimers.set(key, timer);
+  }
+
   private hasQueuedForegroundSourceTask(): boolean {
-    for (const [sourceId, queue] of this.sourceQueues) {
-      if (this.pausedSourceIds.has(sourceId)) continue;
+    for (const queue of this.sourceQueues.values()) {
       for (const id of queue) {
         const entry = this.entries.get(id);
         if (!entry || entry.record.status !== "queued") continue;
+        if (this.isSourceTaskPaused(entry)) continue;
         if (entry.record.priority !== "background") return true;
+      }
+    }
+    return false;
+  }
+
+  private hasQueuedExclusiveForegroundSourceTask(): boolean {
+    for (const queue of this.sourceQueues.values()) {
+      for (const id of queue) {
+        const entry = this.entries.get(id);
+        if (!entry || entry.record.status !== "queued") continue;
+        if (this.isSourceTaskPaused(entry)) continue;
+        if (entry.record.priority === "background") continue;
+        if (entry.exclusive) return true;
       }
     }
     return false;
@@ -620,14 +785,27 @@ export class TaskScheduler {
       if (sourceId && this.activeSourceById.get(sourceId) === entry.record.id) {
         this.activeSourceById.delete(sourceId);
       }
-      if (entry.record.priority === "background") {
-        this.activeBackgroundCount = Math.max(0, this.activeBackgroundCount - 1);
-      } else {
-        this.activeForegroundCount = Math.max(0, this.activeForegroundCount - 1);
+      if (entry.sourceSlot === "background") {
+        this.activeBackgroundCount = Math.max(
+          0,
+          this.activeBackgroundCount - 1,
+        );
+      } else if (entry.sourceSlot === "interactiveBoost") {
+        this.activeForegroundBoostCount = Math.max(
+          0,
+          this.activeForegroundBoostCount - 1,
+        );
+      } else if (entry.sourceSlot === "foreground") {
+        this.activeForegroundBaseCount = Math.max(
+          0,
+          this.activeForegroundBaseCount - 1,
+        );
       }
+      entry.sourceSlot = undefined;
       if (this.activeExclusiveSourceTaskId === entry.record.id) {
         this.activeExclusiveSourceTaskId = null;
       }
+      this.setSourceCooldown(entry);
     }
 
     if (

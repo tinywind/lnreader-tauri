@@ -1,6 +1,7 @@
 mod backup;
 mod plugin_host;
 mod scraper;
+mod tray;
 
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -45,12 +46,31 @@ pub fn run() {
             sql: include_str!("../../drizzle/0005_naive_leech.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "materialize library novel chapter statistics",
+            sql: include_str!("../../drizzle/0006_slippery_magma.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "maintain library novel statistics incrementally",
+            sql: include_str!("../../drizzle/0007_furry_ogun.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "store downloaded chapter content byte counts",
+            sql: include_str!("../../drizzle/0008_careful_sunset_bain.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -70,9 +90,11 @@ pub fn run() {
             scraper::scraper_poll_control_message,
             scraper::scraper_clear_cookies,
             scraper::scraper_open_devtools,
+            tray::tray_set_task_progress,
         ])
         .setup(|app| {
             app.manage(scraper::ScraperState::default());
+            tray::init(app).map_err(|err| format!("tray init: {err}"))?;
             scraper::init_scraper(app.handle())
                 .map_err(|err| format!("scraper init: {err}"))?;
             if cfg!(debug_assertions) {

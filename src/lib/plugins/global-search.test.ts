@@ -96,7 +96,7 @@ describe("globalSearch", () => {
     expect(results[0]?.error).toContain("Search timed out");
   });
 
-  it("starts per-plugin timeout only after the queued source task runs", async () => {
+  it("runs UI search tasks while source queues are paused", async () => {
     let started = 0;
     const manager = makeManager([
       makePlugin("queued", async () => {
@@ -107,13 +107,7 @@ describe("globalSearch", () => {
 
     taskScheduler.pauseSourceQueue();
     try {
-      const search = globalSearch(manager, "x", { timeoutMs: 5 });
-
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(started).toBe(0);
-
-      taskScheduler.resumeSourceQueue();
-      const results = await search;
+      const results = await globalSearch(manager, "x", { timeoutMs: 5 });
 
       expect(started).toBe(1);
       expect(results[0]?.novels).toEqual([{ name: "Ready", path: "/ready" }]);

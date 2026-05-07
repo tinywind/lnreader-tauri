@@ -1,5 +1,8 @@
 package io.github.tinywind.norea
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -11,6 +14,7 @@ import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   private var androidScraperBridge: AndroidScraperBridge? = null
+  private var notificationPermissionRequested = false
   @Volatile
   private var safeAreaInsetsJson = insetsJson(Insets.NONE)
 
@@ -25,6 +29,7 @@ class MainActivity : TauriActivity() {
     androidScraperBridge = bridge
     webView.addJavascriptInterface(bridge, "__NoreaAndroidScraper")
     webView.addJavascriptInterface(SafeAreaBridge(), "__NoreaAndroidSafeArea")
+    webView.addJavascriptInterface(TaskNotificationBridge(), "__NoreaAndroidTasks")
     webView.addJavascriptInterface(WindowMetricsBridge(webView), "__NoreaAndroidWindow")
     webView.settings.apply {
       setSupportZoom(false)
@@ -58,9 +63,63 @@ class MainActivity : TauriActivity() {
     fun getInsets(): String = safeAreaInsetsJson
   }
 
+  private inner class TaskNotificationBridge {
+    @JavascriptInterface
+    fun update(payload: String) {
+      runOnUiThread {
+        try {
+          try {
+            requestNotificationPermissionIfNeeded()
+          } catch (_: Throwable) {
+            // Permission prompts are best-effort; task execution must continue.
+          }
+          val json = JSONObject(payload)
+          val progress = json.optJSONObject("progress")
+          val current = progress?.takeIf { it.has("current") }?.optInt("current")
+          val total = progress?.takeIf { it.has("total") }?.optInt("total")
+          TaskForegroundService.update(
+            this@MainActivity,
+            json.optString("title", "Norea tasks"),
+            json.optString("body", ""),
+            current,
+            total,
+          )
+        } catch (_: Throwable) {
+          // Ignore malformed bridge payloads so task execution is not affected.
+        }
+      }
+    }
+
+    @JavascriptInterface
+    fun stop() {
+      runOnUiThread {
+        try {
+          TaskForegroundService.stop(this@MainActivity)
+        } catch (_: Throwable) {
+          // The service may already be stopped by Android.
+        }
+      }
+    }
+  }
+
   private inner class WindowMetricsBridge(private val webView: WebView) {
     @JavascriptInterface
     fun getMetrics(): String = windowMetricsJson(webView)
+  }
+
+  private fun requestNotificationPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    if (notificationPermissionRequested) return
+    if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    notificationPermissionRequested = true
+    requestPermissions(
+      arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+      REQUEST_POST_NOTIFICATIONS,
+    )
   }
 
   private fun windowMetricsJson(webView: WebView): String {
@@ -79,6 +138,8 @@ class MainActivity : TauriActivity() {
   }
 
   companion object {
+    private const val REQUEST_POST_NOTIFICATIONS = 1002
+
     private fun insetsJson(insets: Insets): String {
       return JSONObject()
         .put("top", insets.top)
