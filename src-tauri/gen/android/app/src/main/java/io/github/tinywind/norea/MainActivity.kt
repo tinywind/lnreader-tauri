@@ -14,6 +14,7 @@ import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   private var androidScraperBridge: AndroidScraperBridge? = null
+  private var appliedPageScalePercent = 100
   private var notificationPermissionRequested = false
   @Volatile
   private var safeAreaInsetsJson = insetsJson(Insets.NONE)
@@ -32,7 +33,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(TaskNotificationBridge(), "__NoreaAndroidTasks")
     webView.addJavascriptInterface(WindowMetricsBridge(webView), "__NoreaAndroidWindow")
     webView.settings.apply {
-      setSupportZoom(false)
+      setSupportZoom(true)
       builtInZoomControls = false
       displayZoomControls = false
       loadWithOverviewMode = false
@@ -111,6 +112,11 @@ class MainActivity : TauriActivity() {
       val boundedScale = scalePercent.coerceIn(100, 300)
       runOnUiThread {
         webView.setInitialScale(boundedScale)
+        val zoomFactor = boundedScale.toFloat() / appliedPageScalePercent.toFloat()
+        if (zoomFactor > 0f && kotlin.math.abs(zoomFactor - 1f) > 0.01f) {
+          webView.zoomBy(zoomFactor)
+        }
+        appliedPageScalePercent = boundedScale
       }
     }
   }

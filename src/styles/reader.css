@@ -362,10 +362,9 @@
 }
 
 .lnr-reader-shell[data-full-page="true"] {
-  height: calc(
-    var(--lnr-viewport-height) - var(--lnr-safe-area-top) -
-      var(--lnr-safe-area-bottom)
-  );
+  height: var(--lnr-viewport-height);
+  padding: var(--lnr-safe-area-top) var(--lnr-safe-area-right)
+    var(--lnr-safe-area-bottom) var(--lnr-safe-area-left);
   position: relative;
 }
 
@@ -381,12 +380,12 @@
 
 .lnr-reader-shell[data-full-page="true"] .lnr-reader-topbar {
   box-shadow: var(--lnr-design-shadow-floating);
-  left: 0;
+  left: var(--lnr-safe-area-left);
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  right: 0;
-  top: 0;
+  right: var(--lnr-safe-area-right);
+  top: var(--lnr-safe-area-top);
   transform: translateY(-100%);
   transition:
     opacity 180ms ease,
@@ -395,13 +394,13 @@
 }
 
 .lnr-reader-shell[data-full-page="true"] .lnr-reader-bottom-strip {
-  bottom: var(--lnr-mobile-nav-content-height);
+  bottom: var(--lnr-app-bottom-inset);
   box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.1);
-  left: 0;
+  left: var(--lnr-safe-area-left);
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  right: 0;
+  right: var(--lnr-safe-area-right);
   transform: translateY(100%);
   transition:
     opacity 180ms ease,
@@ -466,14 +465,14 @@
   }
 
   .lnr-reader-shell[data-full-page="true"] .lnr-reader-chapter-panel {
-    bottom: calc(24px + var(--lnr-mobile-nav-height));
+    bottom: calc(24px + var(--lnr-app-bottom-inset));
     box-shadow: var(--lnr-design-shadow-floating);
     display: block;
-    left: 0;
+    left: var(--lnr-safe-area-left);
     opacity: 0;
     pointer-events: none;
     position: absolute;
-    top: 36px;
+    top: calc(var(--lnr-safe-area-top) + 36px);
     transform: translateX(-100%);
     transition:
       opacity 180ms ease,

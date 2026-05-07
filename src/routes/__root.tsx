@@ -411,18 +411,7 @@ export function RootLayout() {
         style={{
           background: "var(--lnr-design-bg)",
           color: "var(--lnr-design-ink)",
-          paddingBlockStart: readerFullPageActive
-            ? "var(--lnr-safe-area-top)"
-            : undefined,
-          paddingBlockEnd: readerFullPageActive
-            ? "var(--lnr-safe-area-bottom)"
-            : undefined,
-          paddingInlineStart: readerFullPageActive
-            ? "var(--lnr-safe-area-left)"
-            : undefined,
-          paddingInlineEnd: readerFullPageActive
-            ? "var(--lnr-safe-area-right)"
-            : undefined,
+          padding: readerFullPageActive ? 0 : undefined,
         }}
       >
         {pageVisited("library") ? (

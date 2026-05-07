@@ -6,6 +6,11 @@ echo "Running pre-push checks..."
 HOOK_DIR=$(dirname "$0")
 "$HOOK_DIR/pre-commit"
 
+if ! command -v cargo >/dev/null 2>&1 && [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+
 if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo is required for pre-push checks."
   exit 1

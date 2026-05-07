@@ -25,7 +25,7 @@
   "tasks.count": "작업 {count}개",
   "tasks.expand": "펼치기",
   "tasks.collapse": "접기",
-  "tasks.downloadWaiting": "소스 작업이 끝나기를 기다리는 중입니다. 현재 진행 중인 챕터 다운로드만 먼저 끝날 수 있습니다.",
+  "tasks.downloadWaiting": "추가 백그라운드 다운로드를 시작하기 전에 포그라운드 소스 작업을 기다리는 중입니다.",
   "tasks.allSourcesPaused": "모든 소스 대기열이 중지되어 있습니다. 진행 중인 작업은 끝날 수 있고 대기 중인 작업은 기다립니다.",
   "tasks.sourcePaused": "이 소스 대기열이 중지되어 있습니다. 진행 중인 작업은 끝날 수 있고 대기 중인 작업은 기다립니다.",
   "tasks.paused": "중지됨",

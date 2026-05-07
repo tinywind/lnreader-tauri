@@ -37,6 +37,12 @@ function makeManager(plugins: Plugin[]): PluginManager {
   return manager;
 }
 
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("globalSearch", () => {
   beforeEach(() => {
     taskScheduler.resumeSourceQueue();
@@ -96,7 +102,7 @@ describe("globalSearch", () => {
     expect(results[0]?.error).toContain("Search timed out");
   });
 
-  it("runs UI search tasks while source queues are paused", async () => {
+  it("queues global search tasks while source queues are paused", async () => {
     let started = 0;
     const manager = makeManager([
       makePlugin("queued", async () => {
@@ -107,7 +113,13 @@ describe("globalSearch", () => {
 
     taskScheduler.pauseSourceQueue();
     try {
-      const results = await globalSearch(manager, "x", { timeoutMs: 5 });
+      const promise = globalSearch(manager, "x", { timeoutMs: 5 });
+      await settle();
+
+      expect(started).toBe(0);
+
+      taskScheduler.resumeSourceQueue();
+      const results = await promise;
 
       expect(started).toBe(1);
       expect(results[0]?.novels).toEqual([{ name: "Ready", path: "/ready" }]);

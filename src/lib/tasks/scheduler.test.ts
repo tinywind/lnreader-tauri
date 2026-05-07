@@ -87,7 +87,7 @@ describe("TaskScheduler", () => {
     ]);
   });
 
-  it("lets the current background download finish before foreground source work", async () => {
+  it("runs foreground source work alongside lower-priority background work", async () => {
     const scheduler = new TaskScheduler({
       sourceBackgroundConcurrency: 1,
       sourceForegroundConcurrency: 1,
@@ -132,17 +132,20 @@ describe("TaskScheduler", () => {
       },
     });
 
+    await foreground.promise;
+    await settle();
+    expect(order).toEqual(["download-1:start", "foreground:start"]);
+
     finishFirstDownload();
     await Promise.all([
       firstDownload.promise,
-      foreground.promise,
       secondDownload.promise,
     ]);
 
     expect(order).toEqual([
       "download-1:start",
-      "download-1:finish",
       "foreground:start",
+      "download-1:finish",
       "download-2:start",
     ]);
   });
@@ -190,7 +193,7 @@ describe("TaskScheduler", () => {
     });
 
     await settle();
-    expect(order).toEqual(["download-a:start"]);
+    expect(order).toEqual(["download-a:start", "foreground-a:start"]);
 
     finishActiveDownload();
     await Promise.all([
@@ -261,7 +264,7 @@ describe("TaskScheduler", () => {
     ]);
   });
 
-  it("uses one extra foreground slot for interactive source work", async () => {
+  it("uses priority boost slots for interactive source work", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,
       sourceQueuesPaused: false,
@@ -354,7 +357,48 @@ describe("TaskScheduler", () => {
     ]);
   });
 
-  it("does not use the interactive boost for user priority work", async () => {
+  it("boosts interactive work past lower-priority same-source work", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+    let finishSearch!: () => void;
+
+    const search = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Global search",
+      priority: "normal",
+      source: { id: "p", name: "Plugin" },
+      run: () =>
+        new Promise<void>((resolve) => {
+          order.push("search:start");
+          finishSearch = resolve;
+        }),
+    });
+
+    await settle();
+
+    const openNovel = scheduler.enqueueSource({
+      kind: "source.openNovel",
+      title: "Open novel",
+      priority: "interactive",
+      source: { id: "p", name: "Plugin" },
+      run: async () => {
+        order.push("open:start");
+      },
+    });
+
+    await openNovel.promise;
+    await settle();
+
+    expect(order).toEqual(["search:start", "open:start"]);
+
+    finishSearch();
+    await search.promise;
+  });
+
+  it("uses priority boost slots for user priority work", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 1,
       sourceQueuesPaused: false,
@@ -366,7 +410,7 @@ describe("TaskScheduler", () => {
       kind: "source.globalSearch",
       title: "Global search",
       priority: "normal",
-      source: { id: "a", name: "Source A" },
+      source: { id: "p", name: "Plugin" },
       run: () =>
         new Promise<void>((resolve) => {
           order.push("normal:start");
@@ -380,19 +424,18 @@ describe("TaskScheduler", () => {
       kind: "chapter.download",
       title: "Download chapter",
       priority: "user",
-      source: { id: "b", name: "Source B" },
+      source: { id: "p", name: "Plugin" },
       run: async () => {
         order.push("user:start");
       },
     });
 
+    await userDownload.promise;
     await settle();
-    expect(order).toEqual(["normal:start"]);
+    expect(order).toEqual(["normal:start", "user:start"]);
 
     finishActive();
-    await Promise.all([active.promise, userDownload.promise]);
-
-    expect(order).toEqual(["normal:start", "user:start"]);
+    await active.promise;
   });
 
   it("orders queued source work by the full priority hierarchy", async () => {
@@ -404,9 +447,9 @@ describe("TaskScheduler", () => {
     let finishActiveSearch!: () => void;
 
     const activeSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Active global search",
-      priority: "normal",
+      kind: "source.openNovel",
+      title: "Active open novel",
+      priority: "interactive",
       source: { id: "p", name: "Plugin" },
       run: () =>
         new Promise<void>((resolve) => {
@@ -600,7 +643,7 @@ describe("TaskScheduler", () => {
     }
   });
 
-  it("does not use the interactive boost for queued exclusive source work", async () => {
+  it("uses priority boost slots for exclusive source work", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,
       sourceQueuesPaused: false,
@@ -658,24 +701,25 @@ describe("TaskScheduler", () => {
     });
 
     await settle();
-    expect(order).toEqual(["normal-a:start", "normal-b:start"]);
+    expect(order).toEqual(["normal-a:start", "normal-b:start", "site:start"]);
+
+    closeSite();
+    await site.promise;
+    await settle();
+    expect(order).toEqual(["normal-a:start", "normal-b:start", "site:start"]);
 
     finishFirstSearch();
     await firstSearch.promise;
-    await settle();
-    expect(order).toEqual(["normal-a:start", "normal-b:start"]);
-
-    finishSecondSearch();
-    await secondSearch.promise;
     await settle();
     expect(order).toEqual([
       "normal-a:start",
       "normal-b:start",
       "site:start",
+      "normal-c:start",
     ]);
 
-    closeSite();
-    await Promise.all([site.promise, blockedSearch.promise]);
+    finishSecondSearch();
+    await Promise.all([secondSearch.promise, blockedSearch.promise]);
 
     expect(order).toEqual([
       "normal-a:start",
@@ -708,7 +752,7 @@ describe("TaskScheduler", () => {
       kind: "source.search",
       title: "Queued search",
       priority: "interactive",
-      source: { id: "q", name: "Other Plugin" },
+      source: { id: "p", name: "Plugin" },
       run: async () => {
         order.push("queued:start");
       },
@@ -1074,7 +1118,7 @@ describe("TaskScheduler", () => {
       kind: "source.search",
       title: "Active search",
       priority: "interactive",
-      source: { id: "active", name: "Active Source" },
+      source: { id: "p", name: "Plugin" },
       run: () =>
         new Promise<void>((resolve) => {
           order.push("active:start");

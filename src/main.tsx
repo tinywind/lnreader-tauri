@@ -139,13 +139,13 @@ declare global {
 
 interface AndroidLayoutConfig {
   className: AndroidLayoutClass;
+  nativeZoomScale: number;
   nativePxPerCssPx: number;
-  viewportInitialScale: number;
   viewportWidth: number;
 }
 
 interface AndroidViewportScale {
-  initialScale: number;
+  nativeZoomScale: number;
   width: number;
 }
 
@@ -191,10 +191,10 @@ function resolveAndroidViewportScale(
   const scale = normalizeUiScalePercent(uiScalePercent) / 100;
   const targetWidth = viewportWidth * (1 / scale);
   if (targetWidth >= ANDROID_MIN_VIEWPORT_WIDTH) {
-    return { initialScale: 1, width: targetWidth };
+    return { nativeZoomScale: 1, width: targetWidth };
   }
   return {
-    initialScale: ANDROID_MIN_VIEWPORT_WIDTH / targetWidth,
+    nativeZoomScale: ANDROID_MIN_VIEWPORT_WIDTH / targetWidth,
     width: ANDROID_MIN_VIEWPORT_WIDTH,
   };
 }
@@ -223,8 +223,8 @@ function resolveFallbackAndroidLayout(uiScalePercent: unknown): AndroidLayoutCon
 
   return {
     className: classifyAndroidLayout(viewportScale.width),
-    nativePxPerCssPx: (widthPx / viewportScale.width) * viewportScale.initialScale,
-    viewportInitialScale: viewportScale.initialScale,
+    nativeZoomScale: viewportScale.nativeZoomScale,
+    nativePxPerCssPx: (widthPx / viewportScale.width) * viewportScale.nativeZoomScale,
     viewportWidth: viewportScale.width,
   };
 }
@@ -252,13 +252,13 @@ function resolveAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
   const physicalWidthPx = widthPx ?? (density ? baseViewportWidth * density : null);
   const nativePxPerCssPx =
     physicalWidthPx && physicalWidthPx > 0
-      ? (physicalWidthPx / viewportScale.width) * viewportScale.initialScale
+      ? (physicalWidthPx / viewportScale.width) * viewportScale.nativeZoomScale
       : density ?? 1;
 
   return {
     className: classifyAndroidLayout(viewportScale.width),
+    nativeZoomScale: viewportScale.nativeZoomScale,
     nativePxPerCssPx,
-    viewportInitialScale: viewportScale.initialScale,
     viewportWidth: viewportScale.width,
   };
 }
@@ -267,13 +267,11 @@ function viewportMeta(): HTMLMetaElement | null {
   return document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
 }
 
-function applyAndroidViewport(width: number, initialScale: number): void {
+function applyAndroidViewport(width: number): void {
   const viewport = viewportMeta();
   if (!viewport) return;
-  const viewportScale = initialScale.toFixed(3);
   const content =
-    `width=${Math.round(width)}, initial-scale=${viewportScale}, ` +
-    `maximum-scale=${viewportScale}, ` +
+    `width=${Math.round(width)}, initial-scale=1.0, maximum-scale=1.0, ` +
     "user-scalable=no, viewport-fit=cover";
   if (viewport.content !== content) {
     viewport.content = content;
@@ -364,9 +362,9 @@ function applyRuntimeUiScale(
   androidNativePxPerCssPx = layout.nativePxPerCssPx;
   root.dataset.lnrPlatform = "android";
   root.dataset.lnrAndroidLayout = layout.className;
-  applyAndroidViewport(layout.viewportWidth, layout.viewportInitialScale);
+  applyAndroidViewport(layout.viewportWidth);
   window.__NoreaAndroidWindow?.setInitialScale?.(
-    Math.round(layout.viewportInitialScale * 100),
+    Math.round(layout.nativeZoomScale * 100),
   );
   root.style.setProperty("--lnr-root-font-size", `${ROOT_FONT_SIZE_PX}px`);
   root.style.setProperty("--lnr-ui-scale", layout.nativePxPerCssPx.toFixed(2));

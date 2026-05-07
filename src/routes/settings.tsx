@@ -237,13 +237,6 @@ function AppSettingsSection() {
             description={t("settings.app.uiScale.description")}
           >
             <div className="lnr-settings-ui-scale-control">
-              <NumberInput
-                value={appearance.uiScalePercent}
-                min={MIN_UI_SCALE_PERCENT}
-                max={MAX_UI_SCALE_PERCENT}
-                step={5}
-                onChange={appearance.setUiScalePercent}
-              />
               <Slider
                 value={appearance.uiScalePercent}
                 min={MIN_UI_SCALE_PERCENT}
@@ -255,6 +248,13 @@ function AppSettingsSection() {
                   { value: 100, label: "100%" },
                   { value: MAX_UI_SCALE_PERCENT, label: "150%" },
                 ]}
+                onChange={appearance.setUiScalePercent}
+              />
+              <NumberInput
+                value={appearance.uiScalePercent}
+                min={MIN_UI_SCALE_PERCENT}
+                max={MAX_UI_SCALE_PERCENT}
+                step={5}
                 onChange={appearance.setUiScalePercent}
               />
             </div>

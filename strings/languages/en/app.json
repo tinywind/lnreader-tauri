@@ -25,7 +25,7 @@
   "tasks.count": "{count} tasks",
   "tasks.expand": "Expand",
   "tasks.collapse": "Collapse",
-  "tasks.downloadWaiting": "Waiting for source work to finish. The current chapter download may finish first.",
+  "tasks.downloadWaiting": "Waiting for foreground source work before starting more background downloads.",
   "tasks.allSourcesPaused": "All source queues are paused. Running work can finish; queued work waits.",
   "tasks.sourcePaused": "This source queue is paused. Running work can finish; queued work waits.",
   "tasks.paused": "Paused",

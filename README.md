@@ -132,6 +132,9 @@ pnpm install
 pnpm tauri dev
 ```
 
+`pnpm install` configures the local Git hooks path to `.githooks`. If hooks are
+missing in an existing checkout, run `pnpm hooks:install` once.
+
 Useful checks:
 
 ```bash

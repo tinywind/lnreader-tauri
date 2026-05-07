@@ -321,8 +321,12 @@
   align-items: center;
   display: grid;
   gap: 16px;
-  grid-template-columns: 88px minmax(180px, 260px);
+  grid-template-columns: minmax(180px, 260px) 88px;
   min-width: 0;
+}
+
+.lnr-settings-ui-scale-control :where(.mantine-InputWrapper-root) {
+  width: 88px;
 }
 
 .lnr-settings-switch-list {
