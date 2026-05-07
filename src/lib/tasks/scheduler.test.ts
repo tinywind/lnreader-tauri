@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TaskScheduler } from "./scheduler";
 
 async function settle(): Promise<void> {
@@ -260,6 +260,117 @@ describe("TaskScheduler", () => {
     expect(order).toEqual(["active:start", "queued:start"]);
   });
 
+  it("cancels running tasks and keeps them cancelled after work settles", async () => {
+    const scheduler = new TaskScheduler({ sourceQueuesPaused: false });
+    const order: string[] = [];
+    let finishRunningTask!: () => void;
+
+    const running = scheduler.enqueueSource({
+      kind: "source.search",
+      title: "Running source task",
+      priority: "interactive",
+      source: { id: "p", name: "Plugin" },
+      run: () =>
+        new Promise<void>((resolve) => {
+          order.push("running:start");
+          finishRunningTask = resolve;
+        }),
+    });
+
+    await settle();
+
+    expect(scheduler.getTask(running.id)?.canCancel).toBe(true);
+    expect(scheduler.cancel(running.id)).toBe(true);
+    await expect(running.promise).rejects.toThrow("Task was cancelled.");
+    expect(scheduler.getTask(running.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(running.id)?.canRetry).toBe(true);
+
+    finishRunningTask();
+    await settle();
+
+    expect(order).toEqual(["running:start"]);
+    expect(scheduler.getTask(running.id)?.status).toBe("cancelled");
+  });
+
+  it("keeps only the latest open site task queued", async () => {
+    const scheduler = new TaskScheduler();
+
+    const first = scheduler.enqueueSource({
+      kind: "source.openSite",
+      title: "Open first site",
+      priority: "interactive",
+      exclusive: true,
+      source: { id: "a", name: "Source A" },
+      dedupeKey: "source.openSite:a:https://a.test",
+      subject: { url: "https://a.test" },
+      run: async () => undefined,
+    });
+    const second = scheduler.enqueueSource({
+      kind: "source.openSite",
+      title: "Open second site",
+      priority: "interactive",
+      exclusive: true,
+      source: { id: "b", name: "Source B" },
+      dedupeKey: "source.openSite:b:https://b.test",
+      subject: { url: "https://b.test" },
+      run: async () => undefined,
+    });
+
+    await expect(first.promise).rejects.toThrow("Task was cancelled.");
+
+    expect(first.id).not.toBe(second.id);
+    expect(scheduler.getTask(first.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(second.id)?.status).toBe("queued");
+  });
+
+  it("replaces a running open site task with the latest request", async () => {
+    const scheduler = new TaskScheduler({ sourceQueuesPaused: false });
+    const order: string[] = [];
+    let closeSecondSite!: () => void;
+
+    const first = scheduler.enqueueSource({
+      kind: "source.openSite",
+      title: "Open first site",
+      priority: "interactive",
+      exclusive: true,
+      source: { id: "a", name: "Source A" },
+      dedupeKey: "source.openSite:a:https://same.test",
+      subject: { url: "https://same.test" },
+      run: () =>
+        new Promise<void>(() => {
+          order.push("site-1:start");
+        }),
+    });
+
+    await settle();
+
+    const second = scheduler.enqueueSource({
+      kind: "source.openSite",
+      title: "Open second site",
+      priority: "interactive",
+      exclusive: true,
+      source: { id: "a", name: "Source A" },
+      dedupeKey: "source.openSite:a:https://same.test",
+      subject: { url: "https://same.test" },
+      run: () =>
+        new Promise<void>((resolve) => {
+          order.push("site-2:start");
+          closeSecondSite = resolve;
+        }),
+    });
+
+    expect(second.id).not.toBe(first.id);
+    await expect(first.promise).rejects.toThrow("Task was cancelled.");
+    await settle();
+
+    expect(order).toEqual(["site-1:start", "site-2:start"]);
+    expect(scheduler.getTask(first.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(second.id)?.status).toBe("running");
+
+    closeSecondSite();
+    await second.promise;
+  });
+
   it("starts with source queues paused until all source queues are resumed", async () => {
     const scheduler = new TaskScheduler();
     const order: string[] = [];
@@ -384,7 +495,58 @@ describe("TaskScheduler", () => {
     });
 
     expect(second.id).toBe(first.id);
+    await settle();
     finish();
     await Promise.all([first.promise, second.promise]);
+  });
+
+  it("removes succeeded and cancelled tasks after a short retention window", async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduler = new TaskScheduler({
+        sourceQueuesPaused: false,
+        terminalTaskRetentionMs: 10,
+      });
+
+      const succeeded = scheduler.enqueueSource({
+        kind: "source.search",
+        title: "Finished task",
+        priority: "interactive",
+        source: { id: "p", name: "Plugin" },
+        run: async () => undefined,
+      });
+      const cancelled = scheduler.enqueueSource({
+        kind: "source.search",
+        title: "Cancelled task",
+        priority: "interactive",
+        source: { id: "q", name: "Other Plugin" },
+        run: async () => undefined,
+      });
+      const failed = scheduler.enqueueSource({
+        kind: "source.search",
+        title: "Failed task",
+        priority: "interactive",
+        source: { id: "r", name: "Failed Plugin" },
+        run: async () => {
+          throw new Error("failed");
+        },
+      });
+
+      expect(scheduler.cancel(cancelled.id)).toBe(true);
+      await expect(cancelled.promise).rejects.toThrow("Task was cancelled.");
+      await Promise.allSettled([succeeded.promise, failed.promise]);
+
+      expect(scheduler.getTask(succeeded.id)?.status).toBe("succeeded");
+      expect(scheduler.getTask(cancelled.id)?.status).toBe("cancelled");
+      expect(scheduler.getTask(failed.id)?.status).toBe("failed");
+
+      vi.advanceTimersByTime(10);
+
+      expect(scheduler.getTask(succeeded.id)).toBeUndefined();
+      expect(scheduler.getTask(cancelled.id)).toBeUndefined();
+      expect(scheduler.getTask(failed.id)?.status).toBe("failed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

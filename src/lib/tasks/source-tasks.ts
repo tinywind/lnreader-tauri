@@ -57,6 +57,10 @@ export function enqueueOpenSiteTask(
     run: async ({ signal }) =>
       new Promise<void>((resolve, reject) => {
         const handleAbort = () => {
+          const siteBrowser = useSiteBrowserStore.getState();
+          if (siteBrowser.visible && siteBrowser.currentUrl === url) {
+            siteBrowser.hide();
+          }
           cleanup();
           reject(new DOMException("Task was cancelled.", "AbortError"));
         };

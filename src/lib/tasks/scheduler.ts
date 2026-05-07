@@ -142,6 +142,7 @@ interface TaskEntry {
 const DEFAULT_SOURCE_FOREGROUND_CONCURRENCY = 3;
 const DEFAULT_SOURCE_BACKGROUND_CONCURRENCY = 2;
 const HISTORY_LIMIT = 200;
+const TERMINAL_TASK_RETENTION_MS = 2_000;
 
 function priorityRank(priority: TaskPriority): number {
   switch (priority) {
@@ -178,10 +179,12 @@ export class TaskScheduler {
   private readonly latestByDedupeKey = new Map<string, string>();
   private readonly mainQueue: string[] = [];
   private readonly pausedSourceIds = new Set<string>();
+  private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly snapshotListeners = new Set<() => void>();
   private readonly sourceQueues = new Map<string, string[]>();
   private readonly sourceForegroundConcurrency: number;
   private readonly sourceBackgroundConcurrency: number;
+  private readonly terminalTaskRetentionMs: number;
   private sourceQueuesPaused: boolean;
   private activeBackgroundCount = 0;
   private activeExclusiveSourceTaskId: string | null = null;
@@ -202,8 +205,13 @@ export class TaskScheduler {
     sourceForegroundConcurrency?: number;
     sourceBackgroundConcurrency?: number;
     sourceQueuesPaused?: boolean;
+    terminalTaskRetentionMs?: number;
   } = {}) {
     this.sourceQueuesPaused = options.sourceQueuesPaused ?? true;
+    this.terminalTaskRetentionMs = Math.max(
+      0,
+      options.terminalTaskRetentionMs ?? TERMINAL_TASK_RETENTION_MS,
+    );
     this.sourceForegroundConcurrency = Math.max(
       1,
       options.sourceForegroundConcurrency ??
@@ -230,7 +238,7 @@ export class TaskScheduler {
       throw new Error("Source tasks require a source id.");
     }
 
-    if (spec.dedupeKey) {
+    if (spec.dedupeKey && spec.kind !== "source.openSite") {
       const activeId = this.activeDedupeByKey.get(spec.dedupeKey);
       const activeEntry = activeId ? this.entries.get(activeId) : undefined;
       if (activeEntry) {
@@ -287,6 +295,10 @@ export class TaskScheduler {
       this.sourceQueues.set(sourceId, queue);
     }
 
+    if (spec.kind === "source.openSite") {
+      this.cancelOtherOpenSiteTasks(id);
+    }
+
     this.publish(entry, null);
     this.drain();
     return { id, promise: promise as Promise<T> };
@@ -294,7 +306,15 @@ export class TaskScheduler {
 
   cancel(id: string): boolean {
     const entry = this.entries.get(id);
-    if (!entry || entry.record.status !== "queued") return false;
+    if (!entry) return false;
+
+    if (entry.record.status === "running") {
+      entry.controller.abort();
+      this.finishRunningAsCancelled(entry);
+      return true;
+    }
+
+    if (entry.record.status !== "queued") return false;
 
     if (entry.record.lane === "main") {
       this.removeQueuedId(this.mainQueue, id);
@@ -306,6 +326,18 @@ export class TaskScheduler {
     this.finishQueuedAsCancelled(entry);
     this.drain();
     return true;
+  }
+
+  private cancelOtherOpenSiteTasks(taskId: string): void {
+    for (const entry of [...this.entries.values()]) {
+      if (
+        entry.record.id !== taskId &&
+        entry.record.kind === "source.openSite" &&
+        (entry.record.status === "queued" || entry.record.status === "running")
+      ) {
+        this.cancel(entry.record.id);
+      }
+    }
   }
 
   retry(id: string): TaskHandle<unknown> | null {
@@ -475,7 +507,7 @@ export class TaskScheduler {
 
   private start(entry: TaskEntry): void {
     this.setStatus(entry, "running", {
-      canCancel: false,
+      canCancel: true,
       canRetry: false,
       startedAt: Date.now(),
     });
@@ -493,31 +525,56 @@ export class TaskScheduler {
       },
     };
 
-    entry.spec
-      .run(context)
+    Promise.resolve()
+      .then(() => entry.spec.run(context))
       .then((value) => {
-        this.setStatus(entry, "succeeded", {
+        if (entry.controller.signal.aborted) {
+          this.finishRunningAsCancelled(entry);
+          return;
+        }
+        this.finishRunning(entry, "succeeded", {
           canCancel: false,
           canRetry: false,
           finishedAt: Date.now(),
         });
-        entry.resolve(value);
+        if (entry.record.status === "succeeded") entry.resolve(value);
       })
       .catch((error) => {
         const cancelled = entry.controller.signal.aborted || isAbortError(error);
-        this.setStatus(entry, cancelled ? "cancelled" : "failed", {
+        this.finishRunning(entry, cancelled ? "cancelled" : "failed", {
           canCancel: false,
-          canRetry: !cancelled,
+          canRetry: cancelled,
           error: cancelled ? undefined : describeError(error),
           finishedAt: Date.now(),
         });
-        entry.reject(error);
-      })
-      .finally(() => {
-        this.releaseActive(entry);
-        this.trimHistory();
-        this.drain();
+        if (entry.record.status === "cancelled" || entry.record.status === "failed") {
+          entry.reject(error);
+        }
       });
+  }
+
+  private finishRunning(
+    entry: TaskEntry,
+    status: TaskStatus,
+    patch: Partial<TaskRecord>,
+  ): boolean {
+    if (entry.record.status !== "running") return false;
+    this.setStatus(entry, status, patch);
+    this.releaseActive(entry);
+    this.trimHistory();
+    this.drain();
+    return true;
+  }
+
+  private finishRunningAsCancelled(entry: TaskEntry): void {
+    const finished = this.finishRunning(entry, "cancelled", {
+      canCancel: false,
+      canRetry: true,
+      finishedAt: Date.now(),
+    });
+    if (finished) {
+      entry.reject(new DOMException("Task was cancelled.", "AbortError"));
+    }
   }
 
   private releaseActive(entry: TaskEntry): void {
@@ -559,6 +616,34 @@ export class TaskScheduler {
     };
     this.entries.set(entry.record.id, entry);
     this.publish(entry, previousStatus);
+    this.scheduleTerminalCleanup(entry);
+  }
+
+  private scheduleTerminalCleanup(entry: TaskEntry): void {
+    if (entry.record.status !== "succeeded" && entry.record.status !== "cancelled") {
+      return;
+    }
+
+    const existingTimer = this.cleanupTimers.get(entry.record.id);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    const timer = setTimeout(() => {
+      this.cleanupTimers.delete(entry.record.id);
+      const current = this.entries.get(entry.record.id);
+      if (
+        !current ||
+        (current.record.status !== "succeeded" &&
+          current.record.status !== "cancelled")
+      ) {
+        return;
+      }
+      this.deleteEntry(current);
+      this.publishSnapshot();
+    }, this.terminalTaskRetentionMs);
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+    this.cleanupTimers.set(entry.record.id, timer);
   }
 
   private publish(entry: TaskEntry, previousStatus: TaskStatus | null): void {
@@ -625,15 +710,24 @@ export class TaskScheduler {
       .sort((a, b) => a.record.createdAt - b.record.createdAt);
     for (const entry of removable) {
       if (this.entries.size <= HISTORY_LIMIT) return;
-      this.entries.delete(entry.record.id);
-      if (
-        entry.dedupeKey &&
-        this.latestByDedupeKey.get(entry.dedupeKey) === entry.record.id
-      ) {
-        this.latestByDedupeKey.delete(entry.dedupeKey);
-      }
+      this.deleteEntry(entry);
     }
     this.snapshot = this.buildSnapshot();
+  }
+
+  private deleteEntry(entry: TaskEntry): void {
+    const timer = this.cleanupTimers.get(entry.record.id);
+    if (timer) {
+      clearTimeout(timer);
+      this.cleanupTimers.delete(entry.record.id);
+    }
+    this.entries.delete(entry.record.id);
+    if (
+      entry.dedupeKey &&
+      this.latestByDedupeKey.get(entry.dedupeKey) === entry.record.id
+    ) {
+      this.latestByDedupeKey.delete(entry.dedupeKey);
+    }
   }
 }
 
