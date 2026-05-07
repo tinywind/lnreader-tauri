@@ -16,7 +16,6 @@ import { pluginManager } from "./lib/plugins/manager";
 import { isAndroidRuntime, isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
 import {
-  MAX_UI_SCALE_PERCENT,
   normalizeUiScalePercent,
   useAppearanceStore,
 } from "./store/appearance";
@@ -182,8 +181,8 @@ function resolveAndroidViewportWidth(
   viewportWidth: number,
   uiScalePercent: unknown,
 ): number {
-  // 150% is the native Android dp baseline; lower values intentionally widen the CSS viewport.
-  const scale = normalizeUiScalePercent(uiScalePercent) / MAX_UI_SCALE_PERCENT;
+  // 100% is the native Android dp baseline; larger values narrow the CSS viewport.
+  const scale = normalizeUiScalePercent(uiScalePercent) / 100;
   return viewportWidth * (1 / scale);
 }
 

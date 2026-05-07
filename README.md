@@ -1,38 +1,44 @@
 # Norea
 
-Norea is a Tauri 2 light-novel reader for Windows, Linux, and Android.
+Norea is a local-first light-novel reader for people who want their library,
+web sources, downloads, and reading progress in one place.
+
 It is inspired by [lnreader/lnreader](https://github.com/lnreader/lnreader),
-but it is a separate project with its own database, backup format, plugin
-runtime, and desktop-first shell.
+but it is a separate app with its own data, backup, and source system.
 
-The goal is a local-first reader that can run community source plugins, keep a
-large web-novel library manageable, and work well in desktop windows as well as
-Android freeform/DeX-style layouts.
+## What You Can Do
 
-## Highlights
+- Browse and search installed reading sources.
+- Add novels to your library and organize them with categories.
+- Read in paged or scrolling mode.
+- Adjust themes, font size, text color, tap zones, and keyboard navigation.
+- Track reading progress, history, unread chapters, and download state.
+- Download chapter content for later reading.
+- Export and import local backups for your library, progress, categories, source
+  settings, and downloaded chapters.
+- Use tester builds on Windows, Linux, and Android sideload APKs.
 
-- Cross-platform Tauri app targeting Windows, Linux, and Android sideload APKs.
-- Plugin repository support for installing JavaScript source plugins.
-- Browse, source-scoped search, and global search across installed plugins.
-- Novel detail pages with chapter indexing, download state, and library actions.
-- Reader with paged and scrolling modes, tap zones, keyboard navigation, themes,
-  font controls, and persisted reading progress.
-- Library, category, update queue, and reading-history screens.
-- Local backup export/import for library data, progress, categories, repository
-  settings, and downloaded chapter content.
+## Reader Goals
 
-## Status
+- Import and read local `.epub`, `.txt`, and `.html` files.
+- Read HTML chapters downloaded from internet sources through installed source
+  plugins.
+- Keep images and other media from downloaded HTML chapters available locally.
+- Render downloaded chapters correctly even when the internet connection is
+  unavailable.
 
-The main application surface is implemented and usable for development/testing.
+## Current State
+
+Norea is usable for development and testing. It is not presented as a polished
+store release yet.
 
 Current limits:
 
-- macOS and iOS are out of scope.
-- Protected sources may require opening the in-app site browser once so the
-  scraper WebView can establish a browser session.
-- Android background-download foreground-service behavior still needs
-  device-level validation before it should be treated as complete.
-- Release APK artifacts are for tester distribution, not an in-app updater.
+- macOS and iOS are not planned right now.
+- Some protected sources may require opening the in-app site browser once before
+  search or downloads work.
+- Android background-download behavior still needs device-level validation.
+- APK artifacts are short-lived tester downloads, not an in-app updater.
 
 ## Get a Build
 
@@ -45,9 +51,9 @@ short-lived artifact. Open the latest successful workflow run and download
 `norea-arm64-signed-release-apk` for physical devices or
 `norea-x86_64-signed-release-apk` for emulators and WSA.
 
-## Plugin Repository
+## Add Reading Sources
 
-Source plugins are distributed separately from the app. The legal-safe sample
+Reading sources are distributed separately from the app. The legal-safe sample
 catalog is [tinywind/norea-plugins](https://github.com/tinywind/norea-plugins),
 which contains public-domain, open-license, official-API, and user-owned
 self-hosted source examples.
@@ -62,136 +68,23 @@ To use the published catalog in the app:
    https://raw.githubusercontent.com/tinywind/norea-plugins/plugins/v0.1.0/.dist/plugins.min.json
    ```
 
-4. Save it, refresh the repository if needed, then install plugins from
+4. Save it, refresh the repository if needed, then install sources from
    Available source plugins.
 
 The app keeps one active repository URL. Saving a different URL replaces the
 current repository index.
 
-For local plugin development, keep a sibling checkout at
-`../norea-plugins` and serve its generated manifest:
+## For Developers
 
-```bash
-cd ../norea-plugins
-npm install
-cp .env.template .env
-node scripts/generate-plugin-index.js
-npm run build:compile
-npm run build:manifest:dev
-npm run dev
-```
-
-Then set the app's repository URL to:
-
-```text
-http://localhost:3000/.dist/plugins.min.json
-```
-
-When testing from Android or another device, replace `localhost` in `.env` and
-in the app with a host address the device can reach, such as the development
-machine's LAN IP or `10.0.2.2` for the Android emulator.
-
-## Screenshots
-
-Screenshots should use public-domain demo text, not copyrighted novel content.
-Use [docs/screenshots/README.md](./docs/screenshots/README.md) for the capture
-list and legal sample books. Once captured, add:
-
-- `docs/screenshots/library.png` - library, categories, progress, and unread state.
-- `docs/screenshots/browse.png` - plugin repository, installed sources, and global search.
-- `docs/screenshots/reader.png` - paged reader with settings-friendly typography.
-
-## Develop
-
-### Build and Test Environment
-
-The GitHub workflows are the source of truth for supported build tooling.
-Local builds should use the same major versions:
-
-| Tool | Version / target | Used for |
-| --- | --- | --- |
-| Node.js | 22 LTS | Frontend build, tests, and Tauri CLI |
-| pnpm | 10.27.0 | Package manager, pinned by `packageManager` |
-| Rust | stable | Tauri host and native plugins |
-| Java | JDK 17 | Android Gradle builds |
-| Android SDK platform | `android-36` | Android APK builds |
-| Android build tools | `36.0.0` | APK signing and build tools |
-| Android NDK | `27.1.12297006` | Rust Android targets |
-| Android Rust targets | `aarch64-linux-android`, `x86_64-linux-android` | Device APK and emulator/WSA APK |
-| Linux Rust targets | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux x64 and ARM64 release bundles |
-| Windows Rust targets | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows x64 and ARM64 release bundles |
-
-Desktop Linux builds also need the Tauri 2 system packages used by CI:
-`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
-`librsvg2-dev`, `patchelf`, and `rpm`.
-
-Install and run the desktop app:
-
-```bash
-pnpm install
-pnpm tauri dev
-```
-
-`pnpm install` configures the local Git hooks path to `.githooks`. If hooks are
-missing in an existing checkout, run `pnpm hooks:install` once.
-
-Useful checks:
-
-```bash
-pnpm tsc
-pnpm test
-pnpm db:generate
-pnpm tauri build --debug
-```
-
-After `pnpm db:generate`, commit any intended `drizzle/` migration changes.
-CI fails when generated migrations drift from the checked-in schema.
-
-Android APK build:
-
-```bash
-pnpm android:apk:release
-```
-
-This builds arm64 APKs for current physical devices and x86_64 APKs for
-emulators or WSA. The workflow installs `platforms;android-36`,
-`build-tools;36.0.0`, and `ndk;27.1.12297006` before running the same command.
-
-Rust-side checks:
-
-```bash
-cd src-tauri
-cargo check
-cargo test --lib
-```
-
-## Project Map
-
-| Area | Path |
-| --- | --- |
-| React app | `src/` |
-| Tauri/Rust host | `src-tauri/` |
-| Android project shell | `src-tauri/gen/android/` |
-| Database schema and migrations | `src/db/`, `drizzle/` |
-| Plugin runtime | `src/lib/plugins/`, `src/lib/http.ts`, `src-tauri/src/scraper.rs` |
-| i18n strings | `strings/languages/` |
-
-## Documentation
-
-- [CLAUDE.md](./CLAUDE.md) - repo rules for agents and contributors.
-- [docs/plugins/contract.md](./docs/plugins/contract.md) - plugin runtime
-  compatibility reference.
-
-Implementation-time planning snapshots have been removed from the live docs so
-new work does not inherit obsolete roadmap assumptions.
+See [docs/development.md](./docs/development.md) for local setup, testing,
+contribution rules, and the project map. Scripts and dependencies live in
+`package.json`.
 
 ## Contributing
 
-Keep changes narrow and current. Do not commit generated APKs, keystores,
-signing properties, local logs, or temporary build artifacts. User-facing text
-belongs in the existing i18n files.
+See [docs/development.md](./docs/development.md) before opening a contribution.
 
 ## License
 
-MIT. Upstream assets and translation seeds remain MIT-compatible and
-are credited in the app where relevant.
+MIT. Upstream assets and translation seeds remain MIT-compatible and are
+credited in the app where relevant.
