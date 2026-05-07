@@ -225,13 +225,13 @@ describe("clearNovelHistory", () => {
 });
 
 describe("setChapterBookmark", () => {
-  it("toggles via parameterized UPDATE", async () => {
+  it("toggles via a numeric SQLite flag", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
-    await setChapterBookmark(11, true);
+    await setChapterBookmark(11, false);
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("UPDATE chapter");
     expect(sql).toContain("bookmark = $2");
-    expect(params).toEqual([11, true]);
+    expect(params).toEqual([11, 0]);
   });
 });
 

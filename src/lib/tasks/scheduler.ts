@@ -1,3 +1,5 @@
+import { cancelAndroidScraperBackground } from "../android-scraper";
+
 export type TaskLane = "main" | "source";
 
 export type TaskPriority =
@@ -428,6 +430,17 @@ export class TaskScheduler {
     return this.enqueue({ ...spec, dedupeKey: spec.dedupeKey });
   }
 
+  clearFailedTasks(): number {
+    const failedEntries = [...this.entries.values()].filter(
+      (entry) => entry.record.status === "failed",
+    );
+    for (const entry of failedEntries) {
+      this.deleteEntry(entry);
+    }
+    if (failedEntries.length > 0) this.publishSnapshot();
+    return failedEntries.length;
+  }
+
   pauseSourceQueue(sourceId?: string): boolean {
     if (!sourceId) {
       if (this.sourceQueuesPaused) return false;
@@ -579,6 +592,11 @@ export class TaskScheduler {
     entry: TaskEntry,
     slot: "background" | "foreground" | "priorityBoost",
   ): void {
+    if (this.shouldPreemptLowerPrioritySourceWork(entry)) {
+      cancelAndroidScraperBackground(
+        "scraper: interrupted by higher-priority source task",
+      );
+    }
     this.removeFromSourceQueue(entry);
     const sourceId = entry.record.source!.id;
     const activeIds = this.activeSourceTaskIdsById.get(sourceId) ?? new Set();
@@ -656,6 +674,27 @@ export class TaskScheduler {
       }
     }
     return true;
+  }
+
+  private shouldPreemptLowerPrioritySourceWork(entry: TaskEntry): boolean {
+    if (!isPriorityBoostPriority(entry.record.priority)) return false;
+
+    let hasLowerPriorityWork = false;
+    for (const activeEntry of this.entries.values()) {
+      if (
+        activeEntry.record.lane !== "source" ||
+        activeEntry.record.status !== "running"
+      ) {
+        continue;
+      }
+
+      const activeRank = priorityRank(activeEntry.record.priority);
+      const nextRank = priorityRank(entry.record.priority);
+      if (activeRank <= nextRank) return false;
+      hasLowerPriorityWork = true;
+    }
+
+    return hasLowerPriorityWork;
   }
 
   private compareTaskOrder(a: TaskEntry, b: TaskEntry): number {

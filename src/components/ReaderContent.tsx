@@ -586,15 +586,11 @@ function ReaderContentInner(
   }, [general.keepScreenOn]);
 
   useEffect(() => {
-    if (!general.autoScroll) return;
+    if (!general.autoScroll || isPagedReader) return;
     const interval = window.setInterval(() => {
       const node = viewportRef.current;
       if (!node) return;
-      if (isPagedReader) {
-        node.scrollBy({ left: general.autoScrollOffset, behavior: "auto" });
-      } else {
-        node.scrollBy({ top: general.autoScrollOffset, behavior: "auto" });
-      }
+      node.scrollBy({ top: general.autoScrollOffset, behavior: "auto" });
     }, general.autoScrollInterval);
     return () => window.clearInterval(interval);
   }, [

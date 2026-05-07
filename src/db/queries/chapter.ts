@@ -220,11 +220,12 @@ export async function setChapterBookmark(
   bookmarked: boolean,
 ): Promise<void> {
   const db = await getDb();
+  const bookmarkFlag = bookmarked ? 1 : 0;
   await db.execute(
     `UPDATE chapter
      SET bookmark = $2, updated_at = unixepoch()
      WHERE id = $1`,
-    [chapterId, bookmarked],
+    [chapterId, bookmarkFlag],
   );
 }
 

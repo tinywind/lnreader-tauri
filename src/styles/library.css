@@ -421,12 +421,9 @@
 }
 
 .lnr-library-filter-toggle {
-  border: 1px solid var(--lnr-design-rule-strong);
-  border-radius: 4px;
   display: inline-flex;
   flex: 0 0 auto;
   height: 28px;
-  overflow: hidden;
 }
 
 .lnr-library-filter-button {
@@ -434,10 +431,6 @@
   color: var(--lnr-design-ink-subtle);
   display: inline-flex;
   justify-content: center;
-}
-
-.lnr-library-filter-button + .lnr-library-filter-button {
-  border-left: 1px solid var(--lnr-design-rule-strong);
 }
 
 .lnr-library-view-button,

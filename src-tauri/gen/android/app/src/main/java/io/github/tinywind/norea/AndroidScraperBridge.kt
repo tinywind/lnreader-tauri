@@ -60,6 +60,24 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   private var bounds = CssBounds(0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
 
   @JavascriptInterface
+  fun cancel(payload: String) {
+    val json = JSONObject(payload)
+    val id = json.getString("id")
+    val message = json.optString("message", "scraper: cancelled")
+    mainHandler.post { cancelById(id, message) }
+  }
+
+  @JavascriptInterface
+  fun cancelBackground(payload: String) {
+    val json = JSONObject(payload)
+    val message = json.optString("message", "scraper: background work cancelled")
+    mainHandler.post {
+      cancelQueuedBackground(message)
+      if (busy) cancelActive(message)
+    }
+  }
+
+  @JavascriptInterface
   fun fetch(payload: String) {
     val json = JSONObject(payload)
     enqueue(
@@ -405,14 +423,49 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   private fun cancelQueued(message: String) {
+    cancelQueuedWhere(message) { true }
+  }
+
+  private fun cancelQueuedBackground(message: String) {
+    cancelQueuedWhere(message) { it.kind == QueueKind.Background }
+  }
+
+  private fun cancelQueuedWhere(message: String, shouldCancel: (QueuedAction) -> Boolean) {
+    val remaining: ArrayDeque<QueuedAction> = ArrayDeque()
     while (queue.isNotEmpty()) {
       val action = queue.removeFirst()
-      sendError(action.id, message)
+      if (shouldCancel(action)) {
+        sendError(action.id, message)
+      } else {
+        remaining.addLast(action)
+      }
+    }
+    queue.addAll(remaining)
+  }
+
+  private fun cancelById(id: String, message: String) {
+    val remaining: ArrayDeque<QueuedAction> = ArrayDeque()
+    var cancelledQueued = false
+    while (queue.isNotEmpty()) {
+      val action = queue.removeFirst()
+      if (action.id == id) {
+        cancelledQueued = true
+        sendError(action.id, message)
+      } else {
+        remaining.addLast(action)
+      }
+    }
+    queue.addAll(remaining)
+    if (cancelledQueued) return
+    if (activeFetchId == id || activeExtractId == id) {
+      cancelActive(message)
     }
   }
 
   private fun cancelActive(message: String) {
-    val id = activeFetchId ?: activeExtractId
+    val fetchId = activeFetchId
+    val id = fetchId ?: activeExtractId
+    if (fetchId != null) abortActiveFetch(fetchId)
     scraperWebView?.stopLoading()
     if (id == null) {
       clearTimeout()
@@ -421,6 +474,14 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
       return
     }
     finishError(id, message)
+  }
+
+  private fun abortActiveFetch(id: String) {
+    val quotedId = JSONObject.quote(id)
+    scraperWebView?.evaluateJavascript(
+      "window.__noreaAndroidFetchControllers && window.__noreaAndroidFetchControllers[$quotedId] && window.__noreaAndroidFetchControllers[$quotedId].abort();",
+      null,
+    )
   }
 
   private fun sendError(id: String, message: String) {
@@ -495,6 +556,9 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
         (async function () {
           try {
             const init = request.init || {};
+            const controllers = window.__noreaAndroidFetchControllers || (window.__noreaAndroidFetchControllers = {});
+            const controller = new AbortController();
+            controllers[requestId] = controller;
             const headers = new Headers();
             for (const key of Object.keys(init.headers || {})) {
               if (!blockedHeaders.has(key.toLowerCase())) {
@@ -505,7 +569,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
               method: init.method || "GET",
               headers,
               credentials: "include",
-              redirect: "follow"
+              redirect: "follow",
+              signal: controller.signal
             };
             if (init.body !== undefined && init.body !== null) {
               fetchInit.body = init.body;
@@ -536,6 +601,10 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
               success: false,
               error: (error && (error.message || error.toString())) || String(error)
             }));
+          } finally {
+            try {
+              delete window.__noreaAndroidFetchControllers[requestId];
+            } catch (e) {}
           }
         })();
       })();

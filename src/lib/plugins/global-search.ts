@@ -1,6 +1,7 @@
 import type { PluginManager } from "./manager";
 import type { NovelItem, Plugin } from "./types";
 import { enqueueSourceTask } from "../tasks/source-tasks";
+import { cancelAndroidScraperBackground } from "../android-scraper";
 
 export interface GlobalSearchResult {
   pluginId: string;
@@ -39,11 +40,14 @@ function formatTimeoutSeconds(timeoutMs: number): string {
 async function withTimeout<T>(
   task: () => Promise<T>,
   timeoutMs: number,
+  onTimeout?: () => void,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const promise = task();
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
+      promise.catch(() => undefined);
+      onTimeout?.();
       reject(
         new Error(
           `Search timed out after ${formatTimeoutSeconds(timeoutMs)} seconds.`,
@@ -95,11 +99,11 @@ function makeLimiter(concurrency: number) {
  * bounded concurrency. Returns the per-plugin result list once
  * every task has settled.
  *
- * If the {@link AbortSignal} fires, in-flight plugin tasks still
- * finish (their internal HTTP requests aren't auto-aborted by the
- * upstream plugin contract), but their results are discarded and
- * no further plugin tasks are started. The per-plugin timeout keeps
- * stalled plugins from blocking the full search result set.
+ * If the {@link AbortSignal} fires, in-flight plugin tasks may still
+ * finish (the upstream plugin contract does not guarantee abortable
+ * HTTP), but their results are discarded and no further plugin tasks
+ * are started. The per-plugin timeout keeps stalled plugins from
+ * blocking the full search result set.
  */
 export async function globalSearch(
   manager: PluginManager,
@@ -130,7 +134,15 @@ export async function globalSearch(
           title: options.taskTitle?.(plugin) ?? plugin.name,
           subject: { path: term },
           dedupeKey: `source.globalSearch:${plugin.id}:${term}`,
-          run: () => withTimeout(() => plugin.searchNovels(term, 1), timeoutMs),
+          run: () =>
+            withTimeout(
+              () => plugin.searchNovels(term, 1),
+              timeoutMs,
+              () =>
+                cancelAndroidScraperBackground(
+                  "scraper: global search timed out",
+                ),
+            ),
         }).promise;
         result = {
           pluginId: plugin.id,

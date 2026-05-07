@@ -16,6 +16,7 @@ import { pluginManager } from "./lib/plugins/manager";
 import { isAndroidRuntime, isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
 import {
+  MAX_UI_SCALE_PERCENT,
   normalizeUiScalePercent,
   useAppearanceStore,
 } from "./store/appearance";
@@ -111,7 +112,6 @@ interface AndroidSafeAreaBridge {
 
 interface AndroidWindowBridge {
   getMetrics(): string;
-  setInitialScale?: (scalePercent: number) => void;
 }
 
 interface RuntimeSafeAreaInsets {
@@ -139,14 +139,8 @@ declare global {
 
 interface AndroidLayoutConfig {
   className: AndroidLayoutClass;
-  nativeZoomScale: number;
   nativePxPerCssPx: number;
   viewportWidth: number;
-}
-
-interface AndroidViewportScale {
-  nativeZoomScale: number;
-  width: number;
 }
 
 let androidNativePxPerCssPx = 1;
@@ -184,19 +178,13 @@ function readAndroidWindowMetrics(): RuntimeWindowMetrics | null {
   }
 }
 
-function resolveAndroidViewportScale(
+function resolveAndroidViewportWidth(
   viewportWidth: number,
   uiScalePercent: unknown,
-): AndroidViewportScale {
-  const scale = normalizeUiScalePercent(uiScalePercent) / 100;
-  const targetWidth = viewportWidth * (1 / scale);
-  if (targetWidth >= ANDROID_MIN_VIEWPORT_WIDTH) {
-    return { nativeZoomScale: 1, width: targetWidth };
-  }
-  return {
-    nativeZoomScale: ANDROID_MIN_VIEWPORT_WIDTH / targetWidth,
-    width: ANDROID_MIN_VIEWPORT_WIDTH,
-  };
+): number {
+  // 150% is the native Android dp baseline; lower values intentionally widen the CSS viewport.
+  const scale = normalizeUiScalePercent(uiScalePercent) / MAX_UI_SCALE_PERCENT;
+  return viewportWidth * (1 / scale);
 }
 
 function resolveFallbackAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
@@ -216,16 +204,15 @@ function resolveFallbackAndroidLayout(uiScalePercent: unknown): AndroidLayoutCon
     ANDROID_MIN_VIEWPORT_WIDTH,
     ANDROID_MAX_VIEWPORT_WIDTH,
   );
-  const viewportScale = resolveAndroidViewportScale(
+  const viewportWidth = resolveAndroidViewportWidth(
     baseViewportWidth,
     uiScalePercent,
   );
 
   return {
-    className: classifyAndroidLayout(viewportScale.width),
-    nativeZoomScale: viewportScale.nativeZoomScale,
-    nativePxPerCssPx: (widthPx / viewportScale.width) * viewportScale.nativeZoomScale,
-    viewportWidth: viewportScale.width,
+    className: classifyAndroidLayout(viewportWidth),
+    nativePxPerCssPx: widthPx / viewportWidth,
+    viewportWidth,
   };
 }
 
@@ -245,21 +232,20 @@ function resolveAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
     ANDROID_MIN_VIEWPORT_WIDTH,
     ANDROID_MAX_VIEWPORT_WIDTH,
   );
-  const viewportScale = resolveAndroidViewportScale(
+  const viewportWidth = resolveAndroidViewportWidth(
     baseViewportWidth,
     uiScalePercent,
   );
   const physicalWidthPx = widthPx ?? (density ? baseViewportWidth * density : null);
   const nativePxPerCssPx =
     physicalWidthPx && physicalWidthPx > 0
-      ? (physicalWidthPx / viewportScale.width) * viewportScale.nativeZoomScale
+      ? physicalWidthPx / viewportWidth
       : density ?? 1;
 
   return {
-    className: classifyAndroidLayout(viewportScale.width),
-    nativeZoomScale: viewportScale.nativeZoomScale,
+    className: classifyAndroidLayout(viewportWidth),
     nativePxPerCssPx,
-    viewportWidth: viewportScale.width,
+    viewportWidth,
   };
 }
 
@@ -285,17 +271,23 @@ function resetViewportScale(): void {
   }
 }
 
-function safeInsetPx(value: unknown): string {
+function safeInsetPx(value: unknown, roundUp = false): string {
   const numeric = typeof value === "number" ? value : Number(value);
   const nativePxPerCssPx = isAndroidRuntime() ? androidNativePxPerCssPx : 1;
   const cssPixels =
     (Number.isFinite(numeric) ? numeric : 0) / nativePxPerCssPx;
-  return `${Math.max(0, Math.round(cssPixels))}px`;
+  const rounded = roundUp
+    ? Math.ceil(cssPixels - 0.001)
+    : Math.round(cssPixels);
+  return `${Math.max(0, rounded)}px`;
 }
 
 function applyNativeSafeAreaInsets(insets: RuntimeSafeAreaInsets): void {
   const root = document.documentElement;
-  root.style.setProperty("--lnr-native-safe-area-top", safeInsetPx(insets.top));
+  root.style.setProperty(
+    "--lnr-native-safe-area-top",
+    safeInsetPx(insets.top, true),
+  );
   root.style.setProperty(
     "--lnr-native-safe-area-right",
     safeInsetPx(insets.right),
@@ -363,9 +355,6 @@ function applyRuntimeUiScale(
   root.dataset.lnrPlatform = "android";
   root.dataset.lnrAndroidLayout = layout.className;
   applyAndroidViewport(layout.viewportWidth);
-  window.__NoreaAndroidWindow?.setInitialScale?.(
-    Math.round(layout.nativeZoomScale * 100),
-  );
   root.style.setProperty("--lnr-root-font-size", `${ROOT_FONT_SIZE_PX}px`);
   root.style.setProperty("--lnr-ui-scale", layout.nativePxPerCssPx.toFixed(2));
   root.style.removeProperty("--lnr-mobile-nav-content-height");

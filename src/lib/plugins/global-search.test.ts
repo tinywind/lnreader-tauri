@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelAndroidScraperBackground } from "../android-scraper";
 import { taskScheduler } from "../tasks/scheduler";
 import { PluginManager } from "./manager";
 import { globalSearch } from "./global-search";
 import type { NovelItem, Plugin } from "./types";
+
+vi.mock("../android-scraper", () => ({
+  cancelAndroidScraperBackground: vi.fn(),
+}));
 
 function makePlugin(
   id: string,
@@ -45,6 +50,7 @@ async function settle(): Promise<void> {
 
 describe("globalSearch", () => {
   beforeEach(() => {
+    vi.mocked(cancelAndroidScraperBackground).mockClear();
     taskScheduler.resumeSourceQueue();
   });
 
@@ -100,6 +106,9 @@ describe("globalSearch", () => {
     expect(results[0]?.pluginId).toBe("slow");
     expect(results[0]?.novels).toEqual([]);
     expect(results[0]?.error).toContain("Search timed out");
+    expect(cancelAndroidScraperBackground).toHaveBeenCalledWith(
+      "scraper: global search timed out",
+    );
   });
 
   it("queues global search tasks while source queues are paused", async () => {

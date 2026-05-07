@@ -304,21 +304,15 @@ export function TasksPage() {
   const [collapsedSourceIds, setCollapsedSourceIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const mainTasks = snapshot.records
-    .filter((task) => task.lane === "main")
-    .sort(compareTaskQueueOrder);
   const sourceTasks = snapshot.records
     .filter((task) => task.lane === "source")
     .sort(compareTaskQueueOrder);
-  const taskStats = {
-    running: snapshot.records.filter((task) => task.status === "running")
-      .length,
-    queued: snapshot.records.filter((task) => task.status === "queued").length,
-    failed: snapshot.records.filter((task) => task.status === "failed").length,
-    succeeded: snapshot.records.filter((task) => task.status === "succeeded")
-      .length,
+  const sourceStats = {
+    running: sourceTasks.filter((task) => task.status === "running").length,
+    queued: sourceTasks.filter((task) => task.status === "queued").length,
+    failed: sourceTasks.filter((task) => task.status === "failed").length,
+    succeeded: sourceTasks.filter((task) => task.status === "succeeded").length,
   };
-  const taskCount = snapshot.records.length;
   const sourceGroups = [
     ...new Set(sourceTasks.map((task) => task.source?.id)),
   ]
@@ -358,7 +352,7 @@ export function TasksPage() {
         description={t("tasks.description")}
       />
 
-      {taskCount === 0 ? (
+      {sourceTasks.length === 0 ? (
         <StateView
           color="blue"
           title={t("tasks.empty.title")}
@@ -366,32 +360,32 @@ export function TasksPage() {
         />
       ) : null}
 
-      {taskCount > 0 ? (
+      {sourceTasks.length > 0 ? (
         <div className="lnr-task-shell">
           <aside
             className="lnr-task-overview"
-            aria-label={t("tasks.title")}
+            aria-label={t("tasks.sourceQueues")}
           >
             <ConsolePanel className="lnr-task-overview-panel">
               <ConsoleSectionHeader
-                title={t("tasks.title")}
-                count={t("tasks.count", { count: taskCount })}
+                title={t("tasks.sourceQueues")}
+                count={t("tasks.count", { count: sourceTasks.length })}
               />
               <div className="lnr-task-stat-grid">
                 <Badge variant="light">
-                  {t("tasks.summary.running", { count: taskStats.running })}
+                  {t("tasks.summary.running", { count: sourceStats.running })}
                 </Badge>
                 <Badge variant="light">
-                  {t("tasks.summary.queued", { count: taskStats.queued })}
+                  {t("tasks.summary.queued", { count: sourceStats.queued })}
                 </Badge>
                 <Badge
                   variant="light"
-                  color={taskStats.failed > 0 ? "red" : "gray"}
+                  color={sourceStats.failed > 0 ? "red" : "gray"}
                 >
-                  {t("tasks.summary.failed", { count: taskStats.failed })}
+                  {t("tasks.summary.failed", { count: sourceStats.failed })}
                 </Badge>
                 <Badge variant="light">
-                  {t("tasks.summary.done", { count: taskStats.succeeded })}
+                  {t("tasks.summary.done", { count: sourceStats.succeeded })}
                 </Badge>
               </div>
               <TextButton
@@ -410,76 +404,67 @@ export function TasksPage() {
                   ? t("tasks.resumeAll")
                   : t("tasks.pauseAll")}
               </TextButton>
+              {sourceStats.failed > 0 ? (
+                <TextButton
+                  className="lnr-task-overview-action"
+                  size="sm"
+                  tone="danger"
+                  variant="default"
+                  onClick={() => taskScheduler.clearFailedTasks()}
+                >
+                  {t("tasks.clearErrors")}
+                </TextButton>
+              ) : null}
             </ConsolePanel>
           </aside>
 
           <ConsolePanel className="lnr-task-list">
-            <Stack gap="lg">
-              <section className="lnr-task-source-group">
-                <ConsoleSectionHeader
-                  title={t("tasks.mainQueue")}
-                  count={t("tasks.count", { count: mainTasks.length })}
-                />
-                <TaskRows
-                  emptyMessage={t("tasks.empty.main")}
-                  records={mainTasks}
-                  snapshot={snapshot}
-                />
-              </section>
-
-              <section className="lnr-task-source-group">
-                <ConsoleSectionHeader
-                  title={t("tasks.sourceQueues")}
-                  count={t("tasks.count", { count: sourceTasks.length })}
-                  actions={
-                    <CollapseButton
-                      collapsed={sourceQueuesCollapsed}
-                      onToggle={() =>
-                        setSourceQueuesCollapsed((collapsed) => !collapsed)
-                      }
-                    />
+            <ConsoleSectionHeader
+              title={t("tasks.sourceQueues")}
+              count={t("tasks.count", { count: sourceTasks.length })}
+              actions={
+                <CollapseButton
+                  collapsed={sourceQueuesCollapsed}
+                  onToggle={() =>
+                    setSourceQueuesCollapsed((collapsed) => !collapsed)
                   }
                 />
-                {sourceQueuesCollapsed ? null : sourceGroups.length === 0 ? (
-                  <Text className="lnr-task-empty">
-                    {t("tasks.empty.source")}
-                  </Text>
-                ) : (
-                  <Stack gap="md">
-                    {sourceGroups.map((group) => {
-                      const collapsed = collapsedSourceIds.has(group.sourceId);
-                      return (
-                        <section
-                          className="lnr-task-source-group"
-                          key={group.sourceId}
-                        >
-                          <ConsoleSectionHeader
-                            eyebrow={t("common.source")}
-                            title={group.sourceName}
-                            count={t("tasks.count", {
-                              count: group.tasks.length,
-                            })}
-                            actions={
-                              <CollapseButton
-                                collapsed={collapsed}
-                                onToggle={() => toggleSourceGroup(group.sourceId)}
-                              />
-                            }
+              }
+            />
+            {sourceQueuesCollapsed ? null : sourceGroups.length === 0 ? (
+              <Text className="lnr-task-empty">{t("tasks.empty.source")}</Text>
+            ) : (
+              <Stack gap="md">
+                {sourceGroups.map((group) => {
+                  const collapsed = collapsedSourceIds.has(group.sourceId);
+                  return (
+                    <section
+                      className="lnr-task-source-group"
+                      key={group.sourceId}
+                    >
+                      <ConsoleSectionHeader
+                        eyebrow={t("common.source")}
+                        title={group.sourceName}
+                        count={t("tasks.count", { count: group.tasks.length })}
+                        actions={
+                          <CollapseButton
+                            collapsed={collapsed}
+                            onToggle={() => toggleSourceGroup(group.sourceId)}
                           />
-                          {collapsed ? null : (
-                            <TaskRows
-                              emptyMessage={t("tasks.empty.source")}
-                              records={group.tasks}
-                              snapshot={snapshot}
-                            />
-                          )}
-                        </section>
-                      );
-                    })}
-                  </Stack>
-                )}
-              </section>
-            </Stack>
+                        }
+                      />
+                      {collapsed ? null : (
+                        <TaskRows
+                          emptyMessage={t("tasks.empty.source")}
+                          records={group.tasks}
+                          snapshot={snapshot}
+                        />
+                      )}
+                    </section>
+                  );
+                })}
+              </Stack>
+            )}
           </ConsolePanel>
         </div>
       ) : null}

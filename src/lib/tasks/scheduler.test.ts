@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelAndroidScraperBackground } from "../android-scraper";
 import { TaskScheduler } from "./scheduler";
+
+vi.mock("../android-scraper", () => ({
+  cancelAndroidScraperBackground: vi.fn(),
+}));
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
@@ -8,6 +13,10 @@ async function settle(): Promise<void> {
 }
 
 describe("TaskScheduler", () => {
+  beforeEach(() => {
+    vi.mocked(cancelAndroidScraperBackground).mockClear();
+  });
+
   it("runs main and source tasks independently", async () => {
     const scheduler = new TaskScheduler({
       sourceBackgroundConcurrency: 1,
@@ -393,9 +402,54 @@ describe("TaskScheduler", () => {
     await settle();
 
     expect(order).toEqual(["search:start", "open:start"]);
+    expect(cancelAndroidScraperBackground).toHaveBeenCalledWith(
+      "scraper: interrupted by higher-priority source task",
+    );
 
     finishSearch();
     await search.promise;
+  });
+
+  it("does not preempt native scraper while higher-priority source work is running", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+    let finishInteractive!: () => void;
+
+    const interactive = scheduler.enqueueSource({
+      kind: "source.openNovel",
+      title: "Open novel",
+      priority: "interactive",
+      source: { id: "p", name: "Plugin" },
+      run: () =>
+        new Promise<void>((resolve) => {
+          order.push("interactive:start");
+          finishInteractive = resolve;
+        }),
+    });
+
+    await settle();
+
+    const userDownload = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Download chapter",
+      priority: "user",
+      source: { id: "other", name: "Other" },
+      run: async () => {
+        order.push("user:start");
+      },
+    });
+
+    await userDownload.promise;
+    await settle();
+
+    expect(order).toEqual(["interactive:start", "user:start"]);
+    expect(cancelAndroidScraperBackground).not.toHaveBeenCalled();
+
+    finishInteractive();
+    await interactive.promise;
   });
 
   it("uses priority boost slots for user priority work", async () => {

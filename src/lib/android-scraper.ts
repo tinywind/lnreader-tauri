@@ -1,6 +1,8 @@
 import { isAndroidRuntime } from "./tauri-runtime";
 
 interface AndroidScraperBridge {
+  cancel?(payload: string): void;
+  cancelBackground?(payload: string): void;
   fetch(payload: string): void;
   extract(payload: string): void;
   hide(): void;
@@ -97,6 +99,16 @@ function callNative<T>(
   return new Promise<T>((resolve, reject) => {
     const timeoutId = window.setTimeout(() => {
       pending.delete(id);
+      try {
+        bridge().cancel?.(
+          JSON.stringify({
+            id,
+            message: `Android scraper ${String(method)} timed out`,
+          }),
+        );
+      } catch {
+        // Best-effort native cleanup; the JS promise timeout is authoritative.
+      }
       reject(new Error(`Android scraper ${String(method)} timed out`));
     }, timeoutMs);
 
@@ -119,6 +131,14 @@ function callNative<T>(
       reject(error);
     }
   });
+}
+
+export function cancelAndroidScraperBackground(message: string): boolean {
+  if (!isAndroidRuntime() || typeof window === "undefined") return false;
+  const nativeBridge = window.__NoreaAndroidScraper;
+  if (!nativeBridge?.cancelBackground) return false;
+  nativeBridge.cancelBackground(JSON.stringify({ message }));
+  return true;
 }
 
 export function androidWebviewFetch(

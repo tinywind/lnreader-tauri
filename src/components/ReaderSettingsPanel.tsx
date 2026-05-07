@@ -124,10 +124,18 @@ export function ReaderSettingsPanel() {
             onChange={(value) => {
               switch (value) {
                 case "two-page":
-                  setGeneral({ pageReader: true, twoPageReader: true });
+                  setGeneral({
+                    autoScroll: false,
+                    pageReader: true,
+                    twoPageReader: true,
+                  });
                   break;
                 case "paged":
-                  setGeneral({ pageReader: true, twoPageReader: false });
+                  setGeneral({
+                    autoScroll: false,
+                    pageReader: true,
+                    twoPageReader: false,
+                  });
                   break;
                 default:
                   setGeneral({ pageReader: false, twoPageReader: false });
@@ -136,6 +144,44 @@ export function ReaderSettingsPanel() {
             }}
           />
         </SettingsFieldRow>
+        <SettingsFieldRow label={t("readerSettings.autoScroll")}>
+          <Switch
+            checked={!general.pageReader && general.autoScroll}
+            disabled={general.pageReader}
+            onChange={(event) =>
+              setGeneral({ autoScroll: event.currentTarget.checked })
+            }
+          />
+        </SettingsFieldRow>
+        {!general.pageReader && general.autoScroll ? (
+          <>
+            <SettingsFieldRow label={t("readerSettings.autoScrollInterval")}>
+              <NumberInput
+                value={general.autoScrollInterval}
+                min={16}
+                max={500}
+                onChange={(value) => {
+                  if (typeof value === "number") {
+                    setGeneral({ autoScrollInterval: value });
+                  }
+                }}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label={t("readerSettings.autoScrollOffset")}>
+              <NumberInput
+                value={general.autoScrollOffset}
+                min={0.25}
+                max={12}
+                step={0.25}
+                onChange={(value) => {
+                  if (typeof value === "number") {
+                    setGeneral({ autoScrollOffset: value });
+                  }
+                }}
+              />
+            </SettingsFieldRow>
+          </>
+        ) : null}
         <SettingsFieldRow
           label={t("readerSettings.fullPageReader")}
           description={t("readerSettings.fullPageReader.description")}
@@ -343,49 +389,6 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-      </ReaderSettingSection>
-
-      <ReaderSettingSection
-        title={t("readerSettings.automation.title")}
-        description={t("readerSettings.automation.description")}
-      >
-        <SettingsFieldRow label={t("readerSettings.autoScroll")}>
-          <Switch
-            checked={general.autoScroll}
-            onChange={(event) =>
-              setGeneral({ autoScroll: event.currentTarget.checked })
-            }
-          />
-        </SettingsFieldRow>
-        {general.autoScroll ? (
-          <>
-            <SettingsFieldRow label={t("readerSettings.autoScrollInterval")}>
-              <NumberInput
-                value={general.autoScrollInterval}
-                min={16}
-                max={500}
-                onChange={(value) => {
-                  if (typeof value === "number") {
-                    setGeneral({ autoScrollInterval: value });
-                  }
-                }}
-              />
-            </SettingsFieldRow>
-            <SettingsFieldRow label={t("readerSettings.autoScrollOffset")}>
-              <NumberInput
-                value={general.autoScrollOffset}
-                min={0.25}
-                max={12}
-                step={0.25}
-                onChange={(value) => {
-                  if (typeof value === "number") {
-                    setGeneral({ autoScrollOffset: value });
-                  }
-                }}
-              />
-            </SettingsFieldRow>
-          </>
-        ) : null}
       </ReaderSettingSection>
 
       <Accordion variant="contained">
