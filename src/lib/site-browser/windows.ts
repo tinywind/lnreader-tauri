@@ -1,0 +1,75 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  SiteBrowserBounds,
+  SiteBrowserControlMessage,
+  SiteBrowserPlatformApi,
+} from "./types";
+
+function debugWindowsSiteBrowser(message: string, data?: unknown): void {
+  console.debug(`[site-browser:windows] ${message}`, data);
+}
+
+function fullWindowBounds(): SiteBrowserBounds {
+  const bounds = {
+    x: 0,
+    y: 0,
+    width: Math.max(1, window.innerWidth),
+    height: Math.max(1, window.innerHeight),
+  };
+  debugWindowsSiteBrowser("bounds measured from window", {
+    bounds,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      visualWidth: window.visualViewport?.width ?? null,
+      visualHeight: window.visualViewport?.height ?? null,
+    },
+  });
+  return bounds;
+}
+
+function invokeArgs(bounds: SiteBrowserBounds, url: string): {
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  return {
+    url,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
+}
+
+export const windowsSiteBrowser: SiteBrowserPlatformApi = {
+  name: "windows",
+  chromeMode: "in-page",
+  boundsFor: () => fullWindowBounds(),
+  setBounds: async (bounds, url) => {
+    if (!url) {
+      debugWindowsSiteBrowser("setBounds skipped: url is empty", { bounds });
+      return;
+    }
+    const args = invokeArgs(bounds, url);
+    debugWindowsSiteBrowser("setBounds invoke", args);
+    await invoke("scraper_set_bounds", args);
+    debugWindowsSiteBrowser("setBounds complete", args);
+  },
+  navigate: async (url) => {
+    debugWindowsSiteBrowser("navigate invoke", { url });
+    await invoke("scraper_navigate", { url });
+    debugWindowsSiteBrowser("navigate complete", { url });
+  },
+  hide: async () => {
+    debugWindowsSiteBrowser("hide invoke");
+    await invoke("scraper_hide");
+    debugWindowsSiteBrowser("hide complete");
+  },
+  pollControlMessage: async () =>
+    await invoke<SiteBrowserControlMessage | null>(
+      "scraper_poll_control_message",
+    ),
+};

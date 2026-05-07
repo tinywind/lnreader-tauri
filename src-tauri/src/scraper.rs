@@ -48,7 +48,7 @@ use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::{LogicalPosition, LogicalSize, Rect, Webview, WebviewBuilder};
 #[cfg(desktop)]
-use tauri::{Manager, Url, WebviewUrl};
+use tauri::{Emitter, Manager, Url, WebviewUrl};
 #[cfg(desktop)]
 use tokio::sync::oneshot;
 #[cfg(desktop)]
@@ -135,6 +135,25 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
       };
     }
 
+    function navigateToControl(action) {
+      var sequence = Date.now();
+      location.href = "https://norea.localhost/__norea_scraper_control__/" + action + "?sequence=" + sequence;
+    }
+
+    function requestClose() {
+      publish("close");
+      try {
+        var internals = window.__TAURI_INTERNALS__;
+        if (internals && typeof internals.invoke === "function") {
+          internals.invoke("scraper_hide", {}).catch(function () {
+            navigateToControl("close");
+          });
+          return;
+        }
+      } catch (e) {}
+      navigateToControl("close");
+    }
+
     function mount() {
       if (!document.body) return;
       var host = document.getElementById("__norea_scraper_controls");
@@ -192,7 +211,7 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
           setEdge(edge === "top" ? "bottom" : "top");
         });
         bind(close, function () {
-          publish("close");
+          requestClose();
         });
 
         setEdge(edge);
@@ -327,6 +346,37 @@ pub struct ScraperState;
 const HIDDEN_SIZE: f64 = 1.0;
 #[cfg(desktop)]
 const HIDDEN_POSITION: f64 = -10_000.0;
+#[cfg(desktop)]
+const SCRAPER_CONTROL_HOST: &str = "norea.localhost";
+#[cfg(desktop)]
+const SCRAPER_CONTROL_PATH_PREFIX: &str = "/__norea_scraper_control__/";
+#[cfg(desktop)]
+const SITE_BROWSER_HIDDEN_EVENT: &str = "site-browser-hidden";
+
+#[cfg(desktop)]
+fn log_windows_scraper_event(message: &str) {
+    if cfg!(target_os = "windows") {
+        log::info!("[scraper:windows] {message}");
+    }
+}
+
+#[cfg(desktop)]
+fn scraper_control_action(url: &Url) -> Option<&str> {
+    if url.scheme() == "https"
+        && url.host_str() == Some(SCRAPER_CONTROL_HOST)
+        && url.path().starts_with(SCRAPER_CONTROL_PATH_PREFIX)
+    {
+        return url.path().strip_prefix(SCRAPER_CONTROL_PATH_PREFIX);
+    }
+    None
+}
+
+#[cfg(desktop)]
+fn emit_site_browser_hidden(app: &AppHandle) {
+    if let Err(err) = app.emit(SITE_BROWSER_HIDDEN_EVENT, ()) {
+        log::warn!("[scraper] failed to emit site browser hidden event: {err}");
+    }
+}
 
 #[cfg(desktop)]
 fn scraper_key_from_url(url: &Url) -> String {
@@ -358,20 +408,34 @@ fn scraper_handle_for_key(
     state: &ScraperState,
     key: &str,
 ) -> Result<ScraperWebview, String> {
-    if let Some(existing) = state
+    if cfg!(target_os = "windows") {
+        log::info!("[scraper:windows] handle_for_key start key={key}");
+    }
+    let existing_label = state
         .webviews
         .lock()
         .expect("scraper webviews mutex")
         .get(key)
-        .cloned()
-    {
-        if let Some(webview) = app.get_webview(&existing.label) {
+        .map(|entry| entry.label.clone());
+    if let Some(existing_label) = existing_label {
+        if cfg!(target_os = "windows") {
+            log::info!(
+                "[scraper:windows] handle_for_key registered label={existing_label}"
+            );
+        }
+        if let Some(webview) = app.get_webview(&existing_label) {
+            log_windows_scraper_event("handle_for_key registered webview found");
             return Ok(webview);
         }
+        log_windows_scraper_event("handle_for_key registered webview missing");
     }
 
     let label = scraper_label_from_key(key);
+    if cfg!(target_os = "windows") {
+        log::info!("[scraper:windows] handle_for_key computed label={label}");
+    }
     if let Some(webview) = app.get_webview(&label) {
+        log_windows_scraper_event("handle_for_key unregistered webview found");
         state
             .webviews
             .lock()
@@ -380,14 +444,33 @@ fn scraper_handle_for_key(
         return Ok(webview);
     }
 
+    log_windows_scraper_event("handle_for_key get main window");
     let main_window = app
         .get_window("main")
         .ok_or_else(|| "scraper: main window missing".to_string())?;
+    log_windows_scraper_event("handle_for_key build child webview");
+    let app_for_navigation = app.clone();
     let builder = WebviewBuilder::new(
         label.clone(),
         WebviewUrl::App(PathBuf::from(SCRAPER_HOMEPAGE_PATH)),
     )
+    .on_navigation(move |url| {
+        if scraper_control_action(url) == Some("close") {
+            log_windows_scraper_event("scraper control close navigation received");
+            let app = app_for_navigation.clone();
+            if let Err(err) = app_for_navigation.run_on_main_thread(move || {
+                if let Err(err) = scraper_hide(app) {
+                    log::error!("[scraper] control close failed: {err}");
+                }
+            }) {
+                log::error!("[scraper] failed to schedule control close: {err}");
+            }
+            return false;
+        }
+        true
+    })
     .initialization_script(SCRAPER_INIT_SCRIPT);
+    log_windows_scraper_event("handle_for_key add_child start");
     let webview = main_window
         .add_child(
             builder,
@@ -395,14 +478,17 @@ fn scraper_handle_for_key(
             LogicalSize::new(HIDDEN_SIZE, HIDDEN_SIZE),
         )
         .map_err(|err| format!("scraper: add_child for {key}: {err}"))?;
+    log_windows_scraper_event("handle_for_key add_child complete");
     webview
         .hide()
         .map_err(|err| format!("scraper: hide after init for {key}: {err}"))?;
+    log_windows_scraper_event("handle_for_key initial hide complete");
     state
         .webviews
         .lock()
         .expect("scraper webviews mutex")
         .insert(key.to_string(), ScraperEntry { label });
+    log_windows_scraper_event("handle_for_key registered new webview");
     Ok(webview)
 }
 
@@ -413,8 +499,15 @@ fn scraper_handle_for_url(
     url: &str,
     context: &str,
 ) -> Result<(String, ScraperWebview), String> {
+    if cfg!(target_os = "windows") {
+        log::info!("[scraper:windows] handle_for_url start context={context} url={url}");
+    }
     let key = parse_scraper_key(url, context)?;
+    if cfg!(target_os = "windows") {
+        log::info!("[scraper:windows] handle_for_url parsed key={key}");
+    }
     let webview = scraper_handle_for_key(app, state, &key)?;
+    log_windows_scraper_event("handle_for_url complete");
     Ok((key, webview))
 }
 
@@ -427,6 +520,11 @@ fn set_webview_bounds(
     height: f64,
     context: &str,
 ) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        log::info!(
+            "[scraper:windows] set_webview_bounds context={context} x={x} y={y} width={width} height={height}"
+        );
+    }
     webview
         .set_bounds(Rect {
             position: LogicalPosition::new(x, y).into(),
@@ -437,6 +535,7 @@ fn set_webview_bounds(
 
 #[cfg(desktop)]
 fn hide_scraper_webview(webview: &ScraperWebview) -> Result<(), String> {
+    log_windows_scraper_event("hide_scraper_webview start");
     set_webview_bounds(
         webview,
         HIDDEN_POSITION,
@@ -447,7 +546,9 @@ fn hide_scraper_webview(webview: &ScraperWebview) -> Result<(), String> {
     )?;
     webview
         .hide()
-        .map_err(|err| format!("scraper: hide: {err}"))
+        .map_err(|err| format!("scraper: hide: {err}"))?;
+    log_windows_scraper_event("hide_scraper_webview complete");
+    Ok(())
 }
 
 /// Verify the main window exists. Site scraper WebViews are created
@@ -518,7 +619,7 @@ pub fn scraper_open_devtools(_app: AppHandle) -> Result<(), String> {
 /// live inside the scraper WebView so they remain in the main window.
 #[cfg(desktop)]
 #[tauri::command]
-pub fn scraper_set_bounds(
+pub async fn scraper_set_bounds(
     app: AppHandle,
     state: tauri::State<'_, ScraperState>,
     url: String,
@@ -527,6 +628,11 @@ pub fn scraper_set_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        log::info!(
+            "[scraper:windows] scraper_set_bounds start url={url} x={x} y={y} width={width} height={height}"
+        );
+    }
     let (key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
     let previous_key = state
         .visible_key
@@ -554,14 +660,16 @@ pub fn scraper_set_bounds(
     scraper
         .show()
         .map_err(|err| format!("scraper: show: {err}"))?;
+    log_windows_scraper_event("scraper_set_bounds show complete");
     set_webview_bounds(&scraper, safe_x, safe_y, safe_w, safe_h, "browser")?;
     *state.visible_key.lock().expect("scraper visible_key mutex") = Some(key);
+    log_windows_scraper_event("scraper_set_bounds complete");
     Ok(())
 }
 
 #[cfg(not(desktop))]
 #[tauri::command]
-pub fn scraper_set_bounds(
+pub async fn scraper_set_bounds(
     _app: AppHandle,
     _state: tauri::State<'_, ScraperState>,
     _url: String,
@@ -577,6 +685,7 @@ pub fn scraper_set_bounds(
 #[cfg(desktop)]
 #[tauri::command]
 pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
+    log_windows_scraper_event("scraper_hide start");
     let state = app.state::<ScraperState>();
     let visible_key = state
         .visible_key
@@ -584,6 +693,7 @@ pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
         .expect("scraper visible_key mutex")
         .take();
     let Some(visible_key) = visible_key else {
+        log_windows_scraper_event("scraper_hide skipped: no visible key");
         return Ok(());
     };
     if let Some(webview) = state
@@ -595,7 +705,11 @@ pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
         .and_then(|entry| app.get_webview(&entry.label))
     {
         hide_scraper_webview(&webview)?;
+    } else {
+        log_windows_scraper_event("scraper_hide skipped: visible webview missing");
     }
+    emit_site_browser_hidden(&app);
+    log_windows_scraper_event("scraper_hide complete");
     Ok(())
 }
 
@@ -630,7 +744,7 @@ pub async fn scraper_poll_control_message(
     else {
         return Ok(None);
     };
-    eval_json::<Option<ScraperControlMessage>>(
+    let message = eval_json::<Option<ScraperControlMessage>>(
         &scraper,
         r#"(function () {
   const message = window.__noreaScraperControlMessage || null;
@@ -639,7 +753,17 @@ pub async fn scraper_poll_control_message(
 })()"#
             .to_string(),
     )
-    .await
+    .await?;
+    if let Some(message) = &message {
+        if cfg!(target_os = "windows") {
+            log::info!(
+                "[scraper:windows] scraper_poll_control_message action={} sequence={:?}",
+                message.action,
+                message.sequence
+            );
+        }
+    }
+    Ok(message)
 }
 
 #[cfg(not(desktop))]
@@ -696,6 +820,9 @@ pub async fn scraper_navigate(
     state: tauri::State<'_, ScraperState>,
     url: String,
 ) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        log::info!("[scraper:windows] scraper_navigate start url={url}");
+    }
     let (_key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
     let parsed: Url = url
         .parse()
@@ -707,6 +834,7 @@ pub async fn scraper_navigate(
         .last_navigated
         .lock()
         .expect("scraper last_navigated mutex") = Some(url);
+    log_windows_scraper_event("scraper_navigate complete");
     Ok(())
 }
 

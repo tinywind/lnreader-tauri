@@ -1,124 +1,49 @@
 import { useEffect, useRef } from "react";
 import { Box, Group, Text } from "@mantine/core";
-import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { CloseGlyph } from "./ActionGlyphs";
 import { IconButton } from "./IconButton";
 import { useTranslation } from "../i18n";
 import {
-  androidScraperHide,
-  androidScraperNavigate,
-  androidScraperSetBounds,
-} from "../lib/android-scraper";
-import { isAndroidRuntime, isTauriRuntime } from "../lib/tauri-runtime";
+  getSiteBrowserPlatform,
+  type SiteBrowserPlatformApi,
+} from "../lib/site-browser";
+import { isTauriRuntime } from "../lib/tauri-runtime";
 import { useSiteBrowserStore } from "../store/site-browser";
 
 const CHROME_HEIGHT = 40;
 const BOUNDS_RESYNC_DELAYS_MS = [100, 500, 1000, 2000] as const;
 const SCRAPER_CONTROL_POLL_INTERVAL_MS = 250;
-
-interface Bounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface ScraperControlMessage {
-  action: string;
-  sequence?: number | null;
-}
-
-async function pushBounds(rect: Bounds, url: string | null): Promise<void> {
-  if (!isTauriRuntime()) return;
-  if (isAndroidRuntime()) {
-    androidScraperSetBounds(rect);
-    return;
-  }
-  if (!url) return;
-  await invoke("scraper_set_bounds", {
-    url,
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-  });
-}
-
-async function navigate(url: string): Promise<void> {
-  if (!isTauriRuntime()) return;
-  if (isAndroidRuntime()) {
-    await androidScraperNavigate(url);
-    return;
-  }
-  await invoke("scraper_navigate", { url });
-}
-
-async function hideScraper(): Promise<void> {
-  if (!isTauriRuntime()) return;
-  if (isAndroidRuntime()) {
-    androidScraperHide();
-    return;
-  }
-  await invoke("scraper_hide");
-}
-
-function usesDesktopInPageControls(): boolean {
-  return isTauriRuntime() && !isAndroidRuntime();
-}
-
-async function pollScraperControlMessage(): Promise<ScraperControlMessage | null> {
-  if (!usesDesktopInPageControls()) return null;
-  return await invoke<ScraperControlMessage | null>("scraper_poll_control_message");
-}
+const SITE_BROWSER_HIDDEN_EVENT = "site-browser-hidden";
+const SITE_BROWSER_HIDDEN_DOM_EVENT = "norea-site-browser-hidden";
 
 function reportScraperError(action: string, error: unknown): void {
   console.error(`[site-browser] ${action} failed`, error);
 }
 
-function getDesktopSiteBrowserBounds(): Bounds {
-  return {
-    x: 0,
-    y: 0,
-    width: Math.max(1, window.innerWidth),
-    height: Math.max(1, window.innerHeight),
-  };
+function debugSiteBrowser(message: string, data?: unknown): void {
+  console.debug(`[site-browser] ${message}`, data);
 }
 
-function getScraperBounds(node: HTMLDivElement): Bounds {
-  if (isAndroidRuntime()) {
-    const rect = node.getBoundingClientRect();
-    return {
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-    };
-  }
-
-  return {
-    x: 0,
-    y: CHROME_HEIGHT,
-    width: window.innerWidth,
-    height: Math.max(1, window.innerHeight - CHROME_HEIGHT),
-  };
-}
-
-function syncScraperBounds(
+function syncSiteBrowserBounds(
+  platform: SiteBrowserPlatformApi,
   node: HTMLDivElement | null,
   url: string | null,
 ): Promise<void> {
-  if (usesDesktopInPageControls()) {
-    return pushBounds(getDesktopSiteBrowserBounds(), url);
-  }
-  if (!node) return Promise.resolve();
-  return pushBounds(getScraperBounds(node), url);
+  debugSiteBrowser("sync bounds requested", {
+    platform: platform.name,
+    hasNode: node !== null,
+    url,
+  });
+  const bounds = platform.boundsFor(node);
+  if (!bounds) return Promise.resolve();
+  return platform.setBounds(bounds, url);
 }
 
 /**
- * Full-screen browser host for the persistent scraper Webview. On
- * desktop, controls are rendered inside the scraper WebView because
- * Linux WebKit surfaces can paint above React DOM chrome. On Android,
- * React still renders the top chrome above the native view.
+ * Full-screen browser host for the persistent scraper Webview. Platform-
+ * specific bounds, navigation, and chrome behavior are isolated behind
+ * the site-browser platform API.
  *
  * The Webview is never destroyed; its cookie jar survives every
  * open/close cycle so a manual login or CF clearance carries over
@@ -129,13 +54,16 @@ function syncScraperBounds(
  */
 export function SiteBrowserOverlay() {
   const { t } = useTranslation();
+  const platform = getSiteBrowserPlatform();
   const visible = useSiteBrowserStore((s) => s.visible);
   const currentUrl = useSiteBrowserStore((s) => s.currentUrl);
+  const openSequence = useSiteBrowserStore((s) => s.openSequence);
   const hide = useSiteBrowserStore((s) => s.hide);
-  const desktopInPageControls = usesDesktopInPageControls();
+  const inPageControls = platform.chromeMode === "in-page";
 
   const placeholderRef = useRef<HTMLDivElement | null>(null);
-  const lastNavigatedUrl = useRef<string | null>(null);
+  const lastOpenSequence = useRef<number | null>(null);
+  const nativeHiddenRef = useRef(false);
   const boundsResyncTimers = useRef<number[]>([]);
 
   const clearBoundsResyncTimers = () => {
@@ -145,13 +73,17 @@ export function SiteBrowserOverlay() {
 
   const queueBoundsResync = () => {
     clearBoundsResyncTimers();
+    debugSiteBrowser("queue bounds resync", {
+      platform: platform.name,
+      delays: BOUNDS_RESYNC_DELAYS_MS,
+    });
     for (const delay of BOUNDS_RESYNC_DELAYS_MS) {
       const timer = window.setTimeout(() => {
         const node = placeholderRef.current;
         const state = useSiteBrowserStore.getState();
         if (!state.visible) return;
-        void syncScraperBounds(node, state.currentUrl).catch((error) =>
-          reportScraperError("set bounds", error),
+        void syncSiteBrowserBounds(platform, node, state.currentUrl).catch(
+          (error) => reportScraperError("set bounds", error),
         );
       }, delay);
       boundsResyncTimers.current.push(timer);
@@ -161,39 +93,97 @@ export function SiteBrowserOverlay() {
   useEffect(() => {
     if (!visible) {
       clearBoundsResyncTimers();
-      lastNavigatedUrl.current = null;
-      void hideScraper().catch((error) => reportScraperError("hide", error));
+      lastOpenSequence.current = null;
+      if (nativeHiddenRef.current) {
+        nativeHiddenRef.current = false;
+        debugSiteBrowser("hide already handled by native", {
+          platform: platform.name,
+        });
+        return;
+      }
+      debugSiteBrowser("hide requested", { platform: platform.name });
+      void platform.hide().catch((error) => reportScraperError("hide", error));
       return;
     }
-    if (currentUrl && currentUrl !== lastNavigatedUrl.current) {
-      lastNavigatedUrl.current = currentUrl;
+    nativeHiddenRef.current = false;
+    if (currentUrl && openSequence !== lastOpenSequence.current) {
+      debugSiteBrowser("open requested", {
+        platform: platform.name,
+        chromeMode: platform.chromeMode,
+        currentUrl,
+        openSequence,
+        hasPlaceholder: placeholderRef.current !== null,
+      });
+      lastOpenSequence.current = openSequence;
       const node = placeholderRef.current;
-      if (desktopInPageControls || node) {
-        void syncScraperBounds(node, currentUrl).catch((error) =>
+      if (inPageControls || node) {
+        void syncSiteBrowserBounds(platform, node, currentUrl).catch((error) =>
           reportScraperError("set bounds", error),
         );
       }
       void (async () => {
         try {
-          await navigate(currentUrl);
+          await platform.navigate(currentUrl);
           const nextNode = placeholderRef.current;
-          if (desktopInPageControls || nextNode) {
-            await syncScraperBounds(nextNode, currentUrl);
+          debugSiteBrowser("navigate returned", {
+            platform: platform.name,
+            currentUrl,
+            openSequence,
+            hasPlaceholder: nextNode !== null,
+          });
+          if (inPageControls || nextNode) {
+            await syncSiteBrowserBounds(platform, nextNode, currentUrl);
           }
-          if (!desktopInPageControls) queueBoundsResync();
+          if (!inPageControls) queueBoundsResync();
         } catch (error) {
-          lastNavigatedUrl.current = null;
+          lastOpenSequence.current = null;
           reportScraperError("navigate", error);
         }
       })();
     }
-  }, [currentUrl, desktopInPageControls, visible]);
+  }, [currentUrl, inPageControls, openSequence, platform, visible]);
 
   useEffect(() => {
-    if (!visible || !desktopInPageControls) return;
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const handleNativeHidden = () => {
+      if (!useSiteBrowserStore.getState().visible) {
+        nativeHiddenRef.current = false;
+        return;
+      }
+      nativeHiddenRef.current = true;
+      debugSiteBrowser("native hidden event received", {
+        platform: platform.name,
+      });
+      useSiteBrowserStore.getState().hide();
+    };
+    window.addEventListener(SITE_BROWSER_HIDDEN_DOM_EVENT, handleNativeHidden);
+    void listen(SITE_BROWSER_HIDDEN_EVENT, handleNativeHidden)
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch((error) => reportScraperError("listen hidden event", error));
+    return () => {
+      disposed = true;
+      window.removeEventListener(
+        SITE_BROWSER_HIDDEN_DOM_EVENT,
+        handleNativeHidden,
+      );
+      unlisten?.();
+    };
+  }, [platform.name]);
+
+  useEffect(() => {
+    if (!visible || !inPageControls) return;
     let disposed = false;
     const poll = () => {
-      void pollScraperControlMessage()
+      void platform
+        .pollControlMessage()
         .then((message) => {
           if (disposed || message?.action !== "close") return;
           useSiteBrowserStore.getState().hide();
@@ -206,13 +196,13 @@ export function SiteBrowserOverlay() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [currentUrl, desktopInPageControls, visible]);
+  }, [currentUrl, inPageControls, platform, visible]);
 
   useEffect(() => {
     if (!visible) return;
-    if (desktopInPageControls) {
+    if (inPageControls) {
       const sendBounds = () => {
-        void syncScraperBounds(null, currentUrl).catch((error) =>
+        void syncSiteBrowserBounds(platform, null, currentUrl).catch((error) =>
           reportScraperError("set bounds", error),
         );
       };
@@ -228,7 +218,7 @@ export function SiteBrowserOverlay() {
     if (!node) return;
 
     const sendBounds = () => {
-      void syncScraperBounds(node, currentUrl).catch((error) =>
+      void syncSiteBrowserBounds(platform, node, currentUrl).catch((error) =>
         reportScraperError("set bounds", error),
       );
     };
@@ -245,10 +235,17 @@ export function SiteBrowserOverlay() {
       window.visualViewport?.removeEventListener("resize", sendBounds);
       window.visualViewport?.removeEventListener("scroll", sendBounds);
     };
-  }, [currentUrl, desktopInPageControls, visible]);
+  }, [currentUrl, inPageControls, platform, visible]);
 
   if (!visible) return null;
-  if (desktopInPageControls) return null;
+  if (inPageControls) {
+    debugSiteBrowser("react overlay skipped for in-page chrome", {
+      platform: platform.name,
+      currentUrl,
+      openSequence,
+    });
+    return null;
+  }
 
   return (
     <Box

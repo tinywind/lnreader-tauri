@@ -36,8 +36,19 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val height: Int,
   )
 
+  private enum class QueueKind {
+    Background,
+    Foreground,
+  }
+
+  private data class QueuedAction(
+    val id: String,
+    val kind: QueueKind,
+    val run: () -> Unit,
+  )
+
   private val mainHandler = Handler(Looper.getMainLooper())
-  private val queue: ArrayDeque<() -> Unit> = ArrayDeque()
+  private val queue: ArrayDeque<QueuedAction> = ArrayDeque()
   private var busy = false
   private var scraperWebView: WebView? = null
   private var documentStartScriptEnabled = false
@@ -48,23 +59,34 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   private var browserVisible = false
   private var bounds = CssBounds(0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
 
-  init {
-    mainHandler.post { scraper() }
-  }
-
   @JavascriptInterface
   fun fetch(payload: String) {
-    enqueue { runFetch(JSONObject(payload)) }
+    val json = JSONObject(payload)
+    enqueue(
+      QueuedAction(json.getString("id"), QueueKind.Background) {
+        runFetch(json)
+      },
+    )
   }
 
   @JavascriptInterface
   fun extract(payload: String) {
-    enqueue { runExtract(JSONObject(payload)) }
+    val json = JSONObject(payload)
+    enqueue(
+      QueuedAction(json.getString("id"), QueueKind.Background) {
+        runExtract(json)
+      },
+    )
   }
 
   @JavascriptInterface
   fun navigate(payload: String) {
-    enqueue { runNavigate(JSONObject(payload)) }
+    val json = JSONObject(payload)
+    enqueueForeground(
+      QueuedAction(json.getString("id"), QueueKind.Foreground) {
+        runNavigate(json)
+      },
+    )
   }
 
   @JavascriptInterface
@@ -90,17 +112,30 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     mainHandler.post { hideScraper() }
   }
 
-  private fun enqueue(action: () -> Unit) {
+  private fun enqueue(action: QueuedAction) {
     mainHandler.post {
       queue.addLast(action)
       runNext()
     }
   }
 
+  private fun enqueueForeground(action: QueuedAction) {
+    mainHandler.post {
+      cancelQueued("scraper: interrupted by site browser navigation")
+      queue.addFirst(action)
+      if (busy) {
+        cancelActive("scraper: interrupted by site browser navigation")
+      } else {
+        runNext()
+      }
+    }
+  }
+
   private fun runNext() {
     if (busy || queue.isEmpty()) return
+    if (browserVisible && queue.first().kind == QueueKind.Background) return
     busy = true
-    val action = queue.removeFirst()
+    val action = queue.removeFirst().run
     try {
       action()
     } catch (_: Throwable) {
@@ -139,7 +174,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView.webViewClient = makeClient(null)
     webView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
 
-    scraperContainer().addView(webView, hiddenLayoutParams())
+    val container = scraperContainer()
+    container.addView(webView, hiddenLayoutParams())
     scraperWebView = webView
     hideScraper()
     return webView
@@ -193,16 +229,22 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun showScraper() {
     val webView = scraper()
+    val container = scraperContainer()
     browserVisible = true
     webView.layoutParams = visibleLayoutParams()
     webView.alpha = 1f
     webView.translationX = 0f
     webView.translationY = 0f
+    webView.translationZ = 10_000f
+    webView.elevation = 10_000f
     webView.visibility = View.VISIBLE
     webView.isClickable = true
     webView.isFocusable = true
     webView.isFocusableInTouchMode = true
+    container.bringChildToFront(webView)
     webView.bringToFront()
+    webView.requestLayout()
+    webView.invalidate()
   }
 
   private fun hideScraper() {
@@ -212,9 +254,12 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView.alpha = 0f
     webView.translationX = -10000f
     webView.translationY = -10000f
+    webView.translationZ = 0f
     webView.isClickable = false
     webView.isFocusable = false
     webView.isFocusableInTouchMode = false
+    webView.requestLayout()
+    runNext()
   }
 
   private fun makeClient(onFinished: ((String) -> Unit)?): WebViewClient {
@@ -239,10 +284,11 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val contextUrl = payload.optString("contextUrl").takeIf { it.isNotBlank() }
     val init = payload.optJSONObject("init") ?: JSONObject()
     val webView = scraper()
+    activeFetchId = id
     hideScraper()
 
     prepareContext(webView, id, contextUrl) {
-      activeFetchId = id
+      if (activeFetchId != id) return@prepareContext
       setTimeout(id, 60_000L, "scraper: browser fetch to $url timed out")
       val request = JSONObject()
         .put("url", url)
@@ -358,15 +404,47 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     )
   }
 
+  private fun cancelQueued(message: String) {
+    while (queue.isNotEmpty()) {
+      val action = queue.removeFirst()
+      sendError(action.id, message)
+    }
+  }
+
+  private fun cancelActive(message: String) {
+    val id = activeFetchId ?: activeExtractId
+    scraperWebView?.stopLoading()
+    if (id == null) {
+      clearTimeout()
+      busy = false
+      runNext()
+      return
+    }
+    finishError(id, message)
+  }
+
+  private fun sendError(id: String, message: String) {
+    sendResult(
+      id,
+      JSONObject()
+        .put("ok", false)
+        .put("error", message),
+    )
+  }
+
   private fun finish(id: String, envelope: JSONObject) {
     clearTimeout()
     activeFetchId = null
     activeExtractId = null
+    sendResult(id, envelope)
+    busy = false
+    runNext()
+  }
+
+  private fun sendResult(id: String, envelope: JSONObject) {
     val script =
       "window.__lnrAndroidScraperResolve(${JSONObject.quote(id)}, ${JSONObject.quote(envelope.toString())});"
     mainWebView.evaluateJavascript(script, null)
-    busy = false
-    runNext()
   }
 
   private fun onFetchResult(id: String, payload: String) {
@@ -386,6 +464,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun onExtractResult(payload: String) {
     val id = activeExtractId ?: return
+    scraperWebView?.loadUrl("about:blank")
     finishSuccess(id, payload)
   }
 
