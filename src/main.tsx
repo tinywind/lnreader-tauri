@@ -111,6 +111,7 @@ interface AndroidSafeAreaBridge {
 
 interface AndroidWindowBridge {
   getMetrics(): string;
+  setInitialScale?: (scalePercent: number) => void;
 }
 
 interface RuntimeSafeAreaInsets {
@@ -139,7 +140,13 @@ declare global {
 interface AndroidLayoutConfig {
   className: AndroidLayoutClass;
   nativePxPerCssPx: number;
+  viewportInitialScale: number;
   viewportWidth: number;
+}
+
+interface AndroidViewportScale {
+  initialScale: number;
+  width: number;
 }
 
 let androidNativePxPerCssPx = 1;
@@ -177,12 +184,19 @@ function readAndroidWindowMetrics(): RuntimeWindowMetrics | null {
   }
 }
 
-function scaleAndroidViewportWidth(
+function resolveAndroidViewportScale(
   viewportWidth: number,
   uiScalePercent: unknown,
-): number {
+): AndroidViewportScale {
   const scale = normalizeUiScalePercent(uiScalePercent) / 100;
-  return viewportWidth * (1 / scale);
+  const targetWidth = viewportWidth * (1 / scale);
+  if (targetWidth >= ANDROID_MIN_VIEWPORT_WIDTH) {
+    return { initialScale: 1, width: targetWidth };
+  }
+  return {
+    initialScale: ANDROID_MIN_VIEWPORT_WIDTH / targetWidth,
+    width: ANDROID_MIN_VIEWPORT_WIDTH,
+  };
 }
 
 function resolveFallbackAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
@@ -202,15 +216,16 @@ function resolveFallbackAndroidLayout(uiScalePercent: unknown): AndroidLayoutCon
     ANDROID_MIN_VIEWPORT_WIDTH,
     ANDROID_MAX_VIEWPORT_WIDTH,
   );
-  const viewportWidth = scaleAndroidViewportWidth(
+  const viewportScale = resolveAndroidViewportScale(
     baseViewportWidth,
     uiScalePercent,
   );
 
   return {
-    className: classifyAndroidLayout(viewportWidth),
-    nativePxPerCssPx: widthPx / viewportWidth,
-    viewportWidth,
+    className: classifyAndroidLayout(viewportScale.width),
+    nativePxPerCssPx: (widthPx / viewportScale.width) * viewportScale.initialScale,
+    viewportInitialScale: viewportScale.initialScale,
+    viewportWidth: viewportScale.width,
   };
 }
 
@@ -230,20 +245,21 @@ function resolveAndroidLayout(uiScalePercent: unknown): AndroidLayoutConfig {
     ANDROID_MIN_VIEWPORT_WIDTH,
     ANDROID_MAX_VIEWPORT_WIDTH,
   );
-  const viewportWidth = scaleAndroidViewportWidth(
+  const viewportScale = resolveAndroidViewportScale(
     baseViewportWidth,
     uiScalePercent,
   );
   const physicalWidthPx = widthPx ?? (density ? baseViewportWidth * density : null);
   const nativePxPerCssPx =
     physicalWidthPx && physicalWidthPx > 0
-      ? physicalWidthPx / viewportWidth
+      ? (physicalWidthPx / viewportScale.width) * viewportScale.initialScale
       : density ?? 1;
 
   return {
-    className: classifyAndroidLayout(viewportWidth),
+    className: classifyAndroidLayout(viewportScale.width),
     nativePxPerCssPx,
-    viewportWidth,
+    viewportInitialScale: viewportScale.initialScale,
+    viewportWidth: viewportScale.width,
   };
 }
 
@@ -251,11 +267,13 @@ function viewportMeta(): HTMLMetaElement | null {
   return document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
 }
 
-function applyAndroidViewportWidth(width: number): void {
+function applyAndroidViewport(width: number, initialScale: number): void {
   const viewport = viewportMeta();
   if (!viewport) return;
+  const viewportScale = initialScale.toFixed(3);
   const content =
-    `width=${Math.round(width)}, initial-scale=1.0, maximum-scale=1.0, ` +
+    `width=${Math.round(width)}, initial-scale=${viewportScale}, ` +
+    `maximum-scale=${viewportScale}, ` +
     "user-scalable=no, viewport-fit=cover";
   if (viewport.content !== content) {
     viewport.content = content;
@@ -346,7 +364,10 @@ function applyRuntimeUiScale(
   androidNativePxPerCssPx = layout.nativePxPerCssPx;
   root.dataset.lnrPlatform = "android";
   root.dataset.lnrAndroidLayout = layout.className;
-  applyAndroidViewportWidth(layout.viewportWidth);
+  applyAndroidViewport(layout.viewportWidth, layout.viewportInitialScale);
+  window.__NoreaAndroidWindow?.setInitialScale?.(
+    Math.round(layout.viewportInitialScale * 100),
+  );
   root.style.setProperty("--lnr-root-font-size", `${ROOT_FONT_SIZE_PX}px`);
   root.style.setProperty("--lnr-ui-scale", layout.nativePxPerCssPx.toFixed(2));
   root.style.removeProperty("--lnr-mobile-nav-content-height");

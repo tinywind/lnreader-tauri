@@ -317,6 +317,14 @@
   min-height: 112px;
 }
 
+.lnr-settings-ui-scale-control {
+  align-items: center;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 88px minmax(180px, 260px);
+  min-width: 0;
+}
+
 .lnr-settings-switch-list {
   display: grid;
   gap: 8px;
@@ -451,6 +459,10 @@
   }
 
   .lnr-settings-slider-control {
+    grid-template-columns: 1fr;
+  }
+
+  .lnr-settings-ui-scale-control {
     grid-template-columns: 1fr;
   }
 

@@ -105,6 +105,14 @@ class MainActivity : TauriActivity() {
   private inner class WindowMetricsBridge(private val webView: WebView) {
     @JavascriptInterface
     fun getMetrics(): String = windowMetricsJson(webView)
+
+    @JavascriptInterface
+    fun setInitialScale(scalePercent: Int) {
+      val boundedScale = scalePercent.coerceIn(100, 300)
+      runOnUiThread {
+        webView.setInitialScale(boundedScale)
+      }
+    }
   }
 
   private fun requestNotificationPermissionIfNeeded() {
