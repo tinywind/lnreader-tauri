@@ -698,6 +698,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
       chapterName: entry.chapterName,
       novelId: entry.novelId,
       novelName: entry.novelName,
+      priority: "user",
       title: t("tasks.task.downloadChapter", { name: entry.chapterName }),
     }).promise.catch(() => undefined);
   };

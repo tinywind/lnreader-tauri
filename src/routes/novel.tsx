@@ -1233,6 +1233,7 @@ export function NovelDetailPage() {
       chapterName: chapter.name,
       novelId: novel.id,
       novelName: novel.name,
+      priority: "user",
       title: t("tasks.task.downloadChapter", { name: chapter.name }),
     }).promise.catch(() => undefined);
   }

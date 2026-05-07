@@ -93,7 +93,7 @@ async function runLibraryMetadataRefresh(
       const handle = enqueueSourceTask({
         plugin,
         kind: "source.refreshNovel",
-        priority: "normal",
+        priority: "deferred",
         title: options.taskTitle?.(novel) ?? novel.name,
         subject: {
           novelId: novel.id,
@@ -162,6 +162,7 @@ export async function refreshLibraryMetadata(
 ): Promise<MetadataRefreshResult> {
   return taskScheduler.enqueueMain<MetadataRefreshResult>({
     kind: "library.refreshMetadata",
+    priority: "deferred",
     title: options.aggregateTaskTitle ?? "Refresh library metadata",
     subject: { categoryId: options.categoryId },
     dedupeKey: `library.refreshMetadata:${options.categoryId ?? "all"}`,

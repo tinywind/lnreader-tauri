@@ -4,6 +4,7 @@ import {
   taskScheduler,
   type SourceTaskKind,
   type TaskHandle,
+  type TaskPriority,
   type TaskRunContext,
   type TaskSubject,
 } from "./scheduler";
@@ -12,7 +13,7 @@ interface SourceTaskOptions<T> {
   plugin: Pick<Plugin, "id" | "name">;
   kind: SourceTaskKind;
   title: string;
-  priority?: "interactive" | "normal";
+  priority?: Exclude<TaskPriority, "background">;
   subject?: TaskSubject;
   dedupeKey?: string;
   exclusive?: boolean;

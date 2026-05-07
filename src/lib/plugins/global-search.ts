@@ -126,7 +126,7 @@ export async function globalSearch(
         const novels = await enqueueSourceTask<NovelItem[]>({
           plugin,
           kind: "source.globalSearch",
-          priority: "interactive",
+          priority: "normal",
           title: options.taskTitle?.(plugin) ?? plugin.name,
           subject: { path: term },
           dedupeKey: `source.globalSearch:${plugin.id}:${term}`,

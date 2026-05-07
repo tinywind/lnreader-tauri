@@ -1,40 +1,81 @@
-.lnr-tasks-page {
-  --lnr-task-row-bg: color-mix(
-    in srgb,
-    var(--lnr-design-surface),
-    transparent 6%
-  );
+.lnr-task-shell {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.lnr-task-board {
+.lnr-task-overview {
+  min-width: 0;
+}
+
+.lnr-task-overview-panel {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(0, 1fr);
+  padding: 14px;
+}
+
+.lnr-task-stat-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lnr-task-stat-grid .mantine-Badge-root {
+  justify-content: center;
+  width: 100%;
+}
+
+.lnr-task-overview-action {
+  width: 100%;
 }
 
 .lnr-task-list {
   min-width: 0;
+  overflow: hidden;
+}
+
+.lnr-task-list > .lnr-console-section-header {
+  padding: 14px 16px;
+}
+
+.lnr-task-rows {
+  gap: 0;
 }
 
 .lnr-task-empty {
   color: var(--lnr-design-ink-subtle);
   font-size: 0.875rem;
-  padding: 12px;
+  padding: 16px;
 }
 
 .lnr-task-row {
   align-items: flex-start;
-  background: var(--lnr-task-row-bg);
-  border: 1px solid var(--lnr-design-rule);
-  border-radius: var(--lnr-border-radius);
+  background: transparent;
+  border-top: 1px solid var(--lnr-design-rule);
   display: grid;
-  gap: 12px;
+  gap: 16px;
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 12px;
+  padding: 14px 16px;
+}
+
+.lnr-task-row:first-child {
+  border-top: 0;
 }
 
 .lnr-task-row[data-status="failed"] {
-  border-color: color-mix(in srgb, var(--lnr-design-error), transparent 45%);
+  background: color-mix(
+    in srgb,
+    var(--lnr-design-error) 6%,
+    var(--lnr-design-surface)
+  );
+}
+
+.lnr-task-row[data-status="running"] {
+  background: color-mix(
+    in srgb,
+    var(--lnr-design-accent) 6%,
+    var(--lnr-design-surface)
+  );
 }
 
 .lnr-task-row-main {
@@ -43,8 +84,8 @@
 
 .lnr-task-row-title {
   color: var(--lnr-design-ink);
-  font-size: 0.9375rem;
-  font-weight: 700;
+  font-size: 0.95rem;
+  font-weight: 650;
 }
 
 .lnr-task-row-meta,
@@ -73,7 +114,15 @@
 
 .lnr-task-source-group {
   display: grid;
-  gap: 8px;
+  gap: 0;
+}
+
+.lnr-task-source-group + .lnr-task-source-group {
+  border-top: 1px solid var(--lnr-design-rule-strong);
+}
+
+.lnr-task-source-group > .lnr-console-section-header {
+  padding: 14px 16px 10px;
 }
 
 @media (max-width: 720px) {
@@ -87,7 +136,13 @@
 }
 
 @media (min-width: 1120px) {
-  .lnr-task-board {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .lnr-task-shell {
+    align-items: start;
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  }
+
+  .lnr-task-overview {
+    position: sticky;
+    top: calc(var(--lnr-safe-area-top) + 24px);
   }
 }

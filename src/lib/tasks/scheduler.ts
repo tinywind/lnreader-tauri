@@ -1,6 +1,11 @@
 export type TaskLane = "main" | "source";
 
-export type TaskPriority = "interactive" | "normal" | "background";
+export type TaskPriority =
+  | "interactive"
+  | "user"
+  | "normal"
+  | "deferred"
+  | "background";
 
 export type TaskStatus =
   | "queued"
@@ -156,11 +161,23 @@ function priorityRank(priority: TaskPriority): number {
   switch (priority) {
     case "interactive":
       return 0;
-    case "normal":
+    case "user":
       return 1;
-    case "background":
+    case "normal":
       return 2;
+    case "deferred":
+      return 3;
+    case "background":
+      return 4;
   }
+}
+
+function isInteractivePriority(priority: TaskPriority): boolean {
+  return priority === "interactive";
+}
+
+function isBackgroundPriority(priority: TaskPriority): boolean {
+  return priority === "background";
 }
 
 function makeTaskId(): string {
@@ -490,11 +507,19 @@ export class TaskScheduler {
 
   private drainMain(): void {
     if (this.activeMainTaskId || this.mainQueue.length === 0) return;
-    const id = this.mainQueue.shift();
-    if (!id) return;
-    const entry = this.entries.get(id);
-    if (!entry) return;
-    this.activeMainTaskId = id;
+    let nextIndex = -1;
+    let entry: TaskEntry | undefined;
+    for (let index = 0; index < this.mainQueue.length; index += 1) {
+      const candidate = this.entries.get(this.mainQueue[index]);
+      if (!candidate || candidate.record.status !== "queued") continue;
+      if (!entry || this.compareTaskOrder(candidate, entry) < 0) {
+        entry = candidate;
+        nextIndex = index;
+      }
+    }
+    if (!entry || nextIndex < 0) return;
+    this.mainQueue.splice(nextIndex, 1);
+    this.activeMainTaskId = entry.record.id;
     this.start(entry);
   }
 
@@ -502,7 +527,7 @@ export class TaskScheduler {
     while (this.activeForegroundBaseCount < this.sourceForegroundConcurrency) {
       const queuedExclusive = this.hasQueuedExclusiveForegroundSourceTask();
       const next = this.pickSourceTask((entry) => {
-        if (entry.record.priority === "background") return false;
+        if (isBackgroundPriority(entry.record.priority)) return false;
         if (this.activeExclusiveSourceTaskId) return false;
         if (entry.exclusive) {
           return (
@@ -524,7 +549,7 @@ export class TaskScheduler {
       const next = this.pickSourceTask((entry) => {
         if (this.activeExclusiveSourceTaskId) return false;
         if (entry.exclusive) return false;
-        return entry.record.priority === "interactive";
+        return isInteractivePriority(entry.record.priority);
       });
       if (!next) return;
       this.startSource(next, "interactiveBoost");
@@ -544,7 +569,7 @@ export class TaskScheduler {
 
     while (this.activeBackgroundCount < this.sourceBackgroundConcurrency) {
       const next = this.pickSourceTask(
-        (entry) => entry.record.priority === "background",
+        (entry) => isBackgroundPriority(entry.record.priority),
       );
       if (!next) return;
       this.startSource(next, "background");
@@ -603,7 +628,7 @@ export class TaskScheduler {
   }
 
   private isSourceTaskPaused(entry: TaskEntry): boolean {
-    if (entry.record.priority === "interactive") return false;
+    if (isInteractivePriority(entry.record.priority)) return false;
     const sourceId = entry.record.source?.id;
     return (
       this.sourceQueuesPaused ||
@@ -615,7 +640,7 @@ export class TaskScheduler {
     for (const entry of this.entries.values()) {
       if (
         entry.record.lane === "source" &&
-        entry.record.priority === "interactive" &&
+        isInteractivePriority(entry.record.priority) &&
         entry.record.status === "running"
       ) {
         return true;
@@ -684,7 +709,7 @@ export class TaskScheduler {
         const entry = this.entries.get(id);
         if (!entry || entry.record.status !== "queued") continue;
         if (this.isSourceTaskPaused(entry)) continue;
-        if (entry.record.priority !== "background") return true;
+        if (!isBackgroundPriority(entry.record.priority)) return true;
       }
     }
     return false;
@@ -696,7 +721,7 @@ export class TaskScheduler {
         const entry = this.entries.get(id);
         if (!entry || entry.record.status !== "queued") continue;
         if (this.isSourceTaskPaused(entry)) continue;
-        if (entry.record.priority === "background") continue;
+        if (isBackgroundPriority(entry.record.priority)) continue;
         if (entry.exclusive) return true;
       }
     }

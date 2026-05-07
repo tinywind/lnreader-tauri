@@ -117,7 +117,7 @@ async function runLibraryUpdateCheck(
       const handle = enqueueSourceTask({
         plugin,
         kind: "source.checkLibraryUpdates",
-        priority: "normal",
+        priority: "deferred",
         title: options.taskTitle?.(novel) ?? novel.name,
         subject: {
           novelId: novel.id,
@@ -182,6 +182,7 @@ export async function checkLibraryUpdates(
 ): Promise<UpdateCheckResult> {
   return taskScheduler.enqueueMain<UpdateCheckResult>({
     kind: "library.checkUpdates",
+    priority: "deferred",
     title: options.aggregateTaskTitle ?? "Check library updates",
     dedupeKey: "library.checkUpdates",
     run: (context) => runLibraryUpdateCheck(limit, options, context),
