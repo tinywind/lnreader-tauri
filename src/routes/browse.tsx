@@ -33,7 +33,6 @@ import {
 import { IconButton } from "../components/IconButton";
 import { PluginSettingsEditor } from "../components/PluginSettingsEditor";
 import { TextButton } from "../components/TextButton";
-import { useSiteBrowserStore } from "../store/site-browser";
 import {
   getCachedRepoIndex,
   setCachedRepoIndex,
@@ -50,6 +49,8 @@ import {
   type PluginRepository,
 } from "../db/queries/repository";
 import { isTauriRuntime } from "../lib/tauri-runtime";
+import { enqueueMainTask } from "../lib/tasks/main-tasks";
+import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { PluginSearchSection } from "./global-search";
 import { isValidPluginItem, pluginManager } from "../lib/plugins/manager";
 import { clearSourceFilterStorage } from "../lib/plugins/source-filter-storage";
@@ -255,7 +256,12 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     queryFn: async () => {
       const force = forceRefreshNext;
       setForceRefreshNext(false);
-      return fetchAllAvailable(repos.data ?? [], force);
+      if (!force) return fetchAllAvailable(repos.data ?? [], force);
+      return enqueueMainTask({
+        kind: "repository.refreshIndex",
+        title: t("browse.repositoryIndex"),
+        run: () => fetchAllAvailable(repos.data ?? [], force),
+      }).promise;
     },
     enabled: !!repos.data && repos.data.length > 0,
   });
@@ -347,8 +353,15 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
         debugRepositoryFlow("add mutation skipped: empty url");
         return;
       }
-      await addRepository({ url: trimmed });
-      debugRepositoryFlow("add mutation complete", { url: trimmed });
+      await enqueueMainTask({
+        kind: "repository.add",
+        title: t("browse.setRepository"),
+        subject: { url: trimmed },
+        run: async () => {
+          await addRepository({ url: trimmed });
+          debugRepositoryFlow("add mutation complete", { url: trimmed });
+        },
+      }).promise;
     },
     onSuccess: () => {
       debugRepositoryFlow("add mutation success: invalidate queries");
@@ -379,8 +392,14 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
         repository,
         repositoryCount: repos.data?.length ?? null,
       });
-      await removeRepository(id);
-      debugRepositoryFlow("remove mutation complete", { id });
+      await enqueueMainTask({
+        kind: "repository.remove",
+        title: t("browse.changeRepository"),
+        run: async () => {
+          await removeRepository(id);
+          debugRepositoryFlow("remove mutation complete", { id });
+        },
+      }).promise;
     },
     onSuccess: () => {
       debugRepositoryFlow("remove mutation success: invalidate queries");
@@ -403,7 +422,12 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
 
   const installMutation = useMutation({
     mutationFn: async (item: PluginItem): Promise<Plugin> =>
-      pluginManager.installPlugin(item),
+      enqueueMainTask({
+        kind: "plugin.install",
+        title: t("tasks.task.installPlugin", { name: item.name }),
+        subject: { pluginId: item.id, url: item.url },
+        run: () => pluginManager.installPlugin(item),
+      }).promise,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["plugin"] });
     },
@@ -421,11 +445,18 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
           }),
         );
       }
-      const source = await file.text();
-      return pluginManager.installPluginFromSource(
-        source,
-        localPluginSourceUrl(file),
-      );
+      return enqueueMainTask({
+        kind: "plugin.install",
+        title: t("tasks.task.installPlugin", { name: file.name }),
+        subject: { url: localPluginSourceUrl(file) },
+        run: async () => {
+          const source = await file.text();
+          return pluginManager.installPluginFromSource(
+            source,
+            localPluginSourceUrl(file),
+          );
+        },
+      }).promise;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["plugin"] });
@@ -434,7 +465,14 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
 
   const uninstallMutation = useMutation({
     mutationFn: async (id: string): Promise<void> => {
-      pluginManager.uninstallPlugin(id);
+      await enqueueMainTask({
+        kind: "plugin.uninstall",
+        title: t("tasks.task.uninstallPlugin", { name: id }),
+        subject: { pluginId: id },
+        run: async () => {
+          pluginManager.uninstallPlugin(id);
+        },
+      }).promise;
     },
     onMutate: (id) => {
       if (lastUsedPluginId === id) {
@@ -885,9 +923,11 @@ interface InstalledSectionProps {
  * persistent scraper WebView owns browser cache and cookies, and
  * plugin-owned fetches prepare this origin before requesting data.
  */
-function openSite(url: string): void {
-  console.debug("[site-browser] open site clicked", { url });
-  useSiteBrowserStore.getState().openAt(url);
+function openSite(plugin: Pick<Plugin, "id" | "name" | "site">, title: string): void {
+  console.debug("[site-browser] open site clicked", { url: plugin.site });
+  void enqueueOpenSiteTask(plugin, plugin.site, title).promise.catch(
+    () => undefined,
+  );
 }
 
 function hasPluginInputs(plugin: Plugin): boolean {
@@ -955,7 +995,7 @@ function PluginRow({
             truncate
             onClick={(event) => {
               event.preventDefault();
-              openSite(plugin.site);
+              openSite(plugin, t("tasks.task.openSite", { source: plugin.name }));
             }}
             title={t("common.openSiteInApp")}
           >
@@ -991,7 +1031,9 @@ function PluginRow({
             variant="default"
             disabled={uninstalling}
             title={t("common.openSite")}
-            onClick={() => openSite(plugin.site)}
+            onClick={() =>
+              openSite(plugin, t("tasks.task.openSite", { source: plugin.name }))
+            }
           >
             <ExternalLinkGlyph />
           </IconButton>
@@ -1210,7 +1252,7 @@ function AvailablePluginRow({
             truncate
             onClick={(event) => {
               event.preventDefault();
-              openSite(item.site);
+              openSite(item, t("tasks.task.openSite", { source: item.name }));
             }}
             title={t("common.openSiteInApp")}
           >
@@ -1227,7 +1269,9 @@ function AvailablePluginRow({
             variant="default"
             disabled={installing}
             title={t("common.openSite")}
-            onClick={() => openSite(item.site)}
+            onClick={() =>
+              openSite(item, t("tasks.task.openSite", { source: item.name }))
+            }
           >
             <ExternalLinkGlyph />
           </IconButton>

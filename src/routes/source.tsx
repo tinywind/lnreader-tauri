@@ -43,9 +43,12 @@ import {
   writeSourceFilters,
 } from "../lib/plugins/source-filter-storage";
 import type { NovelItem, Plugin } from "../lib/plugins/types";
+import {
+  enqueueOpenSiteTask,
+  enqueueSourceTask,
+} from "../lib/tasks/source-tasks";
 import { useTranslation } from "../i18n";
 import { sourceRoute } from "../router";
-import { useSiteBrowserStore } from "../store/site-browser";
 import "../styles/browse.css";
 
 type ListingMode = "popular" | "latest";
@@ -179,7 +182,6 @@ export function SourcePage() {
   const { from, pluginId, query } = sourceRoute.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
 
   const plugin = pluginManager.getPlugin(pluginId);
 
@@ -236,15 +238,48 @@ export function SourcePage() {
     ] as const,
     queryFn: async () => {
       if (!plugin) return [] as NovelItem[];
-      if (isSearchMode) {
-        return plugin.searchNovels(trimmedSearch, page);
-      }
-      return plugin.popularNovels(page, {
-        showLatestNovels: mode === "latest",
-        filters: activeFilters as never,
-      });
+      const taskKind = isSearchMode
+        ? "source.search"
+        : mode === "latest"
+          ? "source.listLatest"
+          : "source.listPopular";
+      const title = isSearchMode
+        ? t("tasks.task.sourceSearch", {
+            query: trimmedSearch,
+            source: plugin.name,
+          })
+        : t("tasks.task.sourceList", {
+            mode: mode === "popular" ? t("source.popular") : t("source.latest"),
+            source: plugin.name,
+          });
+      return enqueueSourceTask<NovelItem[]>({
+        plugin,
+        kind: taskKind,
+        priority: isSearchMode ? "interactive" : "normal",
+        title,
+        subject: { path: `${mode}:${page}` },
+        dedupeKey: `source.list:${plugin.id}:${mode}:${trimmedSearch}:${JSON.stringify(activeFilters)}:${page}`,
+        run: async () => {
+          if (isSearchMode) {
+            return plugin.searchNovels(trimmedSearch, page);
+          }
+          return plugin.popularNovels(page, {
+            showLatestNovels: mode === "latest",
+            filters: activeFilters as never,
+          });
+        },
+      }).promise;
     },
   });
+
+  function openPluginSite(): void {
+    if (!plugin) return;
+    void enqueueOpenSiteTask(
+      plugin,
+      plugin.site,
+      t("tasks.task.openSite", { source: plugin.name }),
+    ).promise.catch(() => undefined);
+  }
 
   useEffect(() => {
     if (listing.data) {
@@ -257,7 +292,15 @@ export function SourcePage() {
   const open = useMutation({
     mutationFn: async (item: NovelItem) => {
       if (!plugin) throw new Error(t("source.pluginNotLoaded"));
-      return importNovelFromSource(plugin, item);
+      return enqueueSourceTask<number>({
+        plugin,
+        kind: "source.openNovel",
+        priority: "interactive",
+        title: t("tasks.task.openNovel", { name: item.name }),
+        subject: { novelName: item.name, path: item.path },
+        dedupeKey: `source.openNovel:${plugin.id}:${item.path}`,
+        run: () => importNovelFromSource(plugin, item),
+      }).promise;
     },
     onSuccess: (novelId) => {
       void queryClient.invalidateQueries({ queryKey: ["novel"] });
@@ -308,7 +351,7 @@ export function SourcePage() {
             c="dimmed"
             onClick={(event) => {
               event.preventDefault();
-              openSiteBrowser(plugin.site);
+              openPluginSite();
             }}
           >
             {plugin.site}
@@ -430,7 +473,7 @@ export function SourcePage() {
                     truncate
                     onClick={(event) => {
                       event.preventDefault();
-                      openSiteBrowser(plugin.site);
+                      openPluginSite();
                     }}
                   >
                     {plugin.site}
@@ -441,13 +484,14 @@ export function SourcePage() {
                 label={t("common.openWebView")}
                 size="lg"
                 variant="default"
-                onClick={() => openSiteBrowser(plugin.site)}
+                onClick={openPluginSite}
               >
                 <ExternalLinkGlyph />
               </IconButton>
             </div>
           </ConsolePanel>
         </aside>
+
 
         <section className="lnr-source-results-panel">
           <ConsoleSectionHeader

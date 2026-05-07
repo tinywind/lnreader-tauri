@@ -37,8 +37,11 @@ import {
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { pluginManager } from "../lib/plugins/manager";
 import type { NovelItem, Plugin } from "../lib/plugins/types";
+import {
+  enqueueOpenSiteTask,
+  enqueueSourceTask,
+} from "../lib/tasks/source-tasks";
 import { useBrowseStore } from "../store/browse";
-import { useSiteBrowserStore } from "../store/site-browser";
 import "../styles/browse.css";
 
 const PREVIEW_RESULT_COUNT = 5;
@@ -682,7 +685,13 @@ export function PluginSearchSection({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
+  const openSite = (plugin: Plugin) => {
+    void enqueueOpenSiteTask(
+      plugin,
+      plugin.site,
+      t("tasks.task.openSite", { source: plugin.name }),
+    ).promise.catch(() => undefined);
+  };
   const globalSearchConcurrency = useBrowseStore(
     (s) => s.globalSearchConcurrency,
   );
@@ -919,6 +928,11 @@ export function PluginSearchSection({
       timeoutMs: globalSearchTimeoutSeconds * 1000,
       plugins: pluginsToStart,
       signal: controller.signal,
+      taskTitle: (plugin) =>
+        t("tasks.task.globalSearch", {
+          query: trimmedQuery,
+          source: plugin.name,
+        }),
       onResult: (result) => {
         if (controller.signal.aborted) return;
         appendGlobalSearchResult(searchKey, result);
@@ -985,7 +999,15 @@ export function PluginSearchSection({
       setOpeningKey(key);
       setOpenError(null);
       try {
-        const id = await importNovelFromSource(plugin, novel);
+        const id = await enqueueSourceTask<number>({
+          plugin,
+          kind: "source.openNovel",
+          priority: "interactive",
+          title: t("tasks.task.openNovel", { name: novel.name }),
+          subject: { novelName: novel.name, path: novel.path },
+          dedupeKey: `source.openNovel:${plugin.id}:${novel.path}`,
+          run: () => importNovelFromSource(plugin, novel),
+        }).promise;
         await queryClient.invalidateQueries({ queryKey: ["novel"] });
         await navigate({ to: "/novel", search: { id } });
       } catch (error) {
@@ -1045,7 +1067,7 @@ export function PluginSearchSection({
         scopedCount={scopedPlugins.length}
         selectedPluginIds={selectedPluginIds}
         onClearSelected={() => setSelectedPluginIds([])}
-        onOpenSite={(plugin) => openSiteBrowser(plugin.site)}
+        onOpenSite={openSite}
         onOpenSource={(plugin) => {
           setLastUsedPluginId(plugin.id);
           void navigate({
@@ -1149,7 +1171,7 @@ export function PluginSearchSection({
                 void handleOpenNovel(resultRow, novel);
               }}
               onMore={openPluginResults}
-              onOpenWebView={(plugin) => openSiteBrowser(plugin.site)}
+              onOpenWebView={openSite}
               onRetry={retryFailed}
             />
           ))}

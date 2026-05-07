@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Group,
+  Popover,
   Stack,
   Text,
   Title,
@@ -42,13 +43,18 @@ import {
   setNovelInLibrary,
   type NovelDetailRecord,
 } from "../db/queries/novel";
-import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
+import {
+  enqueueChapterDownload,
+  getChapterDownloadStatus,
+  subscribeChapterDownloads,
+  type ChapterDownloadStatus,
+} from "../lib/tasks/chapter-download";
+import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { pluginManager } from "../lib/plugins/manager";
 import { novelRoute } from "../router";
 import { useTranslation } from "../i18n";
 import { useLibraryStore } from "../store/library";
 import { useReaderStore } from "../store/reader";
-import { useSiteBrowserStore } from "../store/site-browser";
 import "../styles/novel.css";
 
 const FINISHED_PROGRESS = 100;
@@ -61,6 +67,21 @@ const NOVEL_TITLE_FONT_SIZES = [
 ] as const;
 
 type NovelTitleFontSize = (typeof NOVEL_TITLE_FONT_SIZES)[number];
+
+interface BatchDownloadTargets {
+  all: ChapterRow[];
+  hasCurrentChapter: boolean;
+  next10: ChapterRow[];
+  next30: ChapterRow[];
+  unread: ChapterRow[];
+}
+
+interface BatchDownloadOption {
+  chapters: ChapterRow[];
+  description: string;
+  key: string;
+  label: string;
+}
 
 function novelKey(id: number) {
   return ["novel", "detail", id] as const;
@@ -84,6 +105,53 @@ function splitGenres(genres: string | null): string[] {
     .split(/[|,]/)
     .map((genre) => genre.trim())
     .filter(Boolean);
+}
+
+function isActiveDownloadStatus(
+  status: ChapterDownloadStatus | undefined,
+): boolean {
+  return (
+    status?.kind === "queued" ||
+    status?.kind === "running" ||
+    status?.kind === "done"
+  );
+}
+
+function buildBatchDownloadTargets(
+  chapters: readonly ChapterRow[],
+  lastReadChapterId: number | undefined,
+  downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>,
+): BatchDownloadTargets {
+  const readingOrder = [...chapters].sort(
+    (left, right) => left.position - right.position,
+  );
+  const candidates = readingOrder.filter(
+    (chapter) =>
+      !chapter.isDownloaded &&
+      !isActiveDownloadStatus(downloadStatuses.get(chapter.id)),
+  );
+  const currentIndex =
+    lastReadChapterId === undefined
+      ? -1
+      : readingOrder.findIndex((chapter) => chapter.id === lastReadChapterId);
+  const nextCandidates =
+    currentIndex >= 0
+      ? readingOrder
+          .slice(currentIndex + 1)
+          .filter(
+            (chapter) =>
+              !chapter.isDownloaded &&
+              !isActiveDownloadStatus(downloadStatuses.get(chapter.id)),
+          )
+      : [];
+
+  return {
+    all: candidates,
+    hasCurrentChapter: currentIndex >= 0,
+    next10: nextCandidates.slice(0, 10),
+    next30: nextCandidates.slice(0, 30),
+    unread: candidates.filter((chapter) => chapter.unread),
+  };
 }
 
 function useAutoFitNovelTitle(title: string) {
@@ -208,7 +276,7 @@ function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
 interface ChapterListItemProps {
   chapter: ChapterRow;
   isCurrent: boolean;
-  status: DownloadStatus | undefined;
+  status: ChapterDownloadStatus | undefined;
   deleteBusy: boolean;
   opening: boolean;
   onOpen: () => void;
@@ -407,7 +475,11 @@ function ChapterFlag({
   );
 }
 
-function ChapterDownloadStatusIcon({ status }: { status: DownloadStatus }) {
+function ChapterDownloadStatusIcon({
+  status,
+}: {
+  status: ChapterDownloadStatus;
+}) {
   const { t } = useTranslation();
 
   if (status.kind === "done" || status.kind === "cancelled") return null;
@@ -445,6 +517,12 @@ interface NovelActionButtonProps {
   tone?: "default" | "accent" | "success";
 }
 
+interface NovelBatchDownloadMenuProps {
+  disabled: boolean;
+  onDownload: (chapters: ChapterRow[]) => void;
+  options: BatchDownloadOption[];
+}
+
 function NovelActionButton({
   active = false,
   children,
@@ -467,6 +545,60 @@ function NovelActionButton({
     >
       {children}
     </IconButton>
+  );
+}
+
+function NovelBatchDownloadMenu({
+  disabled,
+  onDownload,
+  options,
+}: NovelBatchDownloadMenuProps) {
+  const { t } = useTranslation();
+  const [opened, setOpened] = useState(false);
+
+  return (
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-end"
+      shadow="md"
+      width={260}
+    >
+      <Popover.Target>
+        <IconButton
+          className="lnr-novel-icon-button"
+          disabled={disabled}
+          label={t("novel.batchDownload.open")}
+          onClick={() => setOpened((current) => !current)}
+          size="lg"
+        >
+          <DownloadGlyph />
+        </IconButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-novel-batch-download-menu">
+        <div className="lnr-novel-batch-download-list">
+          {options.map((option) => (
+            <button
+              className="lnr-novel-batch-download-option"
+              disabled={option.chapters.length === 0}
+              key={option.key}
+              onClick={() => {
+                onDownload(option.chapters);
+                setOpened(false);
+              }}
+              type="button"
+            >
+              <span className="lnr-novel-batch-download-label">
+                {option.label}
+              </span>
+              <span className="lnr-novel-batch-download-description">
+                {option.description}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Popover.Dropdown>
+    </Popover>
   );
 }
 
@@ -579,9 +711,11 @@ function ClockIcon() {
 
 interface NovelWorkspaceProps {
   chapters: ChapterRow[];
+  downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>;
   lastReadChapterId: number | undefined;
   novel: NovelDetailRecord;
   onBack: () => void;
+  onBatchDownload: (chapters: ChapterRow[]) => void;
   onOpenSource: () => void;
   onRead: (chapter: ChapterRow) => void;
   onToggleLibrary: () => void;
@@ -591,9 +725,11 @@ interface NovelWorkspaceProps {
 
 function NovelWorkspace({
   chapters,
+  downloadStatuses,
   lastReadChapterId,
   novel,
   onBack,
+  onBatchDownload,
   onOpenSource,
   onRead,
   onToggleLibrary,
@@ -609,6 +745,57 @@ function NovelWorkspace({
   const libraryActionLabel = novel.inLibrary
     ? t("novel.removeFromLibrary")
     : t("novel.addToLibrary");
+  const batchTargets = buildBatchDownloadTargets(
+    chapters,
+    lastReadChapterId,
+    downloadStatuses,
+  );
+  const batchUnavailableDescription = batchTargets.hasCurrentChapter
+    ? t("novel.batchDownload.available", { count: 0 })
+    : t("novel.batchDownload.noCurrent");
+  const batchDownloadOptions: BatchDownloadOption[] = [
+    {
+      chapters: batchTargets.all,
+      description: t("novel.batchDownload.available", {
+        count: batchTargets.all.length,
+      }),
+      key: "all",
+      label: t("novel.batchDownload.all"),
+    },
+    {
+      chapters: batchTargets.unread,
+      description: t("novel.batchDownload.available", {
+        count: batchTargets.unread.length,
+      }),
+      key: "unread",
+      label: t("novel.batchDownload.unread"),
+    },
+    {
+      chapters: batchTargets.next10,
+      description:
+        batchTargets.next10.length > 0
+          ? t("novel.batchDownload.available", {
+              count: batchTargets.next10.length,
+            })
+          : batchUnavailableDescription,
+      key: "next10",
+      label: t("novel.batchDownload.next10"),
+    },
+    {
+      chapters: batchTargets.next30,
+      description:
+        batchTargets.next30.length > 0
+          ? t("novel.batchDownload.available", {
+              count: batchTargets.next30.length,
+            })
+          : batchUnavailableDescription,
+      key: "next30",
+      label: t("novel.batchDownload.next30"),
+    },
+  ];
+  const hasBatchDownloadTargets = batchDownloadOptions.some(
+    (option) => option.chapters.length > 0,
+  );
   const renderCoverPanel = () => (
     <ConsolePanel className="lnr-novel-cover-panel">
       <ConsoleCover
@@ -661,6 +848,11 @@ function NovelWorkspace({
           </Group>
         </div>
         <div className="lnr-novel-title-actions">
+          <NovelBatchDownloadMenu
+            disabled={!hasBatchDownloadTargets}
+            onDownload={onBatchDownload}
+            options={batchDownloadOptions}
+          />
           <NovelActionButton
             active={novel.inLibrary}
             disabled={toggleBusy}
@@ -760,7 +952,6 @@ export function NovelDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const defaultChapterSort = useLibraryStore((s) => s.defaultChapterSort);
-  const openSiteBrowser = useSiteBrowserStore((s) => s.openAt);
   const lastReadChapterId = useReaderStore(
     (state) => state.lastReadChapterByNovel[id],
   );
@@ -799,13 +990,13 @@ export function NovelDetailPage() {
   });
 
   const [statuses, setStatuses] = useState<
-    ReadonlyMap<number, DownloadStatus>
+    ReadonlyMap<number, ChapterDownloadStatus>
   >(() => new Map());
   const [openingChapterId, setOpeningChapterId] = useState<number | null>(null);
   const openRequestRef = useRef(0);
 
   useEffect(() => {
-    return downloadQueue.subscribe((event) => {
+    return subscribeChapterDownloads((event) => {
       setStatuses((prev) => {
         const next = new Map(prev);
         if (event.status.kind === "cancelled") {
@@ -822,6 +1013,28 @@ export function NovelDetailPage() {
       }
     });
   }, [id, queryClient]);
+
+  useEffect(() => {
+    const rows = chaptersQuery.data ?? [];
+    if (rows.length === 0) return;
+
+    setStatuses((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const chapter of rows) {
+        const status = getChapterDownloadStatus(chapter.id);
+        if (status?.kind === "cancelled") {
+          if (next.delete(chapter.id)) changed = true;
+          continue;
+        }
+        if (status && next.get(chapter.id) !== status) {
+          next.set(chapter.id, status);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [chaptersQuery.data]);
 
   function goBack() {
     if (window.history.length > 1) {
@@ -846,11 +1059,15 @@ export function NovelDetailPage() {
 
     setOpeningChapterId(chapter.id);
     try {
-      await downloadQueue.downloadNow({
+      await enqueueChapterDownload({
         id: chapter.id,
         pluginId: novel.pluginId,
         chapterPath: chapter.path,
-      });
+        chapterName: chapter.name,
+        novelId: novel.id,
+        novelName: novel.name,
+        title: t("tasks.task.downloadChapter", { name: chapter.name }),
+      }).promise;
       if (openRequestRef.current !== requestId) return;
       await queryClient.invalidateQueries({
         queryKey: chaptersKey(id),
@@ -866,19 +1083,46 @@ export function NovelDetailPage() {
     }
   }
 
-  function openSourceNovel(url: string | null) {
+  function openSourceNovel(pluginId: string, url: string | null) {
     if (!url) return;
-    openSiteBrowser(url);
+    const plugin = pluginManager.getPlugin(pluginId);
+    if (!plugin) return;
+    void enqueueOpenSiteTask(
+      plugin,
+      url,
+      t("tasks.task.openSite", { source: plugin.name }),
+    ).promise.catch(() => undefined);
   }
 
   function downloadChapter(chapter: ChapterRow): void {
     const novel = novelQuery.data;
     if (!novel) return;
-    downloadQueue.enqueue({
+    void enqueueChapterDownload({
       id: chapter.id,
       pluginId: novel.pluginId,
       chapterPath: chapter.path,
-    });
+      chapterName: chapter.name,
+      novelId: novel.id,
+      novelName: novel.name,
+      title: t("tasks.task.downloadChapter", { name: chapter.name }),
+    }).promise.catch(() => undefined);
+  }
+
+  function downloadChapters(chaptersToDownload: ChapterRow[]): void {
+    const novel = novelQuery.data;
+    if (!novel || chaptersToDownload.length === 0) return;
+
+    for (const chapter of chaptersToDownload) {
+      void enqueueChapterDownload({
+        id: chapter.id,
+        pluginId: novel.pluginId,
+        chapterPath: chapter.path,
+        chapterName: chapter.name,
+        novelId: novel.id,
+        novelName: novel.name,
+        title: t("tasks.task.downloadChapter", { name: chapter.name }),
+      }).promise.catch(() => undefined);
+    }
   }
 
   if (id <= 0) {
@@ -948,10 +1192,12 @@ export function NovelDetailPage() {
       <NovelWorkspace
         novel={novel}
         chapters={chapters}
+        downloadStatuses={statuses}
         lastReadChapterId={lastReadChapterId}
         onBack={goBack}
+        onBatchDownload={downloadChapters}
         onRead={openChapter}
-        onOpenSource={() => openSourceNovel(sourceUrl)}
+        onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
         onToggleLibrary={() => toggle.mutate()}
         sourceUrl={sourceUrl}
         toggleBusy={toggle.isPending}

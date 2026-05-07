@@ -32,7 +32,12 @@ import {
   type LibraryUpdateEntry,
   type LibraryUpdatesCursor,
 } from "../db/queries/chapter";
-import { downloadQueue, type DownloadStatus } from "../lib/download/queue";
+import {
+  enqueueChapterDownload,
+  getChapterDownloadStatus,
+  subscribeChapterDownloads,
+  type ChapterDownloadStatus,
+} from "../lib/tasks/chapter-download";
 import {
   checkLibraryUpdates,
   type UpdateCheckFailure,
@@ -237,7 +242,7 @@ function UpdateFlag({
 function UpdateDownloadStatusFlag({
   status,
 }: {
-  status: DownloadStatus | undefined;
+  status: ChapterDownloadStatus | undefined;
 }) {
   const { t } = useTranslation();
 
@@ -269,7 +274,7 @@ function UpdateDownloadStatusFlag({
 }
 
 interface UpdateRowProps {
-  downloadStatus: DownloadStatus | undefined;
+  downloadStatus: ChapterDownloadStatus | undefined;
   entry: LibraryUpdateEntry;
   onDownload: () => void;
   onOpen: () => void;
@@ -492,7 +497,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
   const mergeFirstPage = useUpdatesStore((state) => state.mergeFirstPage);
   const initialLocalLoadRequested = useRef(false);
   const [downloadStatuses, setDownloadStatuses] = useState<
-    ReadonlyMap<number, DownloadStatus>
+    ReadonlyMap<number, ChapterDownloadStatus>
   >(() => new Map());
 
   const refresh = useMutation({
@@ -501,7 +506,11 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
   });
 
   const check = useMutation({
-    mutationFn: () => checkLibraryUpdates(UPDATES_PAGE_SIZE),
+    mutationFn: () =>
+      checkLibraryUpdates(UPDATES_PAGE_SIZE, {
+        taskTitle: (novel) =>
+          t("tasks.task.checkUpdates", { name: novel.name }),
+      }),
     onSuccess: applyCheckResult,
   });
 
@@ -553,7 +562,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
   }, [active, hasLoaded, refreshFirstPage]);
 
   useEffect(() => {
-    return downloadQueue.subscribe((event) => {
+    return subscribeChapterDownloads((event) => {
       setDownloadStatuses((current) => {
         const next = new Map(current);
         if (event.status.kind === "cancelled") {
@@ -572,7 +581,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
 
   useEffect(() => {
     for (const entry of updates) {
-      const status = downloadQueue.status(entry.chapterId);
+      const status = getChapterDownloadStatus(entry.chapterId);
       if (status?.kind === "done" && !entry.isDownloaded) {
         markChapterDownloaded(entry.chapterId);
       }
@@ -582,7 +591,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
       let changed = false;
       const next = new Map(current);
       for (const entry of updates) {
-        const status = downloadQueue.status(entry.chapterId);
+        const status = getChapterDownloadStatus(entry.chapterId);
         if (status?.kind === "cancelled") {
           if (next.delete(entry.chapterId)) changed = true;
           continue;
@@ -613,11 +622,15 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
     void navigate({ to: "/novel", search: { id: novelId } });
   };
   const downloadChapter = (entry: LibraryUpdateEntry) => {
-    downloadQueue.enqueue({
+    void enqueueChapterDownload({
       id: entry.chapterId,
       pluginId: entry.pluginId,
       chapterPath: entry.chapterPath,
-    });
+      chapterName: entry.chapterName,
+      novelId: entry.novelId,
+      novelName: entry.novelName,
+      title: t("tasks.task.downloadChapter", { name: entry.chapterName }),
+    }).promise.catch(() => undefined);
   };
 
   const result = lastCheckResult ?? undefined;

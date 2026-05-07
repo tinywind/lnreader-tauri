@@ -7,6 +7,7 @@ import {
 } from "../../db/queries/chapter";
 import { pluginManager } from "../plugins/manager";
 import { LOCAL_PLUGIN_ID } from "../plugins/types";
+import { enqueueSourceTask } from "../tasks/source-tasks";
 
 interface LibraryNovelForUpdate {
   id: number;
@@ -29,6 +30,10 @@ export interface UpdateCheckResult {
   hasMoreUpdates: boolean;
   nextUpdateCursor: LibraryUpdatesCursor | null;
   updates: LibraryUpdateEntry[];
+}
+
+export interface UpdateCheckOptions {
+  taskTitle?: (novel: LibraryNovelForUpdate) => string;
 }
 
 const SELECT_LIBRARY_NOVELS_FOR_UPDATE = `
@@ -57,6 +62,7 @@ async function listLibraryNovelsForUpdate(): Promise<
 
 export async function checkLibraryUpdates(
   limit: number,
+  options: UpdateCheckOptions = {},
 ): Promise<UpdateCheckResult> {
   const novels = await listLibraryNovelsForUpdate();
   const failures: UpdateCheckFailure[] = [];
@@ -81,7 +87,19 @@ export async function checkLibraryUpdates(
     }
 
     try {
-      const detail = await plugin.parseNovel(novel.path);
+      const detail = await enqueueSourceTask({
+        plugin,
+        kind: "source.checkLibraryUpdates",
+        priority: "normal",
+        title: options.taskTitle?.(novel) ?? novel.name,
+        subject: {
+          novelId: novel.id,
+          novelName: novel.name,
+          path: novel.path,
+        },
+        dedupeKey: `source.checkLibraryUpdates:${plugin.id}:${novel.path}`,
+        run: () => plugin.parseNovel(novel.path),
+      }).promise;
       checkedNovels += 1;
 
       for (let index = 0; index < detail.chapters.length; index += 1) {

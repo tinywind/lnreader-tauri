@@ -37,6 +37,8 @@ import {
   exportBackupToFile,
   importBackupFromFile,
 } from "../lib/backup/io";
+import { enqueueMainTask } from "../lib/tasks/main-tasks";
+import type { MainTaskKind } from "../lib/tasks/scheduler";
 import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
 import {
   DEFAULT_APPEARANCE,
@@ -301,6 +303,8 @@ function DataSettingsSection({
   onExport: () => void;
   onImport: () => void;
   onRunMaintenance: (
+    kind: MainTaskKind,
+    title: string,
     message: string,
     warning: string,
     action: () => Promise<{ rowsAffected: number }>,
@@ -353,8 +357,10 @@ function DataSettingsSection({
             loading={isBusy}
             variant="default"
             onClick={() => {
-              onRunMaintenance(
-                t("settings.data.cachedNovels.busy"),
+                onRunMaintenance(
+                  "maintenance.clearCachedNovels",
+                  t("settings.data.cachedNovels.button"),
+                  t("settings.data.cachedNovels.busy"),
                 t("settings.data.cachedNovels.warning"),
                 clearCachedNovels,
               );
@@ -372,8 +378,10 @@ function DataSettingsSection({
             loading={isBusy}
             variant="default"
             onClick={() => {
-              onRunMaintenance(
-                t("settings.data.updatesQueue.busy"),
+                onRunMaintenance(
+                  "maintenance.clearUpdates",
+                  t("settings.data.updatesQueue.button"),
+                  t("settings.data.updatesQueue.busy"),
                 t("settings.data.updatesQueue.warning"),
                 clearUpdatesTab,
               );
@@ -391,8 +399,10 @@ function DataSettingsSection({
             loading={isBusy}
             variant="default"
             onClick={() => {
-              onRunMaintenance(
-                t("settings.data.readDownloads.busy"),
+                onRunMaintenance(
+                  "maintenance.deleteReadDownloads",
+                  t("settings.data.readDownloads.button"),
+                  t("settings.data.readDownloads.busy"),
                 t("settings.data.readDownloads.warning"),
                 deleteReadDownloadedChapters,
               );
@@ -631,7 +641,11 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
   async function handleExport(): Promise<void> {
     setStatus({ kind: "busy", message: t("settings.data.savingBackup") });
     try {
-      const path = await exportBackupToFile();
+      const path = await enqueueMainTask({
+        kind: "backup.export",
+        title: t("settings.data.exportBackup"),
+        run: exportBackupToFile,
+      }).promise;
       setStatus(
         path
           ? {
@@ -656,7 +670,11 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     }
     setStatus({ kind: "busy", message: t("settings.data.restoringBackup") });
     try {
-      const path = await importBackupFromFile();
+      const path = await enqueueMainTask({
+        kind: "backup.restore",
+        title: t("settings.data.importBackup"),
+        run: importBackupFromFile,
+      }).promise;
       setStatus(
         path
           ? {
@@ -676,6 +694,8 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
   }
 
   async function runMaintenance(
+    kind: MainTaskKind,
+    title: string,
     message: string,
     warning: string,
     action: () => Promise<{ rowsAffected: number }>,
@@ -685,7 +705,11 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     }
     setStatus({ kind: "busy", message });
     try {
-      const result = await action();
+      const result = await enqueueMainTask({
+        kind,
+        title,
+        run: action,
+      }).promise;
       setStatus({
         kind: "ok",
         message: t("settings.data.maintenanceDone", {
@@ -703,24 +727,38 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
   }
 
   async function handleClearStorage(): Promise<void> {
-    const localCount = clearStorageByPrefix(
-      window.localStorage,
-      PLUGIN_STORAGE_PREFIX,
-    );
-    const sessionCount = clearStorageByPrefix(
-      window.sessionStorage,
-      PLUGIN_STORAGE_PREFIX,
-    );
-    const cookieCount = clearAccessibleCookies();
     setStatus({ kind: "busy", message: t("settings.data.clearStorageBusy") });
+    let localCount = 0;
+    let sessionCount = 0;
+    let cookieCount = 0;
     try {
-      const webviewCookieCount = await invoke<number>("scraper_clear_cookies");
+      const result = await enqueueMainTask({
+        kind: "maintenance.clearPluginStorage",
+        title: t("settings.data.pluginStorage.button"),
+        run: async () => {
+          localCount = clearStorageByPrefix(
+            window.localStorage,
+            PLUGIN_STORAGE_PREFIX,
+          );
+          sessionCount = clearStorageByPrefix(
+            window.sessionStorage,
+            PLUGIN_STORAGE_PREFIX,
+          );
+          cookieCount = clearAccessibleCookies();
+          const webviewCookieCount = await invoke<number>("scraper_clear_cookies");
+          return {
+            cookieCount,
+            storageCount: localCount + sessionCount,
+            webviewCookieCount,
+          };
+        },
+      }).promise;
       setStatus({
         kind: "ok",
         message: t("settings.data.clearStorageOk", {
-          cookieCount,
-          storageCount: localCount + sessionCount,
-          webviewCookieCount,
+          cookieCount: result.cookieCount,
+          storageCount: result.storageCount,
+          webviewCookieCount: result.webviewCookieCount,
         }),
       });
     } catch (error) {
@@ -805,8 +843,8 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
           onImport={() => {
             void handleImport();
           }}
-          onRunMaintenance={(message, warning, action) => {
-            void runMaintenance(message, warning, action);
+          onRunMaintenance={(kind, title, message, warning, action) => {
+            void runMaintenance(kind, title, message, warning, action);
           }}
           onClearStorage={() => {
             void handleClearStorage();

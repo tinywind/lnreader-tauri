@@ -11,6 +11,7 @@ import { NovelDetailPage } from "./routes/novel";
 import { ReaderPage } from "./routes/reader";
 import { SettingsPage } from "./routes/settings";
 import { SourcePage } from "./routes/source";
+import { TasksPage } from "./routes/tasks";
 import { UpdatesPage } from "./routes/updates";
 
 const rootRoute = createRootRoute({
@@ -73,6 +74,12 @@ const updatesRoute = createRoute({
   component: UpdatesPage,
 });
 
+const tasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks",
+  component: TasksPage,
+});
+
 export const sourceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/source",
@@ -93,6 +100,7 @@ const routeTree = rootRoute.addChildren([
   novelRoute,
   historyRoute,
   updatesRoute,
+  tasksRoute,
   sourceRoute,
 ]);
 

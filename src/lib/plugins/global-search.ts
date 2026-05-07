@@ -1,5 +1,6 @@
 import type { PluginManager } from "./manager";
 import type { NovelItem, Plugin } from "./types";
+import { enqueueSourceTask } from "../tasks/source-tasks";
 
 export interface GlobalSearchResult {
   pluginId: string;
@@ -18,6 +19,7 @@ export interface GlobalSearchOptions {
   timeoutMs?: number;
   /** Called as each plugin's task settles. */
   onResult?: (result: GlobalSearchResult) => void;
+  taskTitle?: (plugin: Plugin) => string;
 }
 
 const DEFAULT_CONCURRENCY = 3;
@@ -120,10 +122,15 @@ export async function globalSearch(
       if (signal?.aborted) return;
       let result: GlobalSearchResult;
       try {
-        const novels = await withTimeout(
-          plugin.searchNovels(term, 1),
-          timeoutMs,
-        );
+        const novels = await enqueueSourceTask<NovelItem[]>({
+          plugin,
+          kind: "source.globalSearch",
+          priority: "interactive",
+          title: options.taskTitle?.(plugin) ?? plugin.name,
+          subject: { path: term },
+          dedupeKey: `source.globalSearch:${plugin.id}:${term}`,
+          run: () => withTimeout(plugin.searchNovels(term, 1), timeoutMs),
+        }).promise;
         result = {
           pluginId: plugin.id,
           pluginName: plugin.name,

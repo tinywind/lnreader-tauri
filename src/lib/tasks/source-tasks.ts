@@ -1,0 +1,79 @@
+import { useSiteBrowserStore } from "../../store/site-browser";
+import type { Plugin } from "../plugins/types";
+import {
+  taskScheduler,
+  type SourceTaskKind,
+  type TaskHandle,
+  type TaskRunContext,
+  type TaskSubject,
+} from "./scheduler";
+
+interface SourceTaskOptions<T> {
+  plugin: Pick<Plugin, "id" | "name">;
+  kind: SourceTaskKind;
+  title: string;
+  priority?: "interactive" | "normal";
+  subject?: TaskSubject;
+  dedupeKey?: string;
+  exclusive?: boolean;
+  run: (context: TaskRunContext) => Promise<T>;
+}
+
+export function enqueueSourceTask<T>({
+  dedupeKey,
+  exclusive,
+  kind,
+  plugin,
+  priority = "normal",
+  run,
+  subject,
+  title,
+}: SourceTaskOptions<T>): TaskHandle<T> {
+  return taskScheduler.enqueueSource<T>({
+    kind,
+    priority,
+    title,
+    source: { id: plugin.id, name: plugin.name },
+    subject: { ...subject, pluginId: plugin.id },
+    dedupeKey,
+    exclusive,
+    run,
+  });
+}
+
+export function enqueueOpenSiteTask(
+  plugin: Pick<Plugin, "id" | "name" | "site">,
+  url: string,
+  title: string,
+): TaskHandle<void> {
+  return enqueueSourceTask<void>({
+    plugin,
+    kind: "source.openSite",
+    priority: "interactive",
+    exclusive: true,
+    title,
+    subject: { url },
+    dedupeKey: `source.openSite:${plugin.id}:${url}`,
+    run: async ({ signal }) =>
+      new Promise<void>((resolve, reject) => {
+        const handleAbort = () => {
+          cleanup();
+          reject(new DOMException("Task was cancelled.", "AbortError"));
+        };
+        const cleanup = () => {
+          signal.removeEventListener("abort", handleAbort);
+          unsubscribe();
+        };
+        const unsubscribe = useSiteBrowserStore.subscribe((state) => {
+          if (!state.visible || state.currentUrl !== url) {
+            cleanup();
+            resolve();
+          }
+        });
+
+        signal.addEventListener("abort", handleAbort, { once: true });
+        useSiteBrowserStore.getState().openAt(url);
+        if (signal.aborted) handleAbort();
+      }),
+  });
+}

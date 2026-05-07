@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { taskScheduler } from "../tasks/scheduler";
 import { PluginManager } from "./manager";
 import { globalSearch } from "./global-search";
 import type { NovelItem, Plugin } from "./types";
@@ -37,6 +38,10 @@ function makeManager(plugins: Plugin[]): PluginManager {
 }
 
 describe("globalSearch", () => {
+  beforeEach(() => {
+    taskScheduler.resumeSourceQueue();
+  });
+
   it("returns [] when no plugins are installed", async () => {
     const manager = new PluginManager();
     const results = await globalSearch(manager, "anything");

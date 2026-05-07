@@ -15,13 +15,14 @@ import { BrowsePage } from "./browse";
 import { HistoryPage } from "./history";
 import { LibraryPage } from "./library";
 import { SettingsPage } from "./settings";
+import { TasksPage } from "./tasks";
 import { UpdatesPage } from "./updates";
 
 type NavItem = {
   compactKey: TranslationKey;
-  icon: "library" | "browse" | "updates" | "history" | "settings";
+  icon: "library" | "browse" | "updates" | "history" | "tasks" | "settings";
   labelKey: TranslationKey;
-  to: "/" | "/browse" | "/updates" | "/history" | "/settings";
+  to: "/" | "/browse" | "/updates" | "/history" | "/tasks" | "/settings";
   visibleWhen?: "updates" | "history";
 };
 
@@ -48,6 +49,12 @@ const NAV_ITEMS: readonly NavItem[] = [
     visibleWhen: "history",
   },
   {
+    to: "/tasks",
+    labelKey: "nav.tasks",
+    compactKey: "nav.tasks",
+    icon: "tasks",
+  },
+  {
     to: "/settings",
     labelKey: "nav.settings",
     compactKey: "nav.settings",
@@ -55,7 +62,7 @@ const NAV_ITEMS: readonly NavItem[] = [
   },
 ] as const;
 
-type PersistentPage = "library" | "browse" | "updates" | "history" | "settings";
+type PersistentPage = "library" | "browse" | "updates" | "history" | "tasks" | "settings";
 
 function getPersistentPage(pathname: string): PersistentPage | null {
   switch (pathname) {
@@ -67,6 +74,8 @@ function getPersistentPage(pathname: string): PersistentPage | null {
       return "updates";
     case "/history":
       return "history";
+    case "/tasks":
+      return "tasks";
     case "/settings":
       return "settings";
     default:
@@ -155,6 +164,17 @@ function NavIcon({ icon }: { icon: NavItem["icon"] }) {
         <svg {...common}>
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7v5l3 2" />
+        </svg>
+      );
+    case "tasks":
+      return (
+        <svg {...common}>
+          <path d="M4 6h16" />
+          <path d="M4 12h16" />
+          <path d="M4 18h10" />
+          <path d="M8 6v0" />
+          <path d="M8 12v0" />
+          <path d="M8 18v0" />
         </svg>
       );
     case "settings":
@@ -355,6 +375,11 @@ export function RootLayout() {
         {pageVisited("history") ? (
           <PersistentPageSlot active={activePersistentPage === "history"}>
             <HistoryPage />
+          </PersistentPageSlot>
+        ) : null}
+        {pageVisited("tasks") ? (
+          <PersistentPageSlot active={activePersistentPage === "tasks"}>
+            <TasksPage />
           </PersistentPageSlot>
         ) : null}
         {pageVisited("settings") ? (

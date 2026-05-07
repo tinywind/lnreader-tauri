@@ -455,6 +455,55 @@
   opacity: 0.65;
 }
 
+.lnr-novel-batch-download-menu {
+  background: var(--lnr-design-surface);
+  border-color: var(--lnr-design-rule-strong);
+  padding: 6px;
+}
+
+.lnr-novel-batch-download-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lnr-novel-batch-download-option {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--lnr-design-ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.lnr-novel-batch-download-option:hover:not(:disabled) {
+  background: var(--lnr-design-hover-overlay);
+}
+
+.lnr-novel-batch-download-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.lnr-novel-batch-download-label {
+  font-family: var(--lnr-font-ui);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.lnr-novel-batch-download-description {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.6875rem;
+  line-height: 1.25;
+}
+
 .lnr-novel-icon-button svg {
   fill: none;
   height: 18px;
