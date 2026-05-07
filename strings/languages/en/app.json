@@ -217,6 +217,8 @@
   "readerSettings.scroll": "Scroll",
   "readerSettings.paged": "Paged",
   "readerSettings.twoPage": "Two-page",
+  "readerSettings.fullPageReader": "Full-page reader",
+  "readerSettings.fullPageReader.description": "Use the whole screen for reading and show the reader controls only from the menu tap area.",
   "readerSettings.keepScreenOn": "Keep screen on",
   "readerSettings.text.title": "Text",
   "readerSettings.text.description": "Control the reader theme, typography, and spacing.",

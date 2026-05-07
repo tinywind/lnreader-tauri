@@ -217,6 +217,8 @@
   "readerSettings.scroll": "스크롤",
   "readerSettings.paged": "페이지",
   "readerSettings.twoPage": "2쪽 나눠보기",
+  "readerSettings.fullPageReader": "풀페이지 리더",
+  "readerSettings.fullPageReader.description": "화면 전체를 읽기에 사용하고 메뉴 터치 영역에서만 리더 조작부를 표시합니다.",
   "readerSettings.keepScreenOn": "화면 켜짐 유지",
   "readerSettings.text.title": "텍스트",
   "readerSettings.text.description": "리더 테마, 글꼴, 간격을 조정합니다.",

@@ -136,6 +136,17 @@ export function ReaderSettingsPanel() {
             }}
           />
         </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("readerSettings.fullPageReader")}
+          description={t("readerSettings.fullPageReader.description")}
+        >
+          <Switch
+            checked={general.fullPageReader}
+            onChange={(event) =>
+              setGeneral({ fullPageReader: event.currentTarget.checked })
+            }
+          />
+        </SettingsFieldRow>
         <SettingsFieldRow label={t("readerSettings.keepScreenOn")}>
           <Switch
             checked={general.keepScreenOn}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Box } from "@mantine/core";
@@ -29,6 +29,7 @@ import { useTranslation, type TranslationKey } from "../i18n";
 import "../styles/reader.css";
 
 const FINISHED_PROGRESS = 100;
+const FULL_PAGE_CHROME_HIDE_DELAY_MS = 5000;
 
 const SAMPLE_CHAPTER_HTML = `
 <h1>Chapter 1 - A long road begins</h1>
@@ -319,12 +320,59 @@ export function ReaderPage() {
   const contentRef = useRef<ReaderContentHandle | null>(null);
   const openedChapterRef = useRef<number | null>(null);
   const openRequestRef = useRef(0);
+  const chromeHideTimerRef = useRef<number | null>(null);
+  const [fullPageChromeVisible, setFullPageChromeVisible] = useState(false);
 
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
+  const fullPageReader = useReaderStore((state) => state.general.fullPageReader);
   const setLastReadChapter = useReaderStore(
     (state) => state.setLastReadChapter,
   );
   const setNovelPageIndex = useReaderStore((state) => state.setNovelPageIndex);
+
+  const clearFullPageChromeTimer = useCallback(() => {
+    if (chromeHideTimerRef.current !== null) {
+      window.clearTimeout(chromeHideTimerRef.current);
+      chromeHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleFullPageChromeHide = useCallback(() => {
+    if (!fullPageReader) return;
+    clearFullPageChromeTimer();
+    chromeHideTimerRef.current = window.setTimeout(() => {
+      setFullPageChromeVisible(false);
+      chromeHideTimerRef.current = null;
+    }, FULL_PAGE_CHROME_HIDE_DELAY_MS);
+  }, [clearFullPageChromeTimer, fullPageReader]);
+
+  const handleFullPageActivity = useCallback(() => {
+    if (fullPageReader && fullPageChromeVisible) {
+      scheduleFullPageChromeHide();
+    }
+  }, [fullPageChromeVisible, fullPageReader, scheduleFullPageChromeHide]);
+
+  const handleToggleFullPageChrome = useCallback(() => {
+    if (!fullPageReader) return;
+    if (fullPageChromeVisible) {
+      clearFullPageChromeTimer();
+      setFullPageChromeVisible(false);
+      return;
+    }
+    setFullPageChromeVisible(true);
+    scheduleFullPageChromeHide();
+  }, [
+    clearFullPageChromeTimer,
+    fullPageChromeVisible,
+    fullPageReader,
+    scheduleFullPageChromeHide,
+  ]);
+
+  useEffect(() => {
+    clearFullPageChromeTimer();
+    setFullPageChromeVisible(false);
+    return clearFullPageChromeTimer;
+  }, [chapterId, clearFullPageChromeTimer, fullPageReader]);
 
   const chapterQuery = useQuery({
     queryKey: chapterDetailKey(chapterId),
@@ -526,6 +574,7 @@ export function ReaderPage() {
       switch (event.key) {
         case "Escape":
           event.preventDefault();
+          handleFullPageActivity();
           handleReaderBack();
           break;
         case "PageDown":
@@ -533,16 +582,19 @@ export function ReaderPage() {
         case " ":
         case "ArrowRight":
           event.preventDefault();
+          handleFullPageActivity();
           contentRef.current?.scrollByPage(1);
           break;
         case "PageUp":
         case "ArrowUp":
         case "ArrowLeft":
           event.preventDefault();
+          handleFullPageActivity();
           contentRef.current?.scrollByPage(-1);
           break;
         case "Home":
           event.preventDefault();
+          handleFullPageActivity();
           contentRef.current?.scrollToStart();
           break;
         default:
@@ -551,7 +603,7 @@ export function ReaderPage() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [handleReaderBack]);
+  }, [handleFullPageActivity, handleReaderBack]);
 
   const chapter = chapterQuery.data;
   const chapters = chapterListQuery.data ?? [];
@@ -567,6 +619,14 @@ export function ReaderPage() {
   const html = chapter?.content ?? SAMPLE_CHAPTER_HTML;
   const progress = chapter?.progress ?? 0;
   const chapterNovelId = chapter?.novelId;
+  const readerStateVisible =
+    chapterId > 0 &&
+    (chapterQuery.isLoading ||
+      Boolean(chapterQuery.error) ||
+      chapterQuery.data === null ||
+      Boolean(chapter && !chapter.isDownloaded));
+  const readerChromeAutoHide = fullPageReader && !readerStateVisible;
+  const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
   const handleProgressChange = useCallback(
     (nextProgress: number) => {
       if (chapterId > 0) {
@@ -623,9 +683,12 @@ export function ReaderPage() {
       <ReaderContent
         key={chapter?.id ?? "sample"}
         ref={contentRef}
-        bottomOverlayOffset={32}
+        bottomOverlayOffset={readerChromeVisible ? 32 : 8}
         html={html}
         initialProgress={progress}
+        onToggleChrome={
+          readerChromeAutoHide ? handleToggleFullPageChrome : undefined
+        }
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
         onBoundaryPage={(direction) => {
@@ -636,7 +699,14 @@ export function ReaderPage() {
     );
 
   return (
-    <Box className="lnr-reader-shell">
+    <Box
+      className="lnr-reader-shell"
+      data-chrome-visible={readerChromeVisible}
+      data-full-page={fullPageReader}
+      onPointerDown={handleFullPageActivity}
+      onPointerMove={handleFullPageActivity}
+      onWheel={handleFullPageActivity}
+    >
       <ReaderTopChrome
         chapter={chapter}
         chapterCount={chapters.length}

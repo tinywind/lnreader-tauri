@@ -352,6 +352,67 @@
   height: 100%;
 }
 
+.lnr-reader-shell[data-full-page="true"] {
+  height: var(--lnr-viewport-height);
+  position: relative;
+}
+
+.lnr-reader-shell[data-full-page="true"] .lnr-reader-body {
+  flex-basis: 100%;
+  height: 100%;
+}
+
+.lnr-reader-shell[data-full-page="true"] .lnr-reader-content-frame {
+  height: 100%;
+  width: 100%;
+}
+
+.lnr-reader-shell[data-full-page="true"] .lnr-reader-topbar {
+  box-shadow: var(--lnr-design-shadow-floating);
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 0;
+  transform: translateY(-100%);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+  z-index: 8;
+}
+
+.lnr-reader-shell[data-full-page="true"] .lnr-reader-bottom-strip {
+  bottom: 0;
+  box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.1);
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  transform: translateY(100%);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+  z-index: 8;
+}
+
+.lnr-reader-shell[data-full-page="true"][data-chrome-visible="true"]
+  .lnr-reader-topbar,
+.lnr-reader-shell[data-full-page="true"][data-chrome-visible="true"]
+  .lnr-reader-bottom-strip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lnr-reader-shell[data-full-page="true"] .lnr-reader-topbar,
+  .lnr-reader-shell[data-full-page="true"] .lnr-reader-bottom-strip {
+    transition-duration: 1ms;
+  }
+}
+
 @media (max-width: 767px) {
   .lnr-reader-topbar {
     gap: 8px;
@@ -390,5 +451,34 @@
 @media (min-width: 1120px) {
   .lnr-reader-chapter-panel {
     display: block;
+  }
+
+  .lnr-reader-shell[data-full-page="true"] .lnr-reader-chapter-panel {
+    bottom: 24px;
+    box-shadow: var(--lnr-design-shadow-floating);
+    display: block;
+    left: 0;
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    top: 36px;
+    transform: translateX(-100%);
+    transition:
+      opacity 180ms ease,
+      transform 180ms ease;
+    z-index: 7;
+  }
+
+  .lnr-reader-shell[data-full-page="true"][data-chrome-visible="true"]
+    .lnr-reader-chapter-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lnr-reader-shell[data-full-page="true"] .lnr-reader-chapter-panel {
+    transition-duration: 1ms;
   }
 }

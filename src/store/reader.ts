@@ -37,6 +37,7 @@ export interface ReaderThemeDefinition {
 }
 
 export interface ReaderGeneralSettings {
+  fullPageReader: boolean;
   keepScreenOn: boolean;
   pageReader: boolean;
   twoPageReader: boolean;
@@ -267,6 +268,7 @@ export const PORTRAIT_TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.portrait;
 export const LANDSCAPE_TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.landscape;
 
 export const READER_GENERAL_DEFAULTS: ReaderGeneralSettings = {
+  fullPageReader: false,
   keepScreenOn: false,
   pageReader: false,
   twoPageReader: false,
