@@ -96,6 +96,33 @@ describe("globalSearch", () => {
     expect(results[0]?.error).toContain("Search timed out");
   });
 
+  it("starts per-plugin timeout only after the queued source task runs", async () => {
+    let started = 0;
+    const manager = makeManager([
+      makePlugin("queued", async () => {
+        started += 1;
+        return [{ name: "Ready", path: "/ready" }];
+      }),
+    ]);
+
+    taskScheduler.pauseSourceQueue();
+    try {
+      const search = globalSearch(manager, "x", { timeoutMs: 5 });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(started).toBe(0);
+
+      taskScheduler.resumeSourceQueue();
+      const results = await search;
+
+      expect(started).toBe(1);
+      expect(results[0]?.novels).toEqual([{ name: "Ready", path: "/ready" }]);
+      expect(results[0]?.error).toBeUndefined();
+    } finally {
+      taskScheduler.resumeSourceQueue();
+    }
+  });
+
   it("invokes onResult once per plugin", async () => {
     const manager = makeManager([
       makePlugin("a", async () => []),

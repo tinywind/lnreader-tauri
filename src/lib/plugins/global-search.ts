@@ -37,10 +37,11 @@ function formatTimeoutSeconds(timeoutMs: number): string {
 }
 
 async function withTimeout<T>(
-  promise: Promise<T>,
+  task: () => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const promise = task();
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
       reject(
@@ -129,7 +130,7 @@ export async function globalSearch(
           title: options.taskTitle?.(plugin) ?? plugin.name,
           subject: { path: term },
           dedupeKey: `source.globalSearch:${plugin.id}:${term}`,
-          run: () => withTimeout(plugin.searchNovels(term, 1), timeoutMs),
+          run: () => withTimeout(() => plugin.searchNovels(term, 1), timeoutMs),
         }).promise;
         result = {
           pluginId: plugin.id,
