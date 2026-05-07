@@ -34,7 +34,7 @@ const REQUIRED_PLUGIN_METHOD_FIELDS = [
   "searchNovels",
 ] as const;
 
-const LOCAL_PLUGIN_LANGUAGE = "local";
+const LOCAL_PLUGIN_LANGUAGE = "multi";
 
 function readRequiredPluginString(
   value: unknown,

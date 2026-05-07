@@ -67,6 +67,7 @@ export const chapterTable = sqliteTable(
       .notNull()
       .default(false),
     content: text("content"),
+    contentBytes: integer("content_bytes").notNull().default(0),
     releaseTime: text("release_time"),
     readAt: integer("read_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }),
@@ -84,11 +85,51 @@ export const chapterTable = sqliteTable(
       t.novelId,
       t.position,
     ),
+    downloadedUpdatedIdx: index("chapter_downloaded_updated_idx").on(
+      t.isDownloaded,
+      t.updatedAt,
+      t.novelId,
+    ),
+    novelDownloadedPositionIdx: index("chapter_novel_downloaded_position_idx")
+      .on(t.novelId, t.isDownloaded, t.position, t.id),
     unreadFoundPositionIdx: index("chapter_unread_found_position_idx").on(
       t.unread,
       t.foundAt,
       t.position,
       t.id,
+    ),
+  }),
+);
+
+// NovelStats: materialized counters used by Library lists. Keeping
+// this separate from novel metadata avoids scanning every chapter on
+// each Library entry render.
+export const novelStatsTable = sqliteTable(
+  "novel_stats",
+  {
+    novelId: integer("novel_id")
+      .primaryKey()
+      .references(() => novelTable.id, { onDelete: "cascade" }),
+    totalChapters: integer("total_chapters").notNull().default(0),
+    chaptersDownloaded: integer("chapters_downloaded").notNull().default(0),
+    chaptersUnread: integer("chapters_unread").notNull().default(0),
+    progressSum: integer("progress_sum").notNull().default(0),
+    readingProgress: integer("reading_progress").notNull().default(0),
+    lastChapterUpdatedAt: integer("last_chapter_updated_at")
+      .notNull()
+      .default(0),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    downloadedIdx: index("novel_stats_downloaded_idx").on(
+      t.chaptersDownloaded,
+    ),
+    unreadIdx: index("novel_stats_unread_idx").on(t.chaptersUnread),
+    totalIdx: index("novel_stats_total_idx").on(t.totalChapters),
+    lastChapterUpdatedIdx: index("novel_stats_last_chapter_updated_idx").on(
+      t.lastChapterUpdatedAt,
     ),
   }),
 );
@@ -189,6 +230,8 @@ export type Novel = typeof novelTable.$inferSelect;
 export type NovelInsert = typeof novelTable.$inferInsert;
 export type Chapter = typeof chapterTable.$inferSelect;
 export type ChapterInsert = typeof chapterTable.$inferInsert;
+export type NovelStats = typeof novelStatsTable.$inferSelect;
+export type NovelStatsInsert = typeof novelStatsTable.$inferInsert;
 export type Category = typeof categoryTable.$inferSelect;
 export type CategoryInsert = typeof categoryTable.$inferInsert;
 export type NovelCategory = typeof novelCategoryTable.$inferSelect;

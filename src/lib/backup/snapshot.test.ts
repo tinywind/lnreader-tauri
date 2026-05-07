@@ -168,6 +168,20 @@ describe("applyBackupSnapshot", () => {
     ]);
   });
 
+  it("restores downloaded chapter byte counts from content", async () => {
+    const manifest = parseBackupManifest(
+      encodeBackupManifest(await gatherForTest()),
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    const chapterInsert = mockExecute.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO chapter"),
+    );
+    expect(chapterInsert?.[1]).toContain(9);
+  });
+
   it("restores only the newest repository as the singleton row", async () => {
     const manifest = parseBackupManifest(
       encodeBackupManifest({

@@ -137,9 +137,9 @@ const INSERT_NOVEL = `
 const INSERT_CHAPTER = `
   INSERT INTO chapter (
     id, novel_id, path, name, chapter_number, position, page,
-    bookmark, unread, progress, is_downloaded, content,
+    bookmark, unread, progress, is_downloaded, content, content_bytes,
     release_time, read_at, created_at, found_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 `;
 
 const INSERT_CATEGORY = `
@@ -195,6 +195,10 @@ function toChapter(row: RawChapterRow): BackupChapter {
     foundAt: row.foundAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function getUtf8ByteLength(value: string | null): number {
+  return value === null ? 0 : new TextEncoder().encode(value).byteLength;
 }
 
 function toCategory(row: RawCategoryRow): BackupCategory {
@@ -314,6 +318,7 @@ export async function applyBackupSnapshot(
       chapter.progress,
       chapter.isDownloaded,
       chapter.content,
+      getUtf8ByteLength(chapter.content),
       chapter.releaseTime,
       chapter.readAt,
       chapter.createdAt,

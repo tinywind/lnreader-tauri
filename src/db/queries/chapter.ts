@@ -13,6 +13,7 @@ export interface ChapterRow {
   progress: number;
   isDownloaded: boolean;
   content: string | null;
+  contentBytes: number;
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number | null;
@@ -20,7 +21,9 @@ export interface ChapterRow {
   updatedAt: number;
 }
 
-const SELECT_FIELDS = `
+export type ChapterListRow = Omit<ChapterRow, "content">;
+
+const CHAPTER_LIST_SELECT_FIELDS = `
   id,
   novel_id       AS novelId,
   path,
@@ -32,7 +35,7 @@ const SELECT_FIELDS = `
   unread,
   progress,
   is_downloaded  AS isDownloaded,
-  content,
+  content_bytes   AS contentBytes,
   release_time   AS releaseTime,
   read_at        AS readAt,
   created_at     AS createdAt,
@@ -40,12 +43,21 @@ const SELECT_FIELDS = `
   updated_at     AS updatedAt
 `;
 
+const CHAPTER_DETAIL_SELECT_FIELDS = `
+  ${CHAPTER_LIST_SELECT_FIELDS},
+  content
+`;
+
+function getUtf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 export async function listChaptersByNovel(
   novelId: number,
-): Promise<ChapterRow[]> {
+): Promise<ChapterListRow[]> {
   const db = await getDb();
-  return db.select<ChapterRow[]>(
-    `SELECT ${SELECT_FIELDS}
+  return db.select<ChapterListRow[]>(
+    `SELECT ${CHAPTER_LIST_SELECT_FIELDS}
      FROM chapter
      WHERE novel_id = $1
      ORDER BY position`,
@@ -58,7 +70,7 @@ export async function getChapterById(
 ): Promise<ChapterRow | null> {
   const db = await getDb();
   const rows = await db.select<ChapterRow[]>(
-    `SELECT ${SELECT_FIELDS}
+    `SELECT ${CHAPTER_DETAIL_SELECT_FIELDS}
      FROM chapter
      WHERE id = $1`,
     [chapterId],
@@ -96,9 +108,9 @@ export async function insertChapter(
   );
 }
 
-export async function upsertChapter(input: InsertChapterInput): Promise<void> {
+export async function upsertChapter(input: InsertChapterInput): Promise<boolean> {
   const db = await getDb();
-  await db.execute(
+  const result = await db.execute(
     `INSERT INTO chapter
        (novel_id, path, name, position, chapter_number, page, release_time, created_at, found_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch(), unixepoch())
@@ -108,7 +120,13 @@ export async function upsertChapter(input: InsertChapterInput): Promise<void> {
        chapter_number = excluded.chapter_number,
        page           = excluded.page,
        release_time   = excluded.release_time,
-       updated_at     = unixepoch()`,
+       updated_at     = unixepoch()
+      WHERE
+        name IS NOT excluded.name
+        OR position IS NOT excluded.position
+        OR chapter_number IS NOT excluded.chapter_number
+        OR page IS NOT excluded.page
+        OR release_time IS NOT excluded.release_time`,
     [
       input.novelId,
       input.path,
@@ -119,6 +137,7 @@ export async function upsertChapter(input: InsertChapterInput): Promise<void> {
       input.releaseTime ?? null,
     ],
   );
+  return result.rowsAffected > 0;
 }
 
 export async function updateChapterProgress(
@@ -218,10 +237,11 @@ export async function saveChapterContent(
     `UPDATE chapter
      SET
        content        = $2,
+       content_bytes  = $3,
        is_downloaded  = 1,
        updated_at     = unixepoch()
      WHERE id = $1`,
-    [chapterId, html],
+    [chapterId, html, getUtf8ByteLength(html)],
   );
 }
 
@@ -244,6 +264,7 @@ export async function clearChapterContent(
     `UPDATE chapter
      SET
        content        = NULL,
+       content_bytes  = 0,
        is_downloaded  = 0,
        updated_at     = unixepoch()
      WHERE id = $1`,
@@ -416,20 +437,20 @@ export async function getAdjacentChapter(
   novelId: number,
   position: number,
   direction: 1 | -1,
-): Promise<ChapterRow | null> {
+): Promise<ChapterListRow | null> {
   const db = await getDb();
   const sql =
     direction === 1
-      ? `SELECT ${SELECT_FIELDS}
+      ? `SELECT ${CHAPTER_LIST_SELECT_FIELDS}
          FROM chapter
          WHERE novel_id = $1 AND position > $2
          ORDER BY position ASC
          LIMIT 1`
-      : `SELECT ${SELECT_FIELDS}
+      : `SELECT ${CHAPTER_LIST_SELECT_FIELDS}
          FROM chapter
          WHERE novel_id = $1 AND position < $2
          ORDER BY position DESC
          LIMIT 1`;
-  const rows = await db.select<ChapterRow[]>(sql, [novelId, position]);
+  const rows = await db.select<ChapterListRow[]>(sql, [novelId, position]);
   return rows[0] ?? null;
 }

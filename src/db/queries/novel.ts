@@ -41,6 +41,20 @@ interface RawLibraryNovel extends Omit<LibraryNovel, "inLibrary" | "isLocal"> {
   isLocal: number;
 }
 
+export interface LibraryNovelRefreshTarget {
+  id: number;
+  pluginId: string;
+  path: string;
+  name: string;
+  cover: string | null;
+  isLocal: boolean;
+}
+
+interface RawLibraryNovelRefreshTarget
+  extends Omit<LibraryNovelRefreshTarget, "isLocal"> {
+  isLocal: number;
+}
+
 const LIBRARY_SORT_SQL: Record<LibrarySortOrder, string> = {
   nameAsc: "n.name COLLATE NOCASE ASC",
   nameDesc: "n.name COLLATE NOCASE DESC",
@@ -85,13 +99,11 @@ export async function listLibraryNovels(
   }
   if (filter.downloadedOnly) {
     conditions.push(
-      `(n.is_local = 1 OR EXISTS (SELECT 1 FROM chapter dc WHERE dc.novel_id = n.id AND dc.is_downloaded = 1))`,
+      "(n.is_local = 1 OR COALESCE(s.chapters_downloaded, 0) > 0)",
     );
   }
   if (filter.unreadOnly) {
-    conditions.push(
-      "EXISTS (SELECT 1 FROM chapter uc WHERE uc.novel_id = n.id AND uc.unread = 1)",
-    );
+    conditions.push("COALESCE(s.chapters_unread, 0) > 0");
   }
 
   const orderBy = LIBRARY_SORT_SQL[filter.sortOrder ?? "dateAddedDesc"];
@@ -106,39 +118,19 @@ export async function listLibraryNovels(
       n.author,
       n.in_library   AS inLibrary,
       n.is_local     AS isLocal,
-      COUNT(c.id) AS totalChapters,
-      COALESCE(SUM(CASE WHEN c.is_downloaded = 1 THEN 1 ELSE 0 END), 0)
-        AS chaptersDownloaded,
-      COALESCE(SUM(CASE WHEN c.unread = 1 THEN 1 ELSE 0 END), 0)
-        AS chaptersUnread,
-      COALESCE(
-        ROUND(AVG(
-          CASE
-            WHEN c.id IS NULL THEN NULL
-            WHEN c.progress >= 100 THEN 100
-            WHEN c.progress < 0 THEN 0
-            WHEN c.progress > 100 THEN 100
-            ELSE c.progress
-          END
-        )),
-        0
-      ) AS readingProgress,
+      COALESCE(s.total_chapters, 0) AS totalChapters,
+      COALESCE(s.chapters_downloaded, 0) AS chaptersDownloaded,
+      COALESCE(s.chapters_unread, 0) AS chaptersUnread,
+      COALESCE(s.reading_progress, 0) AS readingProgress,
       n.last_read_at AS lastReadAt,
-      MAX(COALESCE(c.updated_at, n.updated_at)) AS lastUpdatedAt
+      CASE
+        WHEN COALESCE(s.total_chapters, 0) > 0
+          THEN COALESCE(s.last_chapter_updated_at, n.updated_at)
+        ELSE n.updated_at
+      END AS lastUpdatedAt
     FROM novel n
-    LEFT JOIN chapter c ON c.novel_id = n.id
+    LEFT JOIN novel_stats s ON s.novel_id = n.id
     WHERE ${conditions.join(" AND ")}
-    GROUP BY
-      n.id,
-      n.plugin_id,
-      n.path,
-      n.name,
-      n.cover,
-      n.author,
-      n.in_library,
-      n.is_local,
-      n.last_read_at,
-      n.updated_at
     ORDER BY ${orderBy}, n.name COLLATE NOCASE ASC
   `;
 
@@ -146,6 +138,44 @@ export async function listLibraryNovels(
   return rows.map((row) => ({
     ...row,
     inLibrary: !!row.inLibrary,
+    isLocal: !!row.isLocal,
+  }));
+}
+
+export async function listLibraryNovelRefreshTargets(
+  filter: Pick<LibraryFilter, "categoryId"> = {},
+): Promise<LibraryNovelRefreshTarget[]> {
+  const db = await getDb();
+  const conditions: string[] = ["n.in_library = 1"];
+  const params: unknown[] = [];
+
+  if (filter.categoryId === UNCATEGORIZED_CATEGORY_ID) {
+    conditions.push(
+      "NOT EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id)",
+    );
+  } else if (filter.categoryId != null) {
+    params.push(filter.categoryId);
+    conditions.push(
+      `EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id AND nc.category_id = $${params.length})`,
+    );
+  }
+
+  const rows = await db.select<RawLibraryNovelRefreshTarget[]>(
+    `SELECT
+       n.id,
+       n.plugin_id AS pluginId,
+       n.path,
+       n.name,
+       n.cover,
+       n.is_local AS isLocal
+     FROM novel n
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY n.name COLLATE NOCASE ASC`,
+    params,
+  );
+
+  return rows.map((row) => ({
+    ...row,
     isLocal: !!row.isLocal,
   }));
 }

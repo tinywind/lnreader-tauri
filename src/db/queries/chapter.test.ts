@@ -46,6 +46,7 @@ describe("listChaptersByNovel", () => {
     expect(sql).toContain("FROM chapter");
     expect(sql).toContain("WHERE novel_id = $1");
     expect(sql).toContain("ORDER BY position");
+    expect(sql).not.toMatch(/\bcontent\b/);
     expect(params).toEqual([42]);
   });
 });
@@ -54,6 +55,8 @@ describe("getChapterById", () => {
   it("returns the row when present", async () => {
     mockSelect.mockResolvedValueOnce([{ id: 7, novelId: 1 }]);
     const row = await getChapterById(7);
+    const [sql] = mockSelect.mock.calls[0]!;
+    expect(sql).toMatch(/\bcontent\b/);
     expect(row).toMatchObject({ id: 7, novelId: 1 });
   });
 
@@ -106,9 +109,9 @@ describe("insertChapter", () => {
 
 describe("upsertChapter", () => {
   it("updates source metadata without touching progress fields", async () => {
-    mockExecute.mockResolvedValueOnce(undefined);
+    mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
 
-    await upsertChapter({
+    const changed = await upsertChapter({
       novelId: 7,
       path: "/c/1",
       name: "Chapter One",
@@ -125,6 +128,8 @@ describe("upsertChapter", () => {
     expect(sql).toContain("found_at");
     expect(sql).not.toContain("found_at       = excluded.found_at");
     expect(sql).toContain("updated_at     = unixepoch()");
+    expect(sql).toContain("WHERE");
+    expect(sql).toContain("name IS NOT excluded.name");
     expect(sql).not.toContain("progress");
     expect(sql).not.toContain("is_downloaded");
     expect(params).toEqual([
@@ -136,6 +141,7 @@ describe("upsertChapter", () => {
       "2",
       "2026-05-01",
     ]);
+    expect(changed).toBe(true);
   });
 });
 
@@ -236,9 +242,10 @@ describe("saveChapterContent", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("UPDATE chapter");
     expect(sql).toContain("content");
+    expect(sql).toContain("content_bytes  = $3");
     expect(sql).toContain("is_downloaded  = 1");
     expect(sql).toContain("updated_at     = unixepoch()");
-    expect(params).toEqual([7, "<p>hello</p>"]);
+    expect(params).toEqual([7, "<p>hello</p>", 12]);
   });
 });
 
@@ -265,6 +272,7 @@ describe("clearChapterContent", () => {
     await clearChapterContent(7);
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content        = NULL");
+    expect(sql).toContain("content_bytes  = 0");
     expect(sql).toContain("is_downloaded  = 0");
     expect(params).toEqual([7]);
   });
@@ -277,6 +285,7 @@ describe("getAdjacentChapter", () => {
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("position > $2");
     expect(sql).toContain("ORDER BY position ASC");
+    expect(sql).not.toMatch(/\bcontent\b/);
     expect(params).toEqual([1, 5]);
   });
 
@@ -286,6 +295,7 @@ describe("getAdjacentChapter", () => {
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("position < $2");
     expect(sql).toContain("ORDER BY position DESC");
+    expect(sql).not.toMatch(/\bcontent\b/);
     expect(params).toEqual([1, 5]);
   });
 

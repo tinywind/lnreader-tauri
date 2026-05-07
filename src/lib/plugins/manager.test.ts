@@ -188,7 +188,7 @@ describe("PluginManager.installPluginFromSource", () => {
       "local:demo.js",
     );
 
-    expect(plugin.lang).toBe("local");
+    expect(plugin.lang).toBe("multi");
     expect(plugin.iconUrl).toBe("");
     expect(manager.has("demo")).toBe(true);
   });

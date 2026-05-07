@@ -49,6 +49,7 @@ export async function deleteReadDownloadedChapters(): Promise<MaintenanceResult>
     `UPDATE chapter
      SET
        content = NULL,
+       content_bytes = 0,
        is_downloaded = 0,
        updated_at = unixepoch()
      WHERE unread = 0

@@ -10,6 +10,7 @@ import {
   countNovels,
   getNovelById,
   insertNovel,
+  listLibraryNovelRefreshTargets,
   listLibraryNovels,
   setNovelInLibrary,
 } from "./novel";
@@ -59,6 +60,8 @@ describe("listLibraryNovels", () => {
     expect(db.select).toHaveBeenCalledOnce();
     const [sql, params] = db.select.mock.calls[0]!;
     expect(sql).toContain("FROM novel n");
+    expect(sql).toContain("LEFT JOIN novel_stats s ON s.novel_id = n.id");
+    expect(sql).not.toContain("LEFT JOIN chapter");
     expect(sql).toContain("n.in_library = 1");
     expect(sql).toContain("AS readingProgress");
     expect(sql).toContain("ORDER BY");
@@ -122,16 +125,29 @@ describe("listLibraryNovels", () => {
     expect(params).toEqual([]);
   });
 
-  it("appends an unread chapter EXISTS clause when unreadOnly is enabled", async () => {
+  it("uses materialized unread stats when unreadOnly is enabled", async () => {
     const db = stubDb();
     db.select.mockResolvedValueOnce([]);
 
     await listLibraryNovels({ unreadOnly: true });
 
     const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain("COALESCE(s.chapters_unread, 0) > 0");
+    expect(sql).not.toContain("FROM chapter");
+    expect(params).toEqual([]);
+  });
+
+  it("uses materialized downloaded stats when downloadedOnly is enabled", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovels({ downloadedOnly: true });
+
+    const [sql, params] = db.select.mock.calls[0]!;
     expect(sql).toContain(
-      "EXISTS (SELECT 1 FROM chapter uc WHERE uc.novel_id = n.id AND uc.unread = 1)",
+      "(n.is_local = 1 OR COALESCE(s.chapters_downloaded, 0) > 0)",
     );
+    expect(sql).not.toContain("FROM chapter");
     expect(params).toEqual([]);
   });
 
@@ -155,6 +171,68 @@ describe("listLibraryNovels", () => {
 
     const [sql, params] = db.select.mock.calls[0]!;
     expect(sql).not.toContain("LIKE");
+    expect(params).toEqual([]);
+  });
+});
+
+describe("listLibraryNovelRefreshTargets", () => {
+  it("returns library refresh targets and coerces local flags", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([
+      {
+        id: 2,
+        pluginId: "demo",
+        path: "/novel",
+        name: "Demo",
+        cover: "https://example.test/cover.jpg",
+        isLocal: 0,
+      },
+    ]);
+
+    const rows = await listLibraryNovelRefreshTargets();
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain("FROM novel n");
+    expect(sql).toContain("n.in_library = 1");
+    expect(sql).toContain("ORDER BY n.name COLLATE NOCASE ASC");
+    expect(params).toEqual([]);
+    expect(rows).toEqual([
+      {
+        id: 2,
+        pluginId: "demo",
+        path: "/novel",
+        name: "Demo",
+        cover: "https://example.test/cover.jpg",
+        isLocal: false,
+      },
+    ]);
+  });
+
+  it("can scope refresh targets to a manual category", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovelRefreshTargets({ categoryId: 9 });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain(
+      "EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id AND nc.category_id = $1)",
+    );
+    expect(params).toEqual([9]);
+  });
+
+  it("can scope refresh targets to uncategorized novels", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await listLibraryNovelRefreshTargets({
+      categoryId: UNCATEGORIZED_CATEGORY_ID,
+    });
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain(
+      "NOT EXISTS (SELECT 1 FROM novel_category nc WHERE nc.novel_id = n.id)",
+    );
     expect(params).toEqual([]);
   });
 });
