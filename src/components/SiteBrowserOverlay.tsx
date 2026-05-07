@@ -22,7 +22,7 @@ function reportScraperError(action: string, error: unknown): void {
 }
 
 function debugSiteBrowser(message: string, data?: unknown): void {
-  console.debug(`[site-browser] ${message}`, data);
+  console.info(`[site-browser] ${message}`, data);
 }
 
 function syncSiteBrowserBounds(
@@ -120,6 +120,7 @@ export function SiteBrowserOverlay() {
         void syncSiteBrowserBounds(platform, node, currentUrl).catch((error) =>
           reportScraperError("set bounds", error),
         );
+        queueBoundsResync();
       }
       void (async () => {
         try {
@@ -134,7 +135,7 @@ export function SiteBrowserOverlay() {
           if (inPageControls || nextNode) {
             await syncSiteBrowserBounds(platform, nextNode, currentUrl);
           }
-          if (!inPageControls) queueBoundsResync();
+          queueBoundsResync();
         } catch (error) {
           lastOpenSequence.current = null;
           reportScraperError("navigate", error);
@@ -205,6 +206,7 @@ export function SiteBrowserOverlay() {
         void syncSiteBrowserBounds(platform, null, currentUrl).catch((error) =>
           reportScraperError("set bounds", error),
         );
+        queueBoundsResync();
       };
       sendBounds();
       window.addEventListener("resize", sendBounds);

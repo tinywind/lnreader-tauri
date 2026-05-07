@@ -46,7 +46,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 #[cfg(desktop)]
-use tauri::{LogicalPosition, LogicalSize, Rect, Webview, WebviewBuilder};
+use tauri::{
+    LogicalPosition, LogicalSize, Rect, Webview, WebviewBuilder, WebviewWindow,
+    WebviewWindowBuilder,
+};
 #[cfg(desktop)]
 use tauri::{Emitter, Manager, Url, WebviewUrl};
 #[cfg(desktop)]
@@ -395,6 +398,13 @@ fn scraper_label_from_key(key: &str) -> String {
 }
 
 #[cfg(desktop)]
+fn scraper_browser_label_from_key(key: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    format!("{SCRAPER_LABEL}-browser-{:016x}", hasher.finish())
+}
+
+#[cfg(desktop)]
 fn parse_scraper_key(url: &str, context: &str) -> Result<String, String> {
     let parsed: Url = url
         .parse()
@@ -509,6 +519,112 @@ fn scraper_handle_for_url(
     let webview = scraper_handle_for_key(app, state, &key)?;
     log_windows_scraper_event("handle_for_url complete");
     Ok((key, webview))
+}
+
+#[cfg(desktop)]
+fn linux_main_window_rect(app: &AppHandle) -> Result<(f64, f64, f64, f64), String> {
+    let main_window = app
+        .get_window("main")
+        .ok_or_else(|| "scraper: main window missing".to_string())?;
+    let scale_factor = main_window
+        .scale_factor()
+        .map_err(|err| format!("scraper: read window scale factor: {err}"))?;
+    let position = main_window
+        .inner_position()
+        .or_else(|_| main_window.outer_position())
+        .map_err(|err| format!("scraper: read window position: {err}"))?;
+    let size = main_window
+        .inner_size()
+        .map_err(|err| format!("scraper: read inner window size: {err}"))?;
+    Ok((
+        f64::from(position.x) / scale_factor,
+        f64::from(position.y) / scale_factor,
+        f64::from(size.width) / scale_factor,
+        f64::from(size.height) / scale_factor,
+    ))
+}
+
+#[cfg(desktop)]
+fn linux_site_browser_window_for_url(
+    app: &AppHandle,
+    state: &ScraperState,
+    url: &str,
+) -> Result<(String, WebviewWindow<tauri::Wry>), String> {
+    let key = parse_scraper_key(url, "site browser")?;
+    let label = scraper_browser_label_from_key(&key);
+    if let Some(window) = app.get_webview_window(&label) {
+        return Ok((key, window));
+    }
+
+    let (x, y, width, height) = linux_main_window_rect(app)?;
+    let app_for_navigation = app.clone();
+    let window = WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::App(PathBuf::from(SCRAPER_HOMEPAGE_PATH)),
+    )
+    .title("Norea site browser")
+    .decorations(false)
+    .skip_taskbar(true)
+    .always_on_top(true)
+    .visible(false)
+    .position(x, y)
+    .inner_size(width.max(HIDDEN_SIZE), height.max(HIDDEN_SIZE))
+    .on_navigation(move |url| {
+        if scraper_control_action(url) == Some("close") {
+            let app = app_for_navigation.clone();
+            if let Err(err) = app_for_navigation.run_on_main_thread(move || {
+                if let Err(err) = scraper_hide(app) {
+                    log::error!("[scraper] Linux browser control close failed: {err}");
+                }
+            }) {
+                log::error!("[scraper] failed to schedule Linux browser close: {err}");
+            }
+            return false;
+        }
+        true
+    })
+    .initialization_script(SCRAPER_INIT_SCRIPT)
+    .build()
+    .map_err(|err| format!("scraper: create Linux browser window for {key}: {err}"))?;
+    window
+        .hide()
+        .map_err(|err| format!("scraper: hide Linux browser window after init: {err}"))?;
+    *state
+        .last_navigated
+        .lock()
+        .expect("scraper last_navigated mutex") = None;
+    Ok((key, window))
+}
+
+#[cfg(desktop)]
+fn hide_scraper_surface_for_key(
+    app: &AppHandle,
+    state: &ScraperState,
+    key: &str,
+) -> Result<bool, String> {
+    let mut hidden = false;
+    if let Some(webview) = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .get(key)
+        .cloned()
+        .and_then(|entry| app.get_webview(&entry.label))
+    {
+        hide_scraper_webview(&webview)?;
+        hidden = true;
+    }
+    if cfg!(target_os = "linux") {
+        let label = scraper_browser_label_from_key(key);
+        if let Some(window) = app.get_webview_window(&label) {
+            window
+                .hide()
+                .map_err(|err| format!("scraper: hide Linux browser window: {err}"))?;
+            hidden = true;
+        }
+    }
+    Ok(hidden)
 }
 
 #[cfg(desktop)]
@@ -633,6 +749,59 @@ pub async fn scraper_set_bounds(
             "[scraper:windows] scraper_set_bounds start url={url} x={x} y={y} width={width} height={height}"
         );
     }
+    if cfg!(target_os = "linux") {
+        log::info!(
+            "[scraper:linux] scraper_set_bounds start url={url} x={x} y={y} width={width} height={height}"
+        );
+        let (key, browser) = linux_site_browser_window_for_url(&app, &state, &url)?;
+        let previous_key = state
+            .visible_key
+            .lock()
+            .expect("scraper visible_key mutex")
+            .clone();
+        if previous_key.as_deref() != Some(key.as_str()) {
+            if let Some(previous_key) = previous_key {
+                hide_scraper_surface_for_key(&app, &state, &previous_key)?;
+            }
+        }
+        let (x, y, width, height) = linux_main_window_rect(&app)?;
+        log::info!(
+            "[scraper:linux] browser window bounds x={x} y={y} width={width} height={height}"
+        );
+        browser
+            .set_position(LogicalPosition::new(x, y))
+            .map_err(|err| format!("scraper: position Linux browser window: {err}"))?;
+        browser
+            .set_size(LogicalSize::new(width.max(HIDDEN_SIZE), height.max(HIDDEN_SIZE)))
+            .map_err(|err| format!("scraper: size Linux browser window: {err}"))?;
+        browser
+            .show()
+            .map_err(|err| format!("scraper: show Linux browser window: {err}"))?;
+        browser
+            .set_focus()
+            .map_err(|err| format!("scraper: focus Linux browser window: {err}"))?;
+        let already_navigated = state
+            .last_navigated
+            .lock()
+            .expect("scraper last_navigated mutex")
+            .as_deref()
+            == Some(url.as_str());
+        if !already_navigated {
+            let parsed: Url = url
+                .parse()
+                .map_err(|err| format!("scraper_set_bounds: invalid url '{url}': {err}"))?;
+            browser
+                .navigate(parsed)
+                .map_err(|err| format!("scraper: navigate Linux browser window: {err}"))?;
+            *state
+                .last_navigated
+                .lock()
+                .expect("scraper last_navigated mutex") = Some(url.clone());
+        }
+        *state.visible_key.lock().expect("scraper visible_key mutex") = Some(key);
+        log::info!("[scraper:linux] scraper_set_bounds complete url={url}");
+        return Ok(());
+    }
     let (key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
     let previous_key = state
         .visible_key
@@ -696,16 +865,7 @@ pub fn scraper_hide(app: AppHandle) -> Result<(), String> {
         log_windows_scraper_event("scraper_hide skipped: no visible key");
         return Ok(());
     };
-    if let Some(webview) = state
-        .webviews
-        .lock()
-        .expect("scraper webviews mutex")
-        .get(&visible_key)
-        .cloned()
-        .and_then(|entry| app.get_webview(&entry.label))
-    {
-        hide_scraper_webview(&webview)?;
-    } else {
+    if !hide_scraper_surface_for_key(&app, &state, &visible_key)? {
         log_windows_scraper_event("scraper_hide skipped: visible webview missing");
     }
     emit_site_browser_hidden(&app);
@@ -823,6 +983,19 @@ pub async fn scraper_navigate(
     if cfg!(target_os = "windows") {
         log::info!("[scraper:windows] scraper_navigate start url={url}");
     }
+    if cfg!(target_os = "linux") {
+        let already_navigated = state
+            .last_navigated
+            .lock()
+            .expect("scraper last_navigated mutex")
+            .as_deref()
+            == Some(url.as_str());
+        if already_navigated {
+            log::info!("[scraper:linux] scraper_navigate skipped: already at url={url}");
+            return Ok(());
+        }
+        log::info!("[scraper:linux] scraper_navigate start url={url}");
+    }
     let (_key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
     let parsed: Url = url
         .parse()
@@ -835,6 +1008,9 @@ pub async fn scraper_navigate(
         .lock()
         .expect("scraper last_navigated mutex") = Some(url);
     log_windows_scraper_event("scraper_navigate complete");
+    if cfg!(target_os = "linux") {
+        log::info!("[scraper:linux] scraper_navigate complete");
+    }
     Ok(())
 }
 
