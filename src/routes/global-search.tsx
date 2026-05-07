@@ -711,7 +711,19 @@ export function PluginSearchSection({
   );
   const finishGlobalSearch = useBrowseStore((s) => s.finishGlobalSearch);
   const clearGlobalSearch = useBrowseStore((s) => s.clearGlobalSearch);
-  const [search, setSearch] = useState(query);
+  const [suppressedRouteQuery, setSuppressedRouteQuery] = useState<
+    string | null
+  >(null);
+  const routeQuery = query.trim();
+  const restoreSuppressed =
+    suppressedRouteQuery !== null &&
+    (routeQuery === "" || routeQuery === suppressedRouteQuery);
+  const restoredQuery = restoreSuppressed
+    ? ""
+    : routeQuery === ""
+      ? globalSearchState.query
+      : query;
+  const [search, setSearch] = useState(restoredQuery);
   const [openingKey, setOpeningKey] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [scopeMode, setScopeMode] = useState<ScopeMode>("all");
@@ -721,7 +733,7 @@ export function PluginSearchSection({
   const [sortMode, setSortMode] = useState<ResultSortMode>("pinned");
   const [retryPluginIds, setRetryPluginIds] = useState<string[]>([]);
   const [activePluginIds, setActivePluginIds] = useState<string[]>([]);
-  const trimmedQuery = query.trim();
+  const trimmedQuery = restoredQuery.trim();
   const installedPlugins = useMemo(
     () => sortPluginsByName(installedPluginSnapshot ?? pluginManager.list()),
     [installedPluginSnapshot],
@@ -854,8 +866,18 @@ export function PluginSearchSection({
   );
 
   useEffect(() => {
-    setSearch(query);
-  }, [query]);
+    setSearch(restoredQuery);
+  }, [restoredQuery]);
+
+  useEffect(() => {
+    if (
+      suppressedRouteQuery !== null &&
+      routeQuery !== "" &&
+      routeQuery !== suppressedRouteQuery
+    ) {
+      setSuppressedRouteQuery(null);
+    }
+  }, [routeQuery, suppressedRouteQuery]);
 
   useEffect(() => {
     const pluginIds = new Set(installedPlugins.map((plugin) => plugin.id));
@@ -1026,7 +1048,14 @@ export function PluginSearchSection({
   );
 
   const submitSearch = () => {
-    onSearch(search.trim());
+    const nextQuery = search.trim();
+    if (nextQuery === "") {
+      setSuppressedRouteQuery(routeQuery || globalSearchState.query || null);
+      clearGlobalSearch();
+    } else {
+      setSuppressedRouteQuery(null);
+    }
+    onSearch(nextQuery);
   };
 
   const openPluginResults = useCallback(
