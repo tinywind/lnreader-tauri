@@ -15,7 +15,7 @@ import {
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { PageFrame, StateView } from "../components/AppFrame";
-import { DownloadedGlyph } from "../components/ActionGlyphs";
+import { DownloadGlyph, DownloadedGlyph } from "../components/ActionGlyphs";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
 import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
 import { IconButton } from "../components/IconButton";
@@ -32,15 +32,23 @@ import {
   updateCategory,
   type LibraryCategory,
 } from "../db/queries/category";
+import { listChaptersByNovel, type ChapterRow } from "../db/queries/chapter";
 import {
+  getNovelById,
   listLibraryNovels,
   type LibraryNovel,
 } from "../db/queries/novel";
+import {
+  enqueueChapterDownload,
+  getChapterDownloadStatus,
+  type ChapterDownloadStatus,
+} from "../lib/tasks/chapter-download";
 import {
   useLibraryStore,
   type LibraryDisplayMode,
   type LibrarySortOrder,
 } from "../store/library";
+import { useReaderStore } from "../store/reader";
 import {
   formatRelativeTimeForLocale,
   useTranslation,
@@ -82,6 +90,94 @@ interface AssignCategoryInput {
 
 type TranslateFn = ReturnType<typeof useTranslation>["t"];
 
+type LibraryBatchDownloadMode = "all" | "unread" | "next10" | "next30";
+
+interface LibraryBatchDownloadOptionConfig {
+  descriptionKey: TranslationKey;
+  labelKey: TranslationKey;
+  mode: LibraryBatchDownloadMode;
+}
+
+interface LibraryBatchDownloadPickerProps {
+  onDownload: (mode: LibraryBatchDownloadMode) => void;
+  preparing: boolean;
+  t: TranslateFn;
+}
+
+const LIBRARY_BATCH_DOWNLOAD_OPTIONS: LibraryBatchDownloadOptionConfig[] = [
+  {
+    descriptionKey: "library.batchDownload.allDescription",
+    labelKey: "novel.batchDownload.all",
+    mode: "all",
+  },
+  {
+    descriptionKey: "library.batchDownload.unreadDescription",
+    labelKey: "novel.batchDownload.unread",
+    mode: "unread",
+  },
+  {
+    descriptionKey: "library.batchDownload.next10Description",
+    labelKey: "novel.batchDownload.next10",
+    mode: "next10",
+  },
+  {
+    descriptionKey: "library.batchDownload.next30Description",
+    labelKey: "novel.batchDownload.next30",
+    mode: "next30",
+  },
+];
+
+function isActiveChapterDownloadStatus(
+  status: ChapterDownloadStatus | undefined,
+): boolean {
+  return (
+    status?.kind === "queued" ||
+    status?.kind === "running" ||
+    status?.kind === "done"
+  );
+}
+
+function canQueueChapterDownload(chapter: ChapterRow): boolean {
+  return (
+    !chapter.isDownloaded &&
+    !isActiveChapterDownloadStatus(getChapterDownloadStatus(chapter.id))
+  );
+}
+
+function getLibraryBatchDownloadTargets(
+  mode: LibraryBatchDownloadMode,
+  chapters: readonly ChapterRow[],
+  lastReadChapterId: number | undefined,
+): ChapterRow[] {
+  const readingOrder = [...chapters].sort(
+    (left, right) => left.position - right.position,
+  );
+  const candidates = readingOrder.filter(canQueueChapterDownload);
+
+  switch (mode) {
+    case "all":
+      return candidates;
+    case "unread":
+      return candidates.filter((chapter) => chapter.unread);
+    case "next10":
+    case "next30": {
+      const currentIndex =
+        lastReadChapterId === undefined
+          ? -1
+          : readingOrder.findIndex(
+              (chapter) => chapter.id === lastReadChapterId,
+            );
+      if (currentIndex < 0) return [];
+
+      const limit = mode === "next10" ? 10 : 30;
+      return readingOrder
+        .slice(currentIndex + 1)
+        .filter(canQueueChapterDownload)
+        .slice(0, limit);
+    }
+  }
+}
+
 export function LibraryPage({ active = true }: LibraryPageProps) {
   const { locale, t } = useTranslation();
   const navigate = useNavigate();
@@ -106,6 +202,9 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
   );
   const unreadOnlyMode = useLibraryStore((s) => s.unreadOnlyMode);
   const setUnreadOnlyMode = useLibraryStore((s) => s.setUnreadOnlyMode);
+  const lastReadChapterByNovel = useReaderStore(
+    (state) => state.lastReadChapterByNovel,
+  );
   const [debouncedSearch] = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
 
   const novels = useQuery({
@@ -192,6 +291,46 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     onSuccess: () => {
       invalidateLibraryCategories();
       setSelectedIds(new Set());
+    },
+  });
+
+  const batchDownloadMutation = useMutation({
+    mutationFn: async (mode: LibraryBatchDownloadMode) => {
+      const scheduledDownloads: Promise<void>[] = [];
+
+      for (const novelId of selectedIds) {
+        const novel = await getNovelById(novelId);
+        if (!novel || novel.isLocal) continue;
+
+        const chapters = await listChaptersByNovel(novel.id);
+        const targetChapters = getLibraryBatchDownloadTargets(
+          mode,
+          chapters,
+          lastReadChapterByNovel[novel.id],
+        );
+
+        for (const chapter of targetChapters) {
+          scheduledDownloads.push(
+            enqueueChapterDownload({
+              id: chapter.id,
+              pluginId: novel.pluginId,
+              chapterPath: chapter.path,
+              chapterName: chapter.name,
+              novelId: novel.id,
+              novelName: novel.name,
+              title: t("tasks.task.downloadChapter", { name: chapter.name }),
+            }).promise.catch(() => undefined),
+          );
+        }
+      }
+
+      if (scheduledDownloads.length > 0) {
+        void Promise.all(scheduledDownloads).then(() => {
+          void queryClient.invalidateQueries({ queryKey: ["novel"] });
+        });
+      }
+
+      return scheduledDownloads.length;
     },
   });
 
@@ -429,6 +568,11 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               <div className="lnr-library-selection-strip">
                 <span>{t("library.selectedCount", { count: selectedIds.size })}</span>
                 <div className="lnr-library-selection-actions">
+                  <LibraryBatchDownloadPicker
+                    onDownload={(mode) => batchDownloadMutation.mutate(mode)}
+                    preparing={batchDownloadMutation.isPending}
+                    t={t}
+                  />
                   <SelectionCategoryPicker
                     assigning={assignCategoryMutation.isPending}
                     categories={assignableCategories}
@@ -846,6 +990,59 @@ interface SelectionCategoryPickerProps {
   categories: readonly LibraryCategory[];
   onAssign: (categoryId: number) => void;
   t: TranslateFn;
+}
+
+function LibraryBatchDownloadPicker({
+  onDownload,
+  preparing,
+  t,
+}: LibraryBatchDownloadPickerProps) {
+  const [opened, setOpened] = useState(false);
+
+  return (
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-end"
+      shadow="md"
+      width={280}
+    >
+      <Popover.Target>
+        <IconButton
+          className="lnr-library-selection-icon"
+          disabled={preparing}
+          label={t("library.batchDownload.open")}
+          onClick={() => setOpened((current) => !current)}
+          size="sm"
+          title={t("library.batchDownload.open")}
+        >
+          <DownloadGlyph />
+        </IconButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-library-batch-download-popover">
+        <div className="lnr-library-batch-download-list">
+          {LIBRARY_BATCH_DOWNLOAD_OPTIONS.map((option) => (
+            <UnstyledButton
+              className="lnr-library-batch-download-option"
+              disabled={preparing}
+              key={option.mode}
+              onClick={() => {
+                onDownload(option.mode);
+                setOpened(false);
+              }}
+            >
+              <span className="lnr-library-batch-download-label">
+                {t(option.labelKey)}
+              </span>
+              <span className="lnr-library-batch-download-description">
+                {t(option.descriptionKey)}
+              </span>
+            </UnstyledButton>
+          ))}
+        </div>
+      </Popover.Dropdown>
+    </Popover>
+  );
 }
 
 function SelectionCategoryPicker({

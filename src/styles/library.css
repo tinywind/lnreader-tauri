@@ -531,6 +531,51 @@
   padding: 6px;
 }
 
+.lnr-library-batch-download-popover {
+  border-color: var(--lnr-design-rule-strong);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.lnr-library-batch-download-list {
+  display: grid;
+  gap: 2px;
+}
+
+.lnr-library-batch-download-option {
+  border-radius: 4px;
+  color: var(--lnr-design-ink-muted);
+  display: grid;
+  font-family: var(--lnr-font-ui);
+  gap: 3px;
+  line-height: 1.25;
+  padding: 8px;
+  text-align: left;
+}
+
+.lnr-library-batch-download-option:hover:not(:disabled) {
+  background: var(--lnr-design-panel);
+  color: var(--lnr-design-ink);
+}
+
+.lnr-library-batch-download-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.lnr-library-batch-download-label {
+  color: var(--lnr-design-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.lnr-library-batch-download-description {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
 .lnr-library-category-assign-list {
   display: grid;
   gap: 2px;
