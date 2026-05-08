@@ -1,4 +1,5 @@
 mod backup;
+mod chapter_media;
 mod plugin_host;
 mod scraper;
 mod tray;
@@ -83,6 +84,12 @@ pub fn run() {
             sql: include_str!("../../drizzle/0008_careful_sunset_bain.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "track downloaded chapter content type",
+            sql: include_str!("../../drizzle/0009_mushy_skrulls.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -99,6 +106,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backup::backup_pack,
             backup::backup_unpack,
+            chapter_media::chapter_media_clear,
+            chapter_media::chapter_media_clear_all,
+            chapter_media::chapter_media_path,
+            chapter_media::chapter_media_prune,
+            chapter_media::chapter_media_store,
             plugin_host::plugin_zip_list,
             plugin_host::plugin_zip_read_file,
             scraper::webview_fetch,

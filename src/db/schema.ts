@@ -67,6 +67,7 @@ export const chapterTable = sqliteTable(
       .notNull()
       .default(false),
     content: text("content"),
+    contentType: text("content_type").notNull().default("html"),
     contentBytes: integer("content_bytes").notNull().default(0),
     releaseTime: text("release_time"),
     readAt: integer("read_at", { mode: "timestamp" }),

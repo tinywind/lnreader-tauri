@@ -11,6 +11,12 @@
  * preserving upstream backup zip compatibility.
  */
 
+import {
+  DEFAULT_CHAPTER_CONTENT_TYPE,
+  normalizeChapterContentType,
+  type ChapterContentType,
+} from "../chapter-content";
+
 export const BACKUP_FORMAT_VERSION = 1 as const;
 
 export interface BackupNovel {
@@ -44,7 +50,8 @@ export interface BackupChapter {
   unread: boolean;
   progress: number;
   isDownloaded: boolean;
-  /** Inline HTML body. Null when the chapter wasn't downloaded yet. */
+  contentType?: ChapterContentType;
+  /** Inline reader body. Null when the chapter wasn't downloaded yet. */
   content: string | null;
   releaseTime: string | null;
   readAt: number | null;
@@ -170,6 +177,10 @@ function isChapter(value: unknown): value is BackupChapter {
     typeof value.unread === "boolean" &&
     typeof value.progress === "number" &&
     typeof value.isDownloaded === "boolean" &&
+    (value.contentType === undefined ||
+      value.contentType === "html" ||
+      value.contentType === "text" ||
+      value.contentType === "pdf") &&
     typeof value.updatedAt === "number" &&
     (value.createdAt === undefined || typeof value.createdAt === "number") &&
     (value.foundAt === undefined || typeof value.foundAt === "number")
@@ -188,6 +199,9 @@ function normalizeChapter(chapter: BackupChapter): BackupChapter {
   const createdAt = chapter.createdAt ?? chapter.updatedAt;
   return {
     ...chapter,
+    contentType: normalizeChapterContentType(
+      chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+    ),
     createdAt,
     foundAt: chapter.foundAt ?? Math.max(createdAt, chapter.updatedAt),
   };

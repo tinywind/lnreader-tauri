@@ -7,6 +7,7 @@ import {
   ReaderContent,
   type ReaderContentHandle,
 } from "../components/ReaderContent";
+import { PdfReaderContent } from "../components/PdfReaderContent";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
 import { ReaderSettingsPanel } from "../components/ReaderSettingsPanel";
@@ -21,6 +22,7 @@ import {
   updateChapterProgress,
 } from "../db/queries/chapter";
 import { getNovelById } from "../db/queries/novel";
+import { resolveLocalChapterMedia } from "../lib/chapter-media";
 import { enqueueChapterDownload } from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { readerRoute } from "../router";
@@ -462,7 +464,14 @@ export function ReaderPage() {
 
   const chapterQuery = useQuery({
     queryKey: chapterDetailKey(chapterId),
-    queryFn: () => getChapterById(chapterId),
+    queryFn: async () => {
+      const chapter = await getChapterById(chapterId);
+      if (!chapter?.content) return chapter;
+      return {
+        ...chapter,
+        content: await resolveLocalChapterMedia(chapter.content),
+      };
+    },
     enabled: chapterId > 0,
   });
   const currentNovelId = chapterQuery.data?.novelId ?? 0;
@@ -593,6 +602,7 @@ export function ReaderPage() {
           pluginId: novel.pluginId,
           chapterPath: targetChapter.path,
           chapterName: targetChapter.name,
+          contentType: targetChapter.contentType,
           novelId: novel.id,
           novelName: novel.name,
           priority: "interactive",
@@ -726,7 +736,8 @@ export function ReaderPage() {
     chapterIndex >= 0 && chapterIndex < chapters.length - 1
       ? chapters[chapterIndex + 1]
       : undefined;
-  const html = chapter?.content ?? SAMPLE_CHAPTER_HTML;
+  const content = chapter?.content ?? SAMPLE_CHAPTER_HTML;
+  const isPdfChapter = chapter?.contentType === "pdf";
   const progress = chapter?.progress ?? 0;
   const chapterNovelId = chapter?.novelId;
   const readerStateVisible =
@@ -808,12 +819,29 @@ export function ReaderPage() {
           message={t("reader.notDownloadedMessage")}
         />
       </Box>
+    ) : isPdfChapter ? (
+      <PdfReaderContent
+        key={chapter?.id ?? "sample"}
+        ref={contentRef}
+        bottomOverlayOffset={readerOverlayBottom}
+        dataUrl={content}
+        initialProgress={progress}
+        onToggleChrome={
+          readerChromeAutoHide ? handleToggleFullPageChrome : undefined
+        }
+        onProgressChange={handleProgressChange}
+        onPageIndexChange={handlePageIndexChange}
+        onBoundaryPage={(direction) => {
+          void openAdjacent(direction);
+        }}
+        viewportHeight="100%"
+      />
     ) : (
       <ReaderContent
         key={chapter?.id ?? "sample"}
         ref={contentRef}
         bottomOverlayOffset={readerOverlayBottom}
-        html={html}
+        html={content}
         initialProgress={progress}
         onToggleChrome={
           readerChromeAutoHide ? handleToggleFullPageChrome : undefined

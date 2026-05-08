@@ -57,6 +57,7 @@ export interface TaskSubject {
   batchTitle?: string;
   chapterId?: number;
   chapterName?: string;
+  contentType?: string;
   categoryId?: number | null;
   novelId?: number;
   novelName?: string;

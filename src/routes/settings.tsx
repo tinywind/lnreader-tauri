@@ -40,6 +40,7 @@ import {
   exportBackupToFile,
   importBackupFromFile,
 } from "../lib/backup/io";
+import { clearAllChapterMedia } from "../lib/chapter-media";
 import { pluginManager } from "../lib/plugins/manager";
 import { isAndroidRuntime } from "../lib/tauri-runtime";
 import { enqueueMainTask } from "../lib/tasks/main-tasks";
@@ -115,6 +116,14 @@ const LOG_LEVEL_LABEL_KEYS: Record<LogLevel, TranslationKey> = {
 };
 
 const SETTINGS_TOAST_AUTO_CLOSE_MS = 5000;
+
+async function clearDownloadedChapterContentAndMedia(): Promise<{
+  rowsAffected: number;
+}> {
+  const result = await clearDownloadedChapterContent();
+  await clearAllChapterMedia();
+  return result;
+}
 
 type SettingsToastColor = "blue" | "green" | "red";
 
@@ -528,7 +537,7 @@ function DataSettingsSection({
                 t("settings.data.downloadedContent.button"),
                 t("settings.data.downloadedContent.busy"),
                 t("settings.data.downloadedContent.warning"),
-                clearDownloadedChapterContent,
+                clearDownloadedChapterContentAndMedia,
                 (rowsAffected) =>
                   t("settings.data.downloadedContent.done", {
                     count: rowsAffected,

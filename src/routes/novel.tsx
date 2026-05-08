@@ -45,6 +45,7 @@ import {
   setNovelInLibrary,
   type NovelDetailRecord,
 } from "../db/queries/novel";
+import { clearChapterMedia } from "../lib/chapter-media";
 import {
   enqueueChapterDownload,
   enqueueChapterDownloadBatch,
@@ -299,6 +300,7 @@ function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
 
 interface ChapterListItemProps {
   chapter: ChapterListRow;
+  canDeleteDownload: boolean;
   isCurrent: boolean;
   status: ChapterDownloadStatus | undefined;
   deleteBusy: boolean;
@@ -310,6 +312,7 @@ interface ChapterListItemProps {
 
 function ChapterListItem({
   chapter,
+  canDeleteDownload,
   isCurrent,
   status,
   deleteBusy,
@@ -453,7 +456,7 @@ function ChapterListItem({
             <DownloadGlyph />
           </IconButton>
         ) : null}
-        {chapter.isDownloaded ? (
+        {chapter.isDownloaded && canDeleteDownload ? (
           <IconButton
             className="lnr-novel-icon-button"
             data-busy={deleteBusy ? "true" : undefined}
@@ -475,6 +478,7 @@ function ChapterListItem({
 
 interface VirtualChapterListProps {
   chapters: ChapterListRow[];
+  canDeleteDownloads: boolean;
   deleteBusyChapterId: number | undefined;
   deletePending: boolean;
   lastReadChapterId: number | undefined;
@@ -487,6 +491,7 @@ interface VirtualChapterListProps {
 
 function VirtualChapterList({
   chapters,
+  canDeleteDownloads,
   deleteBusyChapterId,
   deletePending,
   lastReadChapterId,
@@ -573,6 +578,7 @@ function VirtualChapterList({
             <ChapterListItem
               key={chapter.id}
               chapter={chapter}
+              canDeleteDownload={canDeleteDownloads}
               isCurrent={chapter.id === lastReadChapterId}
               status={statuses.get(chapter.id)}
               deleteBusy={deletePending && deleteBusyChapterId === chapter.id}
@@ -1099,7 +1105,10 @@ export function NovelDetailPage() {
   });
 
   const clearDownload = useMutation({
-    mutationFn: clearChapterContent,
+    mutationFn: async (chapterId: number) => {
+      await clearChapterContent(chapterId);
+      await clearChapterMedia(chapterId);
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: chaptersKey(id),
@@ -1201,6 +1210,7 @@ export function NovelDetailPage() {
         pluginId: novel.pluginId,
         chapterPath: chapter.path,
         chapterName: chapter.name,
+        contentType: chapter.contentType,
         novelId: novel.id,
         novelName: novel.name,
         priority: "interactive",
@@ -1240,6 +1250,7 @@ export function NovelDetailPage() {
       pluginId: novel.pluginId,
       chapterPath: chapter.path,
       chapterName: chapter.name,
+      contentType: chapter.contentType,
       novelId: novel.id,
       novelName: novel.name,
       priority: "user",
@@ -1257,6 +1268,7 @@ export function NovelDetailPage() {
         pluginId: novel.pluginId,
         chapterPath: chapter.path,
         chapterName: chapter.name,
+        contentType: chapter.contentType,
         novelId: novel.id,
         novelName: novel.name,
         title: t("tasks.task.downloadChapter", { name: chapter.name }),
@@ -1364,6 +1376,7 @@ export function NovelDetailPage() {
         ) : (
           <VirtualChapterList
             chapters={chapters}
+            canDeleteDownloads={!novel.isLocal}
             deleteBusyChapterId={clearDownload.variables}
             deletePending={clearDownload.isPending}
             lastReadChapterId={lastReadChapterId}
@@ -1373,7 +1386,10 @@ export function NovelDetailPage() {
               void openChapter(chapter);
             }}
             onDownload={downloadChapter}
-            onDeleteDownload={(chapterId) => clearDownload.mutate(chapterId)}
+            onDeleteDownload={(chapterId) => {
+              if (novel.isLocal) return;
+              clearDownload.mutate(chapterId);
+            }}
           />
         )}
       </ConsolePanel>

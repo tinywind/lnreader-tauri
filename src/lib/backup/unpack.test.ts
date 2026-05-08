@@ -90,7 +90,7 @@ describe("unpackBackup", () => {
     invokeMock.mockReset();
   });
 
-  it("re-injects chapter HTML into matching chapter rows", async () => {
+  it("re-injects chapter content into matching chapter rows", async () => {
     const lean = makeLeanManifest();
     invokeMock.mockResolvedValue({
       manifest_json: encodeBackupManifest(lean),

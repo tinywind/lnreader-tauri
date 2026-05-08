@@ -11,7 +11,7 @@ interface ChapterContent {
 }
 
 /**
- * Pack a {@link BackupManifest} plus its chapter HTML bodies into a
+ * Pack a {@link BackupManifest} plus its chapter reader bodies into a
  * zip on disk via the Rust `backup_pack` IPC command.
  *
  * The on-disk layout splits `chapter.content` out of `manifest.json`.
