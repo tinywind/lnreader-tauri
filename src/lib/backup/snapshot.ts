@@ -3,17 +3,19 @@ import {
   BACKUP_FORMAT_VERSION,
   type BackupCategory,
   type BackupChapter,
+  type BackupInstalledPlugin,
   type BackupManifest,
   type BackupNovel,
   type BackupNovelCategory,
   type BackupRepository,
+  type BackupSetting,
 } from "./format";
 
 /**
  * SQLite stores booleans as 0/1 integers; raw `select` returns those
  * verbatim. The format-side type guards (`isNovel`, `isChapter`, ...)
  * require strict booleans, so gather coerces every flag column on
- * the way out. Insert callers pass real `boolean` values back in —
+ * the way out. Insert callers pass real `boolean` values back in;
  * `tauri-plugin-sql` handles the 0/1 round trip.
  */
 
@@ -62,6 +64,29 @@ interface RawCategoryRow {
   sort: number;
   isSystem: number;
 }
+
+interface RawInstalledPluginRow {
+  id: string;
+  name: string;
+  site: string;
+  lang: string;
+  version: string;
+  iconUrl: string;
+  sourceUrl: string;
+  sourceCode: string;
+  installedAt: number;
+}
+
+const BACKUP_SETTING_KEYS = new Set([
+  "app-appearance-settings",
+  "app-notification-settings",
+  "browse-plugin-settings",
+  "http-user-agent",
+  "norea-library-settings",
+  "reader-settings",
+]);
+
+const BACKUP_SETTING_PREFIXES = ["plugin:", "source-filters:"];
 
 const SELECT_NOVELS = `
   SELECT
@@ -126,6 +151,21 @@ const SELECT_REPOSITORIES = `
   ORDER BY id
 `;
 
+const SELECT_INSTALLED_PLUGINS = `
+  SELECT
+    id,
+    name,
+    site,
+    lang,
+    version,
+    icon_url    AS iconUrl,
+    source_url  AS sourceUrl,
+    source_code AS sourceCode,
+    installed_at AS installedAt
+  FROM installed_plugin
+  ORDER BY installed_at DESC
+`;
+
 const INSERT_NOVEL = `
   INSERT INTO novel (
     id, plugin_id, path, name, cover, summary, author, artist,
@@ -153,6 +193,62 @@ const INSERT_NOVEL_CATEGORY = `
 const INSERT_REPOSITORY = `
   INSERT INTO repository (id, url, name, added_at) VALUES ($1, $2, $3, $4)
 `;
+
+const INSERT_INSTALLED_PLUGIN = `
+  INSERT INTO installed_plugin (
+    id, name, site, lang, version, icon_url, source_url, source_code, installed_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`;
+
+function browserLocalStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isBackupSettingKey(key: string): boolean {
+  return (
+    BACKUP_SETTING_KEYS.has(key) ||
+    BACKUP_SETTING_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
+function readBackupSettings(): BackupSetting[] {
+  const storage = browserLocalStorage();
+  if (!storage) return [];
+
+  const settings: BackupSetting[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key || !isBackupSettingKey(key)) continue;
+    const value = storage.getItem(key);
+    if (value !== null) settings.push({ key, value });
+  }
+  return settings.sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function clearBackupSettings(storage: Storage): void {
+  const keys: string[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key && isBackupSettingKey(key)) keys.push(key);
+  }
+  for (const key of keys) storage.removeItem(key);
+}
+
+function writeBackupSettings(settings: readonly BackupSetting[]): void {
+  const storage = browserLocalStorage();
+  if (!storage) return;
+
+  clearBackupSettings(storage);
+  for (const setting of settings) {
+    if (isBackupSettingKey(setting.key)) {
+      storage.setItem(setting.key, setting.value);
+    }
+  }
+}
 
 function toNovel(row: RawNovelRow): BackupNovel {
   return {
@@ -210,6 +306,20 @@ function toCategory(row: RawCategoryRow): BackupCategory {
   };
 }
 
+function toInstalledPlugin(row: RawInstalledPluginRow): BackupInstalledPlugin {
+  return {
+    id: row.id,
+    name: row.name,
+    site: row.site,
+    lang: row.lang,
+    version: row.version,
+    iconUrl: row.iconUrl,
+    sourceUrl: row.sourceUrl,
+    sourceCode: row.sourceCode,
+    installedAt: row.installedAt,
+  };
+}
+
 function selectBackupRepository(
   repositories: readonly BackupRepository[],
 ): BackupRepository | null {
@@ -221,19 +331,27 @@ function selectBackupRepository(
 }
 
 /**
- * Read every row from the 5 backup-relevant tables and return a
+ * Read every row from the backup-relevant tables and return a
  * fresh `BackupManifest` ready to feed `encodeBackupManifest` and
  * `packBackup`.
  */
 export async function gatherBackupSnapshot(): Promise<BackupManifest> {
   const db = await getDb();
-  const [novels, chapters, categories, novelCategories, repositories] =
+  const [
+    novels,
+    chapters,
+    categories,
+    novelCategories,
+    repositories,
+    installedPlugins,
+  ] =
     await Promise.all([
       db.select<RawNovelRow[]>(SELECT_NOVELS),
       db.select<RawChapterRow[]>(SELECT_CHAPTERS),
       db.select<RawCategoryRow[]>(SELECT_CATEGORIES),
       db.select<BackupNovelCategory[]>(SELECT_NOVEL_CATEGORIES),
       db.select<BackupRepository[]>(SELECT_REPOSITORIES),
+      db.select<RawInstalledPluginRow[]>(SELECT_INSTALLED_PLUGINS),
     ]);
 
   return {
@@ -244,93 +362,124 @@ export async function gatherBackupSnapshot(): Promise<BackupManifest> {
     categories: categories.map(toCategory),
     novelCategories,
     repositories,
+    installedPlugins: installedPlugins.map(toInstalledPlugin),
+    settings: readBackupSettings(),
   };
 }
 
 /**
- * Replace every row in the 5 backup-relevant tables with the values
- * carried by `manifest`. Destructive — call only after the user has
- * confirmed restore. The current implementation keeps it simple:
- * delete all + insert all, one statement at a time. A future version
- * may wrap it in a transaction.
+ * Replace every row in the backup-relevant tables with the values
+ * carried by `manifest`. Destructive; call only after the user has
+ * confirmed restore. Database changes are wrapped in a transaction,
+ * then browser settings are replaced after the commit succeeds.
  */
 export async function applyBackupSnapshot(
   manifest: BackupManifest,
 ): Promise<void> {
   const db = await getDb();
 
-  // Wipe in dependent-first order so foreign-key cascades stay quiet.
-  await db.execute("DELETE FROM novel_category");
-  await db.execute("DELETE FROM chapter");
-  await db.execute("DELETE FROM novel");
-  await db.execute("DELETE FROM category");
-  await db.execute("DELETE FROM repository");
+  await db.execute("BEGIN IMMEDIATE");
+  try {
+    // Wipe in dependent-first order so foreign-key cascades stay quiet.
+    await db.execute("DELETE FROM novel_category");
+    await db.execute("DELETE FROM chapter");
+    await db.execute("DELETE FROM novel_stats");
+    await db.execute("DELETE FROM novel");
+    await db.execute("DELETE FROM category");
+    await db.execute("DELETE FROM repository");
+    if (manifest.installedPlugins !== undefined) {
+      await db.execute("DELETE FROM installed_plugin");
+    }
 
-  // Insert in parent-first order so foreign keys resolve.
-  for (const cat of manifest.categories) {
-    await db.execute(INSERT_CATEGORY, [
-      cat.id,
-      cat.name,
-      cat.sort,
-      cat.isSystem,
-    ]);
+    // Insert in parent-first order so foreign keys resolve.
+    for (const cat of manifest.categories) {
+      await db.execute(INSERT_CATEGORY, [
+        cat.id,
+        cat.name,
+        cat.sort,
+        cat.isSystem,
+      ]);
+    }
+    const repo = selectBackupRepository(manifest.repositories);
+    if (repo) {
+      await db.execute(INSERT_REPOSITORY, [
+        1,
+        repo.url,
+        repo.name,
+        repo.addedAt,
+      ]);
+    }
+    if (manifest.installedPlugins !== undefined) {
+      for (const plugin of manifest.installedPlugins) {
+        await db.execute(INSERT_INSTALLED_PLUGIN, [
+          plugin.id,
+          plugin.name,
+          plugin.site,
+          plugin.lang,
+          plugin.version,
+          plugin.iconUrl,
+          plugin.sourceUrl,
+          plugin.sourceCode,
+          plugin.installedAt,
+        ]);
+      }
+    }
+    for (const novel of manifest.novels) {
+      await db.execute(INSERT_NOVEL, [
+        novel.id,
+        novel.pluginId,
+        novel.path,
+        novel.name,
+        novel.cover,
+        novel.summary,
+        novel.author,
+        novel.artist,
+        novel.status,
+        novel.genres,
+        novel.inLibrary,
+        novel.isLocal,
+        novel.createdAt,
+        novel.updatedAt,
+        novel.libraryAddedAt,
+        novel.lastReadAt,
+      ]);
+    }
+    for (const chapter of manifest.chapters) {
+      await db.execute(INSERT_CHAPTER, [
+        chapter.id,
+        chapter.novelId,
+        chapter.path,
+        chapter.name,
+        chapter.chapterNumber,
+        chapter.position,
+        chapter.page,
+        chapter.bookmark,
+        chapter.unread,
+        chapter.progress,
+        chapter.isDownloaded,
+        chapter.content,
+        getUtf8ByteLength(chapter.content),
+        chapter.releaseTime,
+        chapter.readAt,
+        chapter.createdAt,
+        chapter.foundAt,
+        chapter.updatedAt,
+      ]);
+    }
+    for (const link of manifest.novelCategories) {
+      await db.execute(INSERT_NOVEL_CATEGORY, [
+        link.id,
+        link.novelId,
+        link.categoryId,
+      ]);
+    }
+    await db.execute("COMMIT");
+  } catch (error) {
+    await db.execute("ROLLBACK").catch(() => undefined);
+    throw error;
   }
-  const repo = selectBackupRepository(manifest.repositories);
-  if (repo) {
-    await db.execute(INSERT_REPOSITORY, [
-      1,
-      repo.url,
-      repo.name,
-      repo.addedAt,
-    ]);
-  }
-  for (const novel of manifest.novels) {
-    await db.execute(INSERT_NOVEL, [
-      novel.id,
-      novel.pluginId,
-      novel.path,
-      novel.name,
-      novel.cover,
-      novel.summary,
-      novel.author,
-      novel.artist,
-      novel.status,
-      novel.genres,
-      novel.inLibrary,
-      novel.isLocal,
-      novel.createdAt,
-      novel.updatedAt,
-      novel.libraryAddedAt,
-      novel.lastReadAt,
-    ]);
-  }
-  for (const chapter of manifest.chapters) {
-    await db.execute(INSERT_CHAPTER, [
-      chapter.id,
-      chapter.novelId,
-      chapter.path,
-      chapter.name,
-      chapter.chapterNumber,
-      chapter.position,
-      chapter.page,
-      chapter.bookmark,
-      chapter.unread,
-      chapter.progress,
-      chapter.isDownloaded,
-      chapter.content,
-      getUtf8ByteLength(chapter.content),
-      chapter.releaseTime,
-      chapter.readAt,
-      chapter.createdAt,
-      chapter.foundAt,
-      chapter.updatedAt,
-    ]);
-  }
-  for (const link of manifest.novelCategories) {
-    await db.execute(INSERT_NOVEL_CATEGORY, [
-      link.id,
-      link.novelId,
-      link.categoryId,
-    ]);
+
+  if (manifest.settings !== undefined) {
+    writeBackupSettings(manifest.settings);
   }
 }

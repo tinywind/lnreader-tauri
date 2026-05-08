@@ -77,6 +77,20 @@ function makeManifest(): BackupManifest {
     categories: [{ id: 1, name: "Default", sort: 0, isSystem: true }],
     novelCategories: [{ id: 1, novelId: 1, categoryId: 1 }],
     repositories: [],
+    installedPlugins: [
+      {
+        id: "demo",
+        name: "Demo",
+        site: "https://example.test",
+        lang: "en",
+        version: "1.0.0",
+        iconUrl: "https://example.test/icon.png",
+        sourceUrl: "https://example.test/index.js",
+        sourceCode: "module.exports.default = {};",
+        installedAt: 1_700_000_000,
+      },
+    ],
+    settings: [{ key: "reader-settings", value: "{\"state\":{}}" }],
   };
 }
 

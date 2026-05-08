@@ -14,8 +14,8 @@ interface ChapterContent {
  * Pack a {@link BackupManifest} plus its chapter HTML bodies into a
  * zip on disk via the Rust `backup_pack` IPC command.
  *
- * The on-disk layout splits `chapter.content` out of `manifest.json`
- * — each non-null body becomes a `chapters/<id>.html` entry — so the
+ * The on-disk layout splits `chapter.content` out of `manifest.json`.
+ * Each non-null body becomes a `chapters/<id>.html` entry, so the
  * JSON envelope stays small and the archive is human-inspectable.
  * {@link unpackBackup} reverses the split.
  */

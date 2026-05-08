@@ -14,13 +14,13 @@ function isoDate(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** `norea-backup-YYYY-MM-DD.zip` — what the save dialog pre-fills. */
+/** `norea-backup-YYYY-MM-DD.zip` is what the save dialog pre-fills. */
 export function defaultBackupFilename(now: Date = new Date()): string {
   return `norea-backup-${isoDate(now)}.zip`;
 }
 
 /**
- * Run the full export flow: file picker → DB snapshot → zip pack.
+ * Run the full export flow: file picker, DB snapshot, then zip pack.
  *
  * Resolves with the chosen path, or `null` if the user dismissed the
  * dialog. Errors thrown by `gatherBackupSnapshot` / `packBackup`
@@ -38,9 +38,9 @@ export async function exportBackupToFile(): Promise<string | null> {
 }
 
 /**
- * Run the full import flow: file picker → zip unpack → DB apply.
+ * Run the full import flow: file picker, zip unpack, then DB apply.
  *
- * Destructive — replaces every row in the 5 backup tables. The
+ * Destructive; replaces the backup-managed database rows. The
  * caller is expected to confirm intent before invoking this.
  *
  * Resolves with the chosen path, or `null` if the user dismissed

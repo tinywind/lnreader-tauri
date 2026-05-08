@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../db/client", () => ({
   getDb: vi.fn(),
@@ -15,6 +15,10 @@ import { applyBackupSnapshot, gatherBackupSnapshot } from "./snapshot";
 const mockedGetDb = vi.mocked(getDb);
 let mockSelect: ReturnType<typeof vi.fn>;
 let mockExecute: ReturnType<typeof vi.fn>;
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "localStorage",
+);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -25,6 +29,47 @@ beforeEach(() => {
     execute: mockExecute,
   } as never);
 });
+
+afterEach(() => {
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(
+      globalThis,
+      "localStorage",
+      originalLocalStorageDescriptor,
+    );
+  } else {
+    delete (globalThis as { localStorage?: Storage }).localStorage;
+  }
+});
+
+function installLocalStorage(initial: Record<string, string>): Storage {
+  const values = new Map(Object.entries(initial));
+  const storage = {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    key(index: number) {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value);
+    },
+  } as Storage;
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  return storage;
+}
 
 const RAW_NOVEL = {
   id: 1,
@@ -73,6 +118,17 @@ const REPOSITORY = {
   name: "Example",
   addedAt: 1_700_000_000,
 };
+const INSTALLED_PLUGIN = {
+  id: "demo",
+  name: "Demo",
+  site: "https://example.test",
+  lang: "en",
+  version: "1.0.0",
+  iconUrl: "https://example.test/icon.png",
+  sourceUrl: "https://example.test/index.js",
+  sourceCode: "module.exports.default = {};",
+  installedAt: 1_700_000_000,
+};
 
 function primeSelect(): void {
   mockSelect
@@ -80,7 +136,8 @@ function primeSelect(): void {
     .mockResolvedValueOnce([RAW_CHAPTER])
     .mockResolvedValueOnce([RAW_CATEGORY])
     .mockResolvedValueOnce([NOVEL_CATEGORY])
-    .mockResolvedValueOnce([REPOSITORY]);
+    .mockResolvedValueOnce([REPOSITORY])
+    .mockResolvedValueOnce([INSTALLED_PLUGIN]);
 }
 
 describe("gatherBackupSnapshot", () => {
@@ -102,12 +159,13 @@ describe("gatherBackupSnapshot", () => {
     await gatherBackupSnapshot();
 
     const sqls = mockSelect.mock.calls.map((call) => call[0] as string);
-    expect(sqls).toHaveLength(5);
+    expect(sqls).toHaveLength(6);
     expect(sqls.some((s) => /FROM novel\b\s*$/m.test(s))).toBe(true);
     expect(sqls.some((s) => /FROM chapter\b/m.test(s))).toBe(true);
     expect(sqls.some((s) => /FROM category\b/m.test(s))).toBe(true);
     expect(sqls.some((s) => /FROM novel_category\b/m.test(s))).toBe(true);
     expect(sqls.some((s) => /FROM repository\b/m.test(s))).toBe(true);
+    expect(sqls.some((s) => /FROM installed_plugin\b/m.test(s))).toBe(true);
   });
 
   it("survives round-trip through encode + parse", async () => {
@@ -115,6 +173,27 @@ describe("gatherBackupSnapshot", () => {
     const manifest = await gatherBackupSnapshot();
     const restored = parseBackupManifest(encodeBackupManifest(manifest));
     expect(restored).toEqual(manifest);
+  });
+
+  it("includes app and plugin settings from localStorage", async () => {
+    installLocalStorage({
+      "app-appearance-settings": "{\"state\":{\"themeMode\":\"dark\"}}",
+      "plugin:demo:token": "secret",
+      "source-filters:demo": "{\"filters\":{}}",
+      unrelated: "skip",
+    });
+    primeSelect();
+
+    const manifest = await gatherBackupSnapshot();
+
+    expect(manifest.settings).toEqual([
+      {
+        key: "app-appearance-settings",
+        value: "{\"state\":{\"themeMode\":\"dark\"}}",
+      },
+      { key: "plugin:demo:token", value: "secret" },
+      { key: "source-filters:demo", value: "{\"filters\":{}}" },
+    ]);
   });
 });
 
@@ -124,7 +203,7 @@ describe("applyBackupSnapshot", () => {
     return gatherBackupSnapshot();
   }
 
-  it("deletes all 5 tables in dependent-first order", async () => {
+  it("deletes backup tables in dependent-first order", async () => {
     const manifest = parseBackupManifest(
       encodeBackupManifest(await gatherForTest()),
     );
@@ -138,13 +217,29 @@ describe("applyBackupSnapshot", () => {
     expect(deletes).toEqual([
       "DELETE FROM novel_category",
       "DELETE FROM chapter",
+      "DELETE FROM novel_stats",
       "DELETE FROM novel",
       "DELETE FROM category",
       "DELETE FROM repository",
+      "DELETE FROM installed_plugin",
     ]);
   });
 
-  it("inserts in parent-first order (category, repository, novel, chapter, link)", async () => {
+  it("wraps database restore in a transaction", async () => {
+    const manifest = parseBackupManifest(
+      encodeBackupManifest(await gatherForTest()),
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    const sqls = mockExecute.mock.calls.map((call) => call[0] as string);
+    expect(sqls[0]).toBe("BEGIN IMMEDIATE");
+    expect(sqls.at(-1)).toBe("COMMIT");
+    expect(sqls).not.toContain("ROLLBACK");
+  });
+
+  it("inserts in parent-first order", async () => {
     const manifest = parseBackupManifest(
       encodeBackupManifest(await gatherForTest()),
     );
@@ -162,10 +257,90 @@ describe("applyBackupSnapshot", () => {
     expect(inserts).toEqual([
       "category",
       "repository",
+      "installed_plugin",
       "novel",
       "chapter",
       "novel_category",
     ]);
+  });
+
+  it("restores installed plugin source rows", async () => {
+    const manifest = parseBackupManifest(
+      encodeBackupManifest(await gatherForTest()),
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    const pluginInsert = mockExecute.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO installed_plugin"),
+    );
+    expect(pluginInsert?.[1]).toEqual([
+      "demo",
+      "Demo",
+      "https://example.test",
+      "en",
+      "1.0.0",
+      "https://example.test/icon.png",
+      "https://example.test/index.js",
+      "module.exports.default = {};",
+      1_700_000_000,
+    ]);
+  });
+
+  it("restores backed up settings without touching unrelated localStorage", async () => {
+    const storage = installLocalStorage({
+      "app-appearance-settings": "old",
+      "plugin:demo:token": "old-token",
+      unrelated: "keep",
+    });
+    const manifest = parseBackupManifest(
+      encodeBackupManifest({
+        ...(await gatherForTest()),
+        settings: [
+          { key: "app-appearance-settings", value: "new" },
+          { key: "plugin:demo:token", value: "new-token" },
+        ],
+      }),
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    expect(storage.getItem("app-appearance-settings")).toBe("new");
+    expect(storage.getItem("plugin:demo:token")).toBe("new-token");
+    expect(storage.getItem("unrelated")).toBe("keep");
+  });
+
+  it("rolls back and leaves settings unchanged when database restore fails", async () => {
+    const storage = installLocalStorage({
+      "app-appearance-settings": "old",
+      unrelated: "keep",
+    });
+    const manifest = parseBackupManifest(
+      encodeBackupManifest({
+        ...(await gatherForTest()),
+        settings: [{ key: "app-appearance-settings", value: "new" }],
+      }),
+    );
+    const failure = new Error("restore failed");
+
+    mockExecute.mockReset();
+    mockExecute.mockImplementation((sql: string) => {
+      if (sql.includes("INSERT INTO novel (")) {
+        return Promise.reject(failure);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await expect(applyBackupSnapshot(manifest)).rejects.toThrow(failure);
+
+    const sqls = mockExecute.mock.calls.map((call) => call[0] as string);
+    expect(sqls[0]).toBe("BEGIN IMMEDIATE");
+    expect(sqls).toContain("ROLLBACK");
+    expect(sqls).not.toContain("COMMIT");
+    expect(storage.getItem("app-appearance-settings")).toBe("old");
+    expect(storage.getItem("unrelated")).toBe("keep");
   });
 
   it("restores downloaded chapter byte counts from content", async () => {

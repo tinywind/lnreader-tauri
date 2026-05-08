@@ -253,6 +253,12 @@ export class PluginManager {
     return load;
   }
 
+  async reloadInstalledFromDb(): Promise<void> {
+    this.installedLoadPromise = null;
+    this.installed.clear();
+    await this.loadInstalledFromDb();
+  }
+
   private async loadInstalledFromDbOnce(): Promise<void> {
     const rows = await listInstalledPlugins();
     for (const row of rows) {
@@ -294,7 +300,7 @@ export class PluginManager {
       clearPluginInputValues(id);
       void deleteInstalledPlugin(id).catch((error: unknown) => {
         // eslint-disable-next-line no-console
-        console.warn(
+        console.error(
           `[PluginManager] failed to delete '${id}' from DB:`,
           error,
         );

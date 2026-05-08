@@ -73,6 +73,23 @@ export interface BackupRepository {
   addedAt: number;
 }
 
+export interface BackupInstalledPlugin {
+  id: string;
+  name: string;
+  site: string;
+  lang: string;
+  version: string;
+  iconUrl: string;
+  sourceUrl: string;
+  sourceCode: string;
+  installedAt: number;
+}
+
+export interface BackupSetting {
+  key: string;
+  value: string;
+}
+
 export interface BackupManifest {
   version: typeof BACKUP_FORMAT_VERSION;
   /** Unix-epoch seconds when the backup was created. */
@@ -83,6 +100,8 @@ export interface BackupManifest {
   novelCategories: BackupNovelCategory[];
   /** The app stores at most one configured plugin repository. */
   repositories: BackupRepository[];
+  installedPlugins?: BackupInstalledPlugin[];
+  settings?: BackupSetting[];
 }
 
 export class BackupFormatError extends Error {
@@ -110,6 +129,15 @@ function asArray<T>(
     }
   }
   return value;
+}
+
+function asOptionalArray<T>(
+  value: unknown,
+  field: string,
+  guard: (item: unknown) => item is T,
+): T[] | undefined {
+  if (value === undefined) return undefined;
+  return asArray(value, field, guard);
 }
 
 function isNovel(value: unknown): value is BackupNovel {
@@ -152,6 +180,7 @@ function normalizeNovel(novel: BackupNovel): BackupNovel {
   return {
     ...novel,
     libraryAddedAt: novel.libraryAddedAt ?? null,
+    lastReadAt: novel.lastReadAt ?? null,
   };
 }
 
@@ -190,6 +219,26 @@ function isRepository(value: unknown): value is BackupRepository {
     typeof value.url === "string" &&
     typeof value.addedAt === "number"
   );
+}
+
+function isInstalledPlugin(value: unknown): value is BackupInstalledPlugin {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.site === "string" &&
+    typeof value.lang === "string" &&
+    typeof value.version === "string" &&
+    typeof value.iconUrl === "string" &&
+    typeof value.sourceUrl === "string" &&
+    typeof value.sourceCode === "string" &&
+    typeof value.installedAt === "number"
+  );
+}
+
+function isSetting(value: unknown): value is BackupSetting {
+  if (!isObject(value)) return false;
+  return typeof value.key === "string" && typeof value.value === "string";
 }
 
 export function encodeBackupManifest(manifest: BackupManifest): string {
@@ -239,5 +288,11 @@ export function parseBackupManifest(json: string): BackupManifest {
       "repositories",
       isRepository,
     ),
+    installedPlugins: asOptionalArray(
+      parsed.installedPlugins,
+      "installedPlugins",
+      isInstalledPlugin,
+    ),
+    settings: asOptionalArray(parsed.settings, "settings", isSetting),
   };
 }

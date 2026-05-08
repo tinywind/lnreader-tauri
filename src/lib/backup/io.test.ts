@@ -4,46 +4,74 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   save: vi.fn(),
 }));
-vi.mock("./snapshot", () => ({
-  gatherBackupSnapshot: vi.fn(),
-  applyBackupSnapshot: vi.fn(),
-}));
+
 vi.mock("./pack", () => ({
   packBackup: vi.fn(),
 }));
+
+vi.mock("./snapshot", () => ({
+  applyBackupSnapshot: vi.fn(),
+  gatherBackupSnapshot: vi.fn(),
+}));
+
 vi.mock("./unpack", () => ({
   unpackBackup: vi.fn(),
 }));
 
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
+  BACKUP_FORMAT_VERSION,
+  type BackupManifest,
+} from "./format";
+import {
   defaultBackupFilename,
   exportBackupToFile,
   importBackupFromFile,
 } from "./io";
 import { packBackup } from "./pack";
-import { applyBackupSnapshot, gatherBackupSnapshot } from "./snapshot";
+import {
+  applyBackupSnapshot,
+  gatherBackupSnapshot,
+} from "./snapshot";
 import { unpackBackup } from "./unpack";
 
-const saveMock = vi.mocked(save);
 const openMock = vi.mocked(open);
-const gatherMock = vi.mocked(gatherBackupSnapshot);
-const applyMock = vi.mocked(applyBackupSnapshot);
-const packMock = vi.mocked(packBackup);
-const unpackMock = vi.mocked(unpackBackup);
+const saveMock = vi.mocked(save);
+const packBackupMock = vi.mocked(packBackup);
+const applyBackupSnapshotMock = vi.mocked(applyBackupSnapshot);
+const gatherBackupSnapshotMock = vi.mocked(gatherBackupSnapshot);
+const unpackBackupMock = vi.mocked(unpackBackup);
 
-const SYNTHETIC_MANIFEST = {
-  version: 1 as const,
-  exportedAt: 1_700_000_000,
-  novels: [],
-  chapters: [],
-  categories: [],
-  novelCategories: [],
-  repositories: [],
-};
+function makeManifest(): BackupManifest {
+  return {
+    version: BACKUP_FORMAT_VERSION,
+    exportedAt: 1_700_000_000,
+    novels: [],
+    chapters: [],
+    categories: [],
+    novelCategories: [],
+    repositories: [],
+    installedPlugins: [
+      {
+        id: "demo",
+        name: "Demo",
+        site: "https://example.test",
+        lang: "en",
+        version: "1.0.0",
+        iconUrl: "https://example.test/icon.png",
+        sourceUrl: "https://example.test/index.js",
+        sourceCode: "module.exports.default = {};",
+        installedAt: 1_700_000_000,
+      },
+    ],
+    settings: [{ key: "reader-settings", value: "{\"state\":{}}" }],
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  packBackupMock.mockResolvedValue(undefined);
+  applyBackupSnapshotMock.mockResolvedValue(undefined);
 });
 
 describe("defaultBackupFilename", () => {
@@ -53,60 +81,71 @@ describe("defaultBackupFilename", () => {
   });
 });
 
-describe("exportBackupToFile", () => {
-  it("packs the gathered snapshot to the chosen path", async () => {
-    saveMock.mockResolvedValue("C:\\out.zip");
-    gatherMock.mockResolvedValue(SYNTHETIC_MANIFEST);
+describe("backup import/export flow", () => {
+  it("exports a gathered snapshot to the selected zip path", async () => {
+    const manifest = makeManifest();
+    saveMock.mockResolvedValue("C:\\backup.zip");
+    gatherBackupSnapshotMock.mockResolvedValue(manifest);
 
-    const result = await exportBackupToFile();
+    const path = await exportBackupToFile();
 
-    expect(result).toBe("C:\\out.zip");
-    expect(gatherMock).toHaveBeenCalledTimes(1);
-    expect(packMock).toHaveBeenCalledWith(SYNTHETIC_MANIFEST, "C:\\out.zip");
+    expect(path).toBe("C:\\backup.zip");
+    expect(saveMock).toHaveBeenCalledWith({
+      defaultPath: expect.stringMatching(
+        /^norea-backup-\d{4}-\d{2}-\d{2}\.zip$/,
+      ),
+      filters: [{ name: "Norea Backup", extensions: ["zip"] }],
+    });
+    expect(gatherBackupSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(packBackupMock).toHaveBeenCalledWith(manifest, "C:\\backup.zip");
   });
 
-  it("returns null and skips packing when the dialog is dismissed", async () => {
+  it("skips export work when the save dialog is cancelled", async () => {
     saveMock.mockResolvedValue(null);
 
-    const result = await exportBackupToFile();
+    const path = await exportBackupToFile();
 
-    expect(result).toBeNull();
-    expect(gatherMock).not.toHaveBeenCalled();
-    expect(packMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("importBackupFromFile", () => {
-  it("unpacks then applies the chosen file", async () => {
-    openMock.mockResolvedValue("C:\\in.zip");
-    unpackMock.mockResolvedValue(SYNTHETIC_MANIFEST);
-
-    const result = await importBackupFromFile();
-
-    expect(result).toBe("C:\\in.zip");
-    expect(unpackMock).toHaveBeenCalledWith("C:\\in.zip");
-    expect(applyMock).toHaveBeenCalledWith(SYNTHETIC_MANIFEST);
+    expect(path).toBeNull();
+    expect(gatherBackupSnapshotMock).not.toHaveBeenCalled();
+    expect(packBackupMock).not.toHaveBeenCalled();
   });
 
-  it("returns null when the user cancels", async () => {
+  it("imports the selected zip path into the backup snapshot", async () => {
+    const manifest = makeManifest();
+    openMock.mockResolvedValue("C:\\backup.zip");
+    unpackBackupMock.mockResolvedValue(manifest);
+
+    const path = await importBackupFromFile();
+
+    expect(path).toBe("C:\\backup.zip");
+    expect(openMock).toHaveBeenCalledWith({
+      multiple: false,
+      filters: [{ name: "Norea Backup", extensions: ["zip"] }],
+    });
+    expect(unpackBackupMock).toHaveBeenCalledWith("C:\\backup.zip");
+    expect(applyBackupSnapshotMock).toHaveBeenCalledWith(manifest);
+  });
+
+  it("skips import work when the open dialog is cancelled", async () => {
     openMock.mockResolvedValue(null);
 
-    const result = await importBackupFromFile();
+    const path = await importBackupFromFile();
 
-    expect(result).toBeNull();
-    expect(unpackMock).not.toHaveBeenCalled();
-    expect(applyMock).not.toHaveBeenCalled();
+    expect(path).toBeNull();
+    expect(unpackBackupMock).not.toHaveBeenCalled();
+    expect(applyBackupSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it("returns null when an unexpected array result narrows out", async () => {
+  it("skips import work when an unexpected array result narrows out", async () => {
     openMock.mockResolvedValue([
       "C:\\unexpected1.zip",
       "C:\\unexpected2.zip",
     ] as never);
 
-    const result = await importBackupFromFile();
+    const path = await importBackupFromFile();
 
-    expect(result).toBeNull();
-    expect(unpackMock).not.toHaveBeenCalled();
+    expect(path).toBeNull();
+    expect(unpackBackupMock).not.toHaveBeenCalled();
+    expect(applyBackupSnapshotMock).not.toHaveBeenCalled();
   });
 });

@@ -61,6 +61,25 @@ const VALID_MANIFEST: BackupManifest = {
       addedAt: 1_700_000_000,
     },
   ],
+  installedPlugins: [
+    {
+      id: "demo",
+      name: "Demo",
+      site: "https://example.test",
+      lang: "en",
+      version: "1.0.0",
+      iconUrl: "https://example.test/icon.png",
+      sourceUrl: "https://example.test/index.js",
+      sourceCode: "module.exports.default = {};",
+      installedAt: 1_700_000_000,
+    },
+  ],
+  settings: [
+    {
+      key: "reader-settings",
+      value: JSON.stringify({ state: { general: {} }, version: 0 }),
+    },
+  ],
 };
 
 describe("encodeBackupManifest + parseBackupManifest", () => {
@@ -88,6 +107,8 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     const novels = legacy.novels as Array<Record<string, unknown>>;
     const chapters = legacy.chapters as Array<Record<string, unknown>>;
     delete novels[0]!.libraryAddedAt;
+    delete legacy.installedPlugins;
+    delete legacy.settings;
     delete chapters[0]!.createdAt;
     delete chapters[0]!.foundAt;
 
@@ -100,6 +121,8 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     expect(parsed.chapters[0]?.foundAt).toBe(
       VALID_MANIFEST.chapters[0]?.updatedAt,
     );
+    expect(parsed.installedPlugins).toBeUndefined();
+    expect(parsed.settings).toBeUndefined();
   });
 });
 
