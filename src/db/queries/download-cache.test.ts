@@ -35,6 +35,7 @@ describe("listDownloadCacheNovels", () => {
 
     const [sql] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("SUM(c.content_bytes)");
+    expect(sql).toContain("n.is_local = 0");
     expect(sql).not.toContain("length(CAST");
     expect(sql).not.toContain("COALESCE(c.content");
   });
@@ -48,6 +49,8 @@ describe("listDownloadCacheChapters", () => {
 
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("content_bytes AS contentBytes");
+    expect(sql).toContain("JOIN novel n ON n.id = c.novel_id");
+    expect(sql).toContain("n.is_local = 0");
     expect(sql).not.toContain("length(CAST");
     expect(params).toEqual([7]);
   });
@@ -63,6 +66,7 @@ describe("deleteDownloadCacheChapter", () => {
     expect(sql).toContain("content       = NULL");
     expect(sql).toContain("content_bytes = 0");
     expect(sql).toContain("is_downloaded = 0");
+    expect(sql).toContain("n.is_local = 0");
     expect(params).toEqual([7]);
     expect(result.rowsAffected).toBe(1);
   });
@@ -77,6 +81,7 @@ describe("deleteDownloadCacheNovel", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content_bytes = 0");
     expect(sql).toContain("novel_id = $1");
+    expect(sql).toContain("n.is_local = 0");
     expect(params).toEqual([7]);
   });
 });
@@ -90,5 +95,6 @@ describe("deleteAllDownloadCache", () => {
     const [sql] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content_bytes = 0");
     expect(sql).toContain("WHERE is_downloaded = 1");
+    expect(sql).toContain("n.is_local = 0");
   });
 });

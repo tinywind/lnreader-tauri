@@ -8,11 +8,13 @@ import { getDb } from "../client";
 import { UNCATEGORIZED_CATEGORY_ID } from "./category";
 import {
   countNovels,
+  findLocalNovelByPath,
   getNovelById,
   insertNovel,
   listLibraryNovelRefreshTargets,
   listLibraryNovels,
   setNovelInLibrary,
+  upsertLocalNovel,
 } from "./novel";
 
 const mockedGetDb = vi.mocked(getDb);
@@ -335,6 +337,156 @@ describe("getNovelById", () => {
     expect(result?.isLocal).toBe(false);
     expect(result?.id).toBe(5);
     expect(result?.name).toBe("Hero");
+  });
+});
+
+describe("findLocalNovelByPath", () => {
+  it("finds only local novels by path and coerces booleans", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([
+      {
+        id: 9,
+        pluginId: "local",
+        path: "/books/sample.epub",
+        name: "Local Book",
+        cover: null,
+        summary: null,
+        author: "Writer",
+        artist: null,
+        status: null,
+        genres: null,
+        inLibrary: 1,
+        isLocal: 1,
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_001,
+        libraryAddedAt: 1_700_000_000,
+        lastReadAt: null,
+      },
+    ]);
+
+    const result = await findLocalNovelByPath("/books/sample.epub");
+
+    const [sql, params] = db.select.mock.calls[0]!;
+    expect(sql).toContain("plugin_id = $1");
+    expect(sql).toContain("path = $2");
+    expect(sql).toContain("is_local = 1");
+    expect(params).toEqual(["local", "/books/sample.epub"]);
+    expect(result?.inLibrary).toBe(true);
+    expect(result?.isLocal).toBe(true);
+    expect(result?.id).toBe(9);
+  });
+
+  it("returns null when no local novel matches", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await expect(findLocalNovelByPath("/missing.epub")).resolves.toBeNull();
+  });
+});
+
+describe("upsertLocalNovel", () => {
+  it("upserts a local library novel and downloaded chapters", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce(undefined);
+    db.select.mockResolvedValueOnce([{ id: 42 }]);
+
+    const result = await upsertLocalNovel({
+      path: "/books/sample.epub",
+      name: "Local Book",
+      cover: "file:///covers/sample.jpg",
+      summary: "Imported locally.",
+      author: "Writer",
+      artist: "Artist",
+      status: "completed",
+      genres: "Fantasy",
+      chapters: [
+        {
+          path: "chapter-1",
+          name: "Chapter 1",
+          position: 1,
+          chapterNumber: "1",
+          page: "1",
+          releaseTime: "2026-01-01",
+          contentType: "text",
+          content: "Chapter body",
+          contentBytes: 12,
+        },
+      ],
+    });
+
+    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
+
+    const [novelSql, novelParams] = db.execute.mock.calls[1]!;
+    expect(novelSql).toContain("INSERT INTO novel");
+    expect(novelSql).toContain("ON CONFLICT(plugin_id, path) DO UPDATE");
+    expect(novelSql).toContain("in_library, is_local");
+    expect(novelSql).toContain("in_library       = 1");
+    expect(novelSql).toContain("is_local         = 1");
+    expect(novelParams).toEqual([
+      "local",
+      "/books/sample.epub",
+      "Local Book",
+      "file:///covers/sample.jpg",
+      "Imported locally.",
+      "Writer",
+      "Artist",
+      "completed",
+      "Fantasy",
+    ]);
+
+    const [selectSql, selectParams] = db.select.mock.calls[0]!;
+    expect(selectSql).toContain("SELECT id FROM novel");
+    expect(selectParams).toEqual(["local", "/books/sample.epub"]);
+
+    const [chapterSql, chapterParams] = db.execute.mock.calls[2]!;
+    expect(chapterSql).toContain("INSERT INTO chapter");
+    expect(chapterSql).toContain("content_type");
+    expect(chapterSql).toContain("content_bytes");
+    expect(chapterSql).toContain("is_downloaded");
+    expect(chapterSql).toContain("is_downloaded  = 1");
+    expect(chapterParams).toEqual([
+      42,
+      "chapter-1",
+      "Chapter 1",
+      1,
+      "1",
+      "1",
+      "2026-01-01",
+      "text",
+      "Chapter body",
+      12,
+    ]);
+
+    expect(db.execute.mock.calls[3]?.[0]).toBe("COMMIT");
+    expect(result).toEqual({
+      changed: true,
+      changedChapters: 1,
+      novelId: 42,
+      chapterCount: 1,
+    });
+  });
+
+  it("rolls back when the local novel id cannot be resolved", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce(undefined);
+    db.select.mockResolvedValueOnce([]);
+
+    await expect(
+      upsertLocalNovel({
+        path: "/books/missing.epub",
+        name: "Missing",
+        chapters: [],
+      }),
+    ).rejects.toThrow("local import: failed to resolve local novel id");
+
+    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
   });
 });
 
