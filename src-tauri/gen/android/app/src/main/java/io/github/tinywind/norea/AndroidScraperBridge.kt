@@ -206,7 +206,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
         (candidate.priority == selected.priority && candidate.sequence < selected.sequence)
       ) {
         selectedIndex = index
-  }
+      }
+    }
     return selectedIndex
   }
 
