@@ -1,9 +1,9 @@
 # Norea
 
-Norea is a local-first light-novel reader for people who want their library,
-web sources, downloads, and reading progress in one place.
+Norea is a local-first light-novel reader for Windows, Linux, and Android.
+It keeps your reading sources, library, downloads, and progress in one app.
 
-It is inspired by [lnreader/lnreader](https://github.com/lnreader/lnreader),
+Norea is inspired by [lnreader/lnreader](https://github.com/lnreader/lnreader),
 but it is a separate app with its own data, backup, and source system.
 
 ## What You Can Do
@@ -11,78 +11,87 @@ but it is a separate app with its own data, backup, and source system.
 - Browse and search installed reading sources.
 - Add novels to your library and organize them with categories.
 - Read in paged or scrolling mode.
-- Adjust themes, font size, text color, tap zones, and keyboard navigation.
-- Track reading progress, history, unread chapters, and download state.
-- Download chapter content for later reading.
-- Export and import local backups for your library, progress, categories, source
-  settings, and downloaded chapters.
-- Use tester builds on Windows, Linux, and Android sideload APKs.
-
-## Reader Goals
-
-- Import and read local `.epub`, `.txt`, and `.html` files.
-- Read HTML chapters downloaded from internet sources through installed source
-  plugins.
-- Keep images and other media from downloaded HTML chapters available locally.
-- Render downloaded chapters correctly even when the internet connection is
-  unavailable.
+- Change themes, font size, text color, tap zones, and keyboard navigation.
+- Track reading progress, history, unread chapters, and downloaded chapters.
+- Download chapters for later reading.
+- Export and import local backups for your library, progress, categories,
+  source settings, and downloaded chapters.
 
 ## Current State
 
-Norea is usable for development and testing. It is not presented as a polished
-store release yet.
+Norea is usable for testing, but it is not a polished app-store release yet.
 
 Current limits:
 
 - macOS and iOS are not planned right now.
-- Some protected sources may require opening the in-app site browser once before
+- Some protected sources may ask you to open the in-app site browser once before
   search or downloads work.
-- Android background-download behavior still needs device-level validation.
-- APK artifacts are short-lived tester downloads, not an in-app updater.
+- Android background downloads still need more device testing.
+- There is no in-app updater yet. Check GitHub for newer builds.
 
-## Get a Build
+## Download
 
-- Latest release page: [GitHub Releases](https://github.com/tinywind/norea/releases/latest)
-- Linux desktop artifacts: [Linux Release Bundles workflow](https://github.com/tinywind/norea/actions/workflows/linux.yml)
-- Tester APK artifacts: [Android Release APKs workflow](https://github.com/tinywind/norea/actions/workflows/android.yml)
+Start with the [latest GitHub release](https://github.com/tinywind/norea/releases/latest).
 
-The Android workflow uploads signed release APKs plus `SHA256SUMS.txt` as a
-short-lived artifact. Open the latest successful workflow run and download
-`norea-arm64-signed-release-apk` for physical devices or
-`norea-x86_64-signed-release-apk` for emulators and WSA.
+If a release is not available yet, open the latest successful tester build for
+your platform: [Windows](https://github.com/tinywind/norea/actions/workflows/windows.yml),
+[Linux](https://github.com/tinywind/norea/actions/workflows/linux.yml), or
+[Android](https://github.com/tinywind/norea/actions/workflows/android.yml).
+Then download the matching artifact:
+
+| Platform | What to download |
+| --- | --- |
+| Windows x64 | `norea-windows-x64-nsis` or `norea-windows-x64-msi` |
+| Windows ARM64 | `norea-windows-arm64-nsis` or `norea-windows-arm64-msi` |
+| Linux x64 | `norea-linux-x64-appimage`, `norea-linux-x64-deb`, or `norea-linux-x64-rpm` |
+| Linux ARM64 | `norea-linux-arm64-appimage`, `norea-linux-arm64-deb`, or `norea-linux-arm64-rpm` |
+| Android phone or tablet | `norea-arm64-signed-release-apk` |
+| Android emulator or WSA | `norea-x86_64-signed-release-apk` |
+
+Workflow artifacts are short-lived tester downloads. If a link is expired, use a
+newer successful run or the latest release.
+
+## First Run
+
+1. Install and open Norea.
+2. Add a reading source list from Browse -> Sources.
+3. Install one or more sources.
+4. Search a source, open a novel, and add it to your library.
+5. Open a chapter to read. Download chapters you want available later.
 
 ## Add Reading Sources
 
-Reading sources are distributed separately from the app. The legal-safe sample
-catalog is [tinywind/norea-plugins](https://github.com/tinywind/norea-plugins),
-which contains public-domain, open-license, official-API, and user-owned
-self-hosted source examples.
+Reading sources are installed separately from the app. The sample source list is
+maintained at [tinywind/norea-plugins](https://github.com/tinywind/norea-plugins)
+and focuses on public-domain, open-license, official-API, and user-owned
+self-hosted examples.
 
-To use the published catalog in the app:
+To add the sample source list:
 
 1. Open Browse -> Sources.
-2. In Repository, choose Set repository.
-3. Enter the repository manifest URL:
+2. Choose Set repository.
+3. Paste this URL:
 
    ```text
    https://raw.githubusercontent.com/tinywind/norea-plugins/plugins/v0.1.0/.dist/plugins.min.json
    ```
 
-4. Save it, refresh the repository if needed, then install sources from
-   Available source plugins.
+4. Save it.
+5. Install sources from Available source plugins.
 
-The app keeps one active repository URL. Saving a different URL replaces the
-current repository index.
+Only install and use sources you are allowed to access in your country and under
+the source site's terms.
+
+## Backup
+
+Use Settings -> Backup to export or import your local library data. Backups
+include your library, progress, categories, source settings, and downloaded
+chapter content.
 
 ## For Developers
 
-See [docs/development.md](./docs/development.md) for local setup, testing,
-contribution rules, and the project map. Scripts and dependencies live in
-`package.json`.
-
-## Contributing
-
-See [docs/development.md](./docs/development.md) before opening a contribution.
+Developer setup, local plugin testing, release artifact details, and
+contribution rules live in [docs/development.md](./docs/development.md).
 
 ## License
 

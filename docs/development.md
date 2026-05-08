@@ -80,6 +80,20 @@ pnpm android:apk:release
 This builds arm64 APKs for current physical devices and x86_64 APKs for
 emulators or WSA.
 
+## Release Artifact Workflows
+
+The public README keeps download guidance user-focused. These are the workflow
+artifact names and release-upload behavior used by maintainers.
+
+| Workflow | Artifact names |
+| --- | --- |
+| Windows Release Bundles | `norea-windows-x64-nsis`, `norea-windows-x64-msi`, `norea-windows-arm64-nsis`, `norea-windows-arm64-msi`, plus matching checksum artifacts |
+| Linux Release Bundles | `norea-linux-x64-appimage`, `norea-linux-x64-deb`, `norea-linux-x64-rpm`, `norea-linux-arm64-appimage`, `norea-linux-arm64-deb`, `norea-linux-arm64-rpm`, plus matching checksum artifacts |
+| Android Release APKs | `norea-arm64-signed-release-apk`, `norea-x86_64-signed-release-apk`, and `norea-signed-release-apk-checksums` |
+
+Pushes to `main` create short-lived workflow artifacts. Version tags matching
+`v*` also upload collected bundles to the matching GitHub Release.
+
 ## Manual Smoke Test
 
 Use this path when checking that the app still works end to end:
@@ -101,6 +115,14 @@ For protected sources, open the in-app site browser first so the app can use the
 same browser session for later source actions.
 
 ## Local Source Plugin Testing
+
+The public sample source catalog is maintained in
+[tinywind/norea-plugins](https://github.com/tinywind/norea-plugins). The app
+stores a single active repository URL, and the published sample manifest is:
+
+```text
+https://raw.githubusercontent.com/tinywind/norea-plugins/plugins/v0.1.0/.dist/plugins.min.json
+```
 
 For local plugin development, keep a sibling checkout at `../norea-plugins` and
 serve its generated manifest:
