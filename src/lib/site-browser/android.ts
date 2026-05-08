@@ -3,6 +3,7 @@ import {
   androidScraperNavigate,
   androidScraperSetBounds,
 } from "../android-scraper";
+import { getScraperUserAgent } from "../../store/user-agent";
 import type { SiteBrowserBounds, SiteBrowserPlatformApi } from "./types";
 
 function rectBounds(node: HTMLDivElement | null): SiteBrowserBounds | null {
@@ -21,10 +22,10 @@ export const androidSiteBrowser: SiteBrowserPlatformApi = {
   chromeMode: "react",
   boundsFor: (node) => rectBounds(node),
   setBounds: async (bounds) => {
-    androidScraperSetBounds(bounds);
+    androidScraperSetBounds(bounds, getScraperUserAgent());
   },
   navigate: async (url) => {
-    await androidScraperNavigate(url);
+    await androidScraperNavigate(url, getScraperUserAgent());
   },
   hide: async () => {
     androidScraperHide();

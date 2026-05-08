@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getScraperUserAgent } from "../../store/user-agent";
 import type {
   SiteBrowserBounds,
   SiteBrowserControlMessage,
@@ -6,7 +7,7 @@ import type {
 } from "./types";
 
 function debugLinuxSiteBrowser(message: string, data?: unknown): void {
-  console.info(`[site-browser:linux] ${message}`, data);
+  console.debug(`[site-browser:linux] ${message}`, data);
 }
 
 function fullWindowBounds(): SiteBrowserBounds {
@@ -45,15 +46,17 @@ export const linuxSiteBrowser: SiteBrowserPlatformApi = {
       y: bounds.y,
       width: bounds.width,
       height: bounds.height,
+      userAgent: getScraperUserAgent(),
     };
     debugLinuxSiteBrowser("setBounds invoke", args);
     await invoke("scraper_set_bounds", args);
     debugLinuxSiteBrowser("setBounds complete", args);
   },
   navigate: async (url) => {
-    debugLinuxSiteBrowser("navigate invoke", { url });
-    await invoke("scraper_navigate", { url });
-    debugLinuxSiteBrowser("navigate complete", { url });
+    const args = { url, userAgent: getScraperUserAgent() };
+    debugLinuxSiteBrowser("navigate invoke", args);
+    await invoke("scraper_navigate", args);
+    debugLinuxSiteBrowser("navigate complete", args);
   },
   hide: async () => {
     debugLinuxSiteBrowser("hide invoke");

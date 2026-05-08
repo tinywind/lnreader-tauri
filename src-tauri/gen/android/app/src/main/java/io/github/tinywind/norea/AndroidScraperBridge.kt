@@ -57,6 +57,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   private var activeExtractId: String? = null
   private var activeTimeout: Runnable? = null
   private var browserVisible = false
+  private var scraperUserAgent: String? = null
   private var bounds = CssBounds(0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
 
   @JavascriptInterface
@@ -163,12 +164,28 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   @SuppressLint("SetJavaScriptEnabled")
-  private fun scraper(): WebView {
+  private fun payloadUserAgent(payload: JSONObject): String? {
+    val requested =
+      if (payload.isNull("userAgent")) "" else payload.optString("userAgent")
+    return requested.trim().ifEmpty { mainWebView.settings.userAgentString }
+  }
+
+  private fun scraper(userAgent: String?): WebView {
     val existing = scraperWebView
-    if (existing != null) return existing
+    if (existing != null && scraperUserAgent == userAgent) return existing
+    if (existing != null) {
+      (existing.parent as? ViewGroup)?.removeView(existing)
+      existing.destroy()
+      scraperWebView = null
+      currentUrl = null
+      documentStartScriptEnabled = false
+    }
 
     val webView = WebView(mainWebView.context)
     webView.settings.apply {
+      if (!userAgent.isNullOrBlank()) {
+        userAgentString = userAgent
+      }
       javaScriptEnabled = true
       javaScriptCanOpenWindowsAutomatically = true
       domStorageEnabled = true
@@ -195,6 +212,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val container = scraperContainer()
     container.addView(webView, hiddenLayoutParams())
     scraperWebView = webView
+    scraperUserAgent = userAgent
     hideScraper()
     return webView
   }
@@ -246,7 +264,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   private fun showScraper() {
-    val webView = scraper()
+    val webView = scraper(scraperUserAgent ?: mainWebView.settings.userAgentString)
     val container = scraperContainer()
     browserVisible = true
     webView.layoutParams = visibleLayoutParams()
@@ -301,7 +319,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val url = payload.getString("url")
     val contextUrl = payload.optString("contextUrl").takeIf { it.isNotBlank() }
     val init = payload.optJSONObject("init") ?: JSONObject()
-    val webView = scraper()
+    val webView = scraper(payloadUserAgent(payload))
     activeFetchId = id
     hideScraper()
 
@@ -329,7 +347,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
     activeExtractId = id
     setTimeout(id, timeoutMs, "webview_extract: timeout after ${timeoutMs}ms")
-    val webView = scraper()
+    val webView = scraper(payloadUserAgent(payload))
     hideScraper()
     webView.loadUrl(targetUrl)
   }
@@ -337,7 +355,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   private fun runNavigate(payload: JSONObject) {
     val id = payload.getString("id")
     val url = payload.getString("url")
-    val webView = scraper()
+    val webView = scraper(payloadUserAgent(payload))
     showScraper()
     webView.loadUrl(url)
     finishSuccess(id, true)

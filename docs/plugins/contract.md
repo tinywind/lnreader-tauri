@@ -281,10 +281,11 @@ Plugin-owned site traffic should use this path instead of bare browser `fetch`.
 The current flow:
 
 1. The frontend calls `pluginFetch` or `pluginFetchText` in `src/lib/http.ts`.
-2. The request is sent to the Rust `webview_fetch` command.
+2. The request is sent to the Rust `webview_fetch` command with the saved
+   scraper User-Agent, or a plugin-provided `User-Agent` value when present.
 3. `src-tauri/src/scraper.rs` executes browser fetch inside the persistent
    scraper WebView with credentials included, so the WebView cookie jar and
-   browser user agent are used.
+   configured browser user agent are used.
 4. The frontend rebuilds a `Response` object for plugin code.
 
 If a protected site needs a browser challenge or login, the user opens that site

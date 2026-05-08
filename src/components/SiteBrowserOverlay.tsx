@@ -22,7 +22,7 @@ function reportScraperError(action: string, error: unknown): void {
 }
 
 function debugSiteBrowser(message: string, data?: unknown): void {
-  console.info(`[site-browser] ${message}`, data);
+  console.debug(`[site-browser] ${message}`, data);
 }
 
 function syncSiteBrowserBounds(

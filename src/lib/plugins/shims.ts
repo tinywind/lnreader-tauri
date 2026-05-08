@@ -10,6 +10,7 @@ import {
   pluginFetchText,
 } from "../http";
 import { isAndroidRuntime } from "../tauri-runtime";
+import { getScraperUserAgent } from "../../store/user-agent";
 import {
   createPluginInputsApi,
   deletePluginInputValue,
@@ -23,7 +24,7 @@ interface WebViewFetchOptions {
   beforeContentScript?: string;
   /** Accepted for upstream compatibility; no host hook today. */
   afterContentScript?: string;
-  /** Accepted for upstream compatibility; the scraper webview's own UA is used. */
+  /** Overrides the scraper WebView User-Agent for this request. */
   userAgent?: string;
   timeoutMs?: number;
 }
@@ -42,11 +43,13 @@ async function webViewFetch(
   url: string,
   options: WebViewFetchOptions = {},
 ): Promise<string> {
+  const userAgent = options.userAgent?.trim() || getScraperUserAgent();
   if (isAndroidRuntime()) {
     return androidWebviewExtract(
       url,
       options.beforeContentScript ?? null,
       options.timeoutMs ?? 30_000,
+      userAgent,
     );
   }
 
@@ -54,6 +57,7 @@ async function webViewFetch(
     url,
     beforeScript: options.beforeContentScript ?? null,
     timeoutMs: options.timeoutMs ?? 30_000,
+    userAgent,
   });
 }
 

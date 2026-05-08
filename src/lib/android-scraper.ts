@@ -145,6 +145,7 @@ export function androidWebviewFetch(
   url: string,
   init: AndroidFetchInitWire,
   contextUrl: string | null,
+  userAgent: string | null,
 ): Promise<AndroidFetchResultWire> {
   return callNative<AndroidFetchResultWire>(
     "fetch",
@@ -152,6 +153,7 @@ export function androidWebviewFetch(
       url,
       init,
       contextUrl,
+      userAgent,
     },
     75_000,
   );
@@ -161,6 +163,7 @@ export function androidWebviewExtract(
   url: string,
   beforeScript: string | null,
   timeoutMs: number,
+  userAgent: string | null,
 ): Promise<string> {
   return callNative<string>(
     "extract",
@@ -168,23 +171,28 @@ export function androidWebviewExtract(
       url,
       beforeScript,
       timeoutMs,
+      userAgent,
     },
     timeoutMs + 5_000,
   );
 }
 
-export function androidScraperSetBounds(bounds: {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}): void {
+export function androidScraperSetBounds(
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  },
+  userAgent: string | null,
+): void {
   const viewport = window.visualViewport;
   bridge().setBounds(
     JSON.stringify({
       ...bounds,
       viewportWidth: viewport?.width ?? window.innerWidth,
       viewportHeight: viewport?.height ?? window.innerHeight,
+      userAgent,
     }),
   );
 }
@@ -193,11 +201,15 @@ export function androidScraperHide(): void {
   bridge().hide();
 }
 
-export function androidScraperNavigate(url: string): Promise<boolean> {
+export function androidScraperNavigate(
+  url: string,
+  userAgent: string | null,
+): Promise<boolean> {
   return callNative<boolean>(
     "navigate",
     {
       url,
+      userAgent,
     },
     10_000,
   );

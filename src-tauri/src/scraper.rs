@@ -300,6 +300,7 @@ type ScraperWebview = Webview<tauri::Wry>;
 #[derive(Clone, Debug)]
 struct ScraperEntry {
     label: String,
+    user_agent: Option<String>,
 }
 
 /// Inbound JSON shape from `webview_fetch` callers (matches the
@@ -336,6 +337,7 @@ pub struct ScraperControlMessage {
 #[derive(Default)]
 pub struct ScraperState {
     webviews: Mutex<HashMap<String, ScraperEntry>>,
+    browser_windows: Mutex<HashMap<String, ScraperEntry>>,
     visible_key: Mutex<Option<String>>,
     /// Last URL the visible site browser navigated to, for diagnostics.
     last_navigated: Mutex<Option<String>>,
@@ -359,7 +361,7 @@ const SITE_BROWSER_HIDDEN_EVENT: &str = "site-browser-hidden";
 #[cfg(desktop)]
 fn log_windows_scraper_event(message: &str) {
     if cfg!(target_os = "windows") {
-        log::info!("[scraper:windows] {message}");
+        log::debug!("[scraper:windows] {message}");
     }
 }
 
@@ -391,16 +393,30 @@ fn scraper_key_from_url(url: &Url) -> String {
 }
 
 #[cfg(desktop)]
-fn scraper_label_from_key(key: &str) -> String {
+fn normalize_user_agent(user_agent: Option<String>) -> Option<String> {
+    user_agent.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+#[cfg(desktop)]
+fn scraper_label_from_key(key: &str, user_agent: Option<&str>) -> String {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
+    user_agent.hash(&mut hasher);
     format!("{SCRAPER_LABEL}-{:016x}", hasher.finish())
 }
 
 #[cfg(desktop)]
-fn scraper_browser_label_from_key(key: &str) -> String {
+fn scraper_browser_label_from_key(key: &str, user_agent: Option<&str>) -> String {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
+    user_agent.hash(&mut hasher);
     format!("{SCRAPER_LABEL}-browser-{:016x}", hasher.finish())
 }
 
@@ -417,32 +433,45 @@ fn scraper_handle_for_key(
     app: &AppHandle,
     state: &ScraperState,
     key: &str,
+    user_agent: Option<&str>,
 ) -> Result<ScraperWebview, String> {
     if cfg!(target_os = "windows") {
-        log::info!("[scraper:windows] handle_for_key start key={key}");
+        log::debug!("[scraper:windows] handle_for_key start key={key}");
     }
-    let existing_label = state
+    let existing_entry = state
         .webviews
         .lock()
         .expect("scraper webviews mutex")
         .get(key)
-        .map(|entry| entry.label.clone());
-    if let Some(existing_label) = existing_label {
-        if cfg!(target_os = "windows") {
-            log::info!(
-                "[scraper:windows] handle_for_key registered label={existing_label}"
-            );
+        .cloned();
+    if let Some(existing_entry) = existing_entry {
+        if existing_entry.user_agent.as_deref() == user_agent {
+            if cfg!(target_os = "windows") {
+                log::debug!(
+                    "[scraper:windows] handle_for_key registered label={}",
+                    existing_entry.label
+                );
+            }
+            if let Some(webview) = app.get_webview(&existing_entry.label) {
+                log_windows_scraper_event("handle_for_key registered webview found");
+                return Ok(webview);
+            }
+            log_windows_scraper_event("handle_for_key registered webview missing");
+        } else if let Some(webview) = app.get_webview(&existing_entry.label) {
+            webview
+                .close()
+                .map_err(|err| format!("scraper: close webview for {key}: {err}"))?;
         }
-        if let Some(webview) = app.get_webview(&existing_label) {
-            log_windows_scraper_event("handle_for_key registered webview found");
-            return Ok(webview);
-        }
-        log_windows_scraper_event("handle_for_key registered webview missing");
+        state
+            .webviews
+            .lock()
+            .expect("scraper webviews mutex")
+            .remove(key);
     }
 
-    let label = scraper_label_from_key(key);
+    let label = scraper_label_from_key(key, user_agent);
     if cfg!(target_os = "windows") {
-        log::info!("[scraper:windows] handle_for_key computed label={label}");
+        log::debug!("[scraper:windows] handle_for_key computed label={label}");
     }
     if let Some(webview) = app.get_webview(&label) {
         log_windows_scraper_event("handle_for_key unregistered webview found");
@@ -450,7 +479,13 @@ fn scraper_handle_for_key(
             .webviews
             .lock()
             .expect("scraper webviews mutex")
-            .insert(key.to_string(), ScraperEntry { label });
+            .insert(
+                key.to_string(),
+                ScraperEntry {
+                    label,
+                    user_agent: user_agent.map(str::to_string),
+                },
+            );
         return Ok(webview);
     }
 
@@ -460,7 +495,7 @@ fn scraper_handle_for_key(
         .ok_or_else(|| "scraper: main window missing".to_string())?;
     log_windows_scraper_event("handle_for_key build child webview");
     let app_for_navigation = app.clone();
-    let builder = WebviewBuilder::new(
+    let mut builder = WebviewBuilder::new(
         label.clone(),
         WebviewUrl::App(PathBuf::from(SCRAPER_HOMEPAGE_PATH)),
     )
@@ -480,6 +515,9 @@ fn scraper_handle_for_key(
         true
     })
     .initialization_script(SCRAPER_INIT_SCRIPT);
+    if let Some(user_agent) = user_agent {
+        builder = builder.user_agent(user_agent);
+    }
     log_windows_scraper_event("handle_for_key add_child start");
     let webview = main_window
         .add_child(
@@ -497,7 +535,13 @@ fn scraper_handle_for_key(
         .webviews
         .lock()
         .expect("scraper webviews mutex")
-        .insert(key.to_string(), ScraperEntry { label });
+        .insert(
+            key.to_string(),
+            ScraperEntry {
+                label,
+                user_agent: user_agent.map(str::to_string),
+            },
+        );
     log_windows_scraper_event("handle_for_key registered new webview");
     Ok(webview)
 }
@@ -508,15 +552,16 @@ fn scraper_handle_for_url(
     state: &ScraperState,
     url: &str,
     context: &str,
+    user_agent: Option<&str>,
 ) -> Result<(String, ScraperWebview), String> {
     if cfg!(target_os = "windows") {
-        log::info!("[scraper:windows] handle_for_url start context={context} url={url}");
+        log::debug!("[scraper:windows] handle_for_url start context={context} url={url}");
     }
     let key = parse_scraper_key(url, context)?;
     if cfg!(target_os = "windows") {
-        log::info!("[scraper:windows] handle_for_url parsed key={key}");
+        log::debug!("[scraper:windows] handle_for_url parsed key={key}");
     }
-    let webview = scraper_handle_for_key(app, state, &key)?;
+    let webview = scraper_handle_for_key(app, state, &key, user_agent)?;
     log_windows_scraper_event("handle_for_url complete");
     Ok((key, webview))
 }
@@ -549,18 +594,55 @@ fn linux_site_browser_window_for_url(
     app: &AppHandle,
     state: &ScraperState,
     url: &str,
+    user_agent: Option<&str>,
 ) -> Result<(String, WebviewWindow<tauri::Wry>), String> {
     let key = parse_scraper_key(url, "site browser")?;
-    let label = scraper_browser_label_from_key(&key);
+    let existing_entry = state
+        .browser_windows
+        .lock()
+        .expect("scraper browser windows mutex")
+        .get(&key)
+        .cloned();
+    if let Some(existing_entry) = existing_entry {
+        if existing_entry.user_agent.as_deref() == user_agent {
+            if let Some(window) = app.get_webview_window(&existing_entry.label) {
+                return Ok((key, window));
+            }
+        } else if let Some(window) = app.get_webview_window(&existing_entry.label) {
+            window
+                .close()
+                .map_err(|err| {
+                    format!("scraper: close Linux browser window for {key}: {err}")
+                })?;
+        }
+        state
+            .browser_windows
+            .lock()
+            .expect("scraper browser windows mutex")
+            .remove(&key);
+    }
+
+    let label = scraper_browser_label_from_key(&key, user_agent);
     if let Some(window) = app.get_webview_window(&label) {
+        state
+            .browser_windows
+            .lock()
+            .expect("scraper browser windows mutex")
+            .insert(
+                key.clone(),
+                ScraperEntry {
+                    label,
+                    user_agent: user_agent.map(str::to_string),
+                },
+            );
         return Ok((key, window));
     }
 
     let (x, y, width, height) = linux_main_window_rect(app)?;
     let app_for_navigation = app.clone();
-    let window = WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         app,
-        label,
+        label.clone(),
         WebviewUrl::App(PathBuf::from(SCRAPER_HOMEPAGE_PATH)),
     )
     .title("Norea site browser")
@@ -584,9 +666,15 @@ fn linux_site_browser_window_for_url(
         }
         true
     })
-    .initialization_script(SCRAPER_INIT_SCRIPT)
-    .build()
-    .map_err(|err| format!("scraper: create Linux browser window for {key}: {err}"))?;
+    .initialization_script(SCRAPER_INIT_SCRIPT);
+    if let Some(user_agent) = user_agent {
+        builder = builder.user_agent(user_agent);
+    }
+    let window = builder
+        .build()
+        .map_err(|err| {
+            format!("scraper: create Linux browser window for {key}: {err}")
+        })?;
     window
         .hide()
         .map_err(|err| format!("scraper: hide Linux browser window after init: {err}"))?;
@@ -594,6 +682,17 @@ fn linux_site_browser_window_for_url(
         .last_navigated
         .lock()
         .expect("scraper last_navigated mutex") = None;
+    state
+        .browser_windows
+        .lock()
+        .expect("scraper browser windows mutex")
+        .insert(
+            key.clone(),
+            ScraperEntry {
+                label,
+                user_agent: user_agent.map(str::to_string),
+            },
+        );
     Ok((key, window))
 }
 
@@ -616,8 +715,15 @@ fn hide_scraper_surface_for_key(
         hidden = true;
     }
     if cfg!(target_os = "linux") {
-        let label = scraper_browser_label_from_key(key);
-        if let Some(window) = app.get_webview_window(&label) {
+        let browser_entry = state
+            .browser_windows
+            .lock()
+            .expect("scraper browser windows mutex")
+            .get(key)
+            .cloned();
+        if let Some(window) =
+            browser_entry.and_then(|entry| app.get_webview_window(&entry.label))
+        {
             window
                 .hide()
                 .map_err(|err| format!("scraper: hide Linux browser window: {err}"))?;
@@ -637,7 +743,7 @@ fn set_webview_bounds(
     context: &str,
 ) -> Result<(), String> {
     if cfg!(target_os = "windows") {
-        log::info!(
+        log::debug!(
             "[scraper:windows] set_webview_bounds context={context} x={x} y={y} width={width} height={height}"
         );
     }
@@ -743,17 +849,20 @@ pub async fn scraper_set_bounds(
     y: f64,
     width: f64,
     height: f64,
+    user_agent: Option<String>,
 ) -> Result<(), String> {
+    let user_agent = normalize_user_agent(user_agent);
     if cfg!(target_os = "windows") {
-        log::info!(
+        log::debug!(
             "[scraper:windows] scraper_set_bounds start url={url} x={x} y={y} width={width} height={height}"
         );
     }
     if cfg!(target_os = "linux") {
-        log::info!(
+        log::debug!(
             "[scraper:linux] scraper_set_bounds start url={url} x={x} y={y} width={width} height={height}"
         );
-        let (key, browser) = linux_site_browser_window_for_url(&app, &state, &url)?;
+        let (key, browser) =
+            linux_site_browser_window_for_url(&app, &state, &url, user_agent.as_deref())?;
         let previous_key = state
             .visible_key
             .lock()
@@ -765,7 +874,7 @@ pub async fn scraper_set_bounds(
             }
         }
         let (x, y, width, height) = linux_main_window_rect(&app)?;
-        log::info!(
+        log::debug!(
             "[scraper:linux] browser window bounds x={x} y={y} width={width} height={height}"
         );
         browser
@@ -799,10 +908,11 @@ pub async fn scraper_set_bounds(
                 .expect("scraper last_navigated mutex") = Some(url.clone());
         }
         *state.visible_key.lock().expect("scraper visible_key mutex") = Some(key);
-        log::info!("[scraper:linux] scraper_set_bounds complete url={url}");
+        log::debug!("[scraper:linux] scraper_set_bounds complete url={url}");
         return Ok(());
     }
-    let (key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
+    let (key, scraper) =
+        scraper_handle_for_url(&app, &state, &url, "site browser", user_agent.as_deref())?;
     let previous_key = state
         .visible_key
         .lock()
@@ -846,6 +956,7 @@ pub async fn scraper_set_bounds(
     _y: f64,
     _width: f64,
     _height: f64,
+    _user_agent: Option<String>,
 ) -> Result<(), String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
@@ -916,7 +1027,7 @@ pub async fn scraper_poll_control_message(
     .await?;
     if let Some(message) = &message {
         if cfg!(target_os = "windows") {
-            log::info!(
+            log::debug!(
                 "[scraper:windows] scraper_poll_control_message action={} sequence={:?}",
                 message.action,
                 message.sequence
@@ -979,9 +1090,11 @@ pub async fn scraper_navigate(
     app: AppHandle,
     state: tauri::State<'_, ScraperState>,
     url: String,
+    user_agent: Option<String>,
 ) -> Result<(), String> {
+    let user_agent = normalize_user_agent(user_agent);
     if cfg!(target_os = "windows") {
-        log::info!("[scraper:windows] scraper_navigate start url={url}");
+        log::debug!("[scraper:windows] scraper_navigate start url={url}");
     }
     if cfg!(target_os = "linux") {
         let already_navigated = state
@@ -991,12 +1104,13 @@ pub async fn scraper_navigate(
             .as_deref()
             == Some(url.as_str());
         if already_navigated {
-            log::info!("[scraper:linux] scraper_navigate skipped: already at url={url}");
+            log::debug!("[scraper:linux] scraper_navigate skipped: already at url={url}");
             return Ok(());
         }
-        log::info!("[scraper:linux] scraper_navigate start url={url}");
+        log::debug!("[scraper:linux] scraper_navigate start url={url}");
     }
-    let (_key, scraper) = scraper_handle_for_url(&app, &state, &url, "site browser")?;
+    let (_key, scraper) =
+        scraper_handle_for_url(&app, &state, &url, "site browser", user_agent.as_deref())?;
     let parsed: Url = url
         .parse()
         .map_err(|err| format!("scraper_navigate: invalid url '{url}': {err}"))?;
@@ -1009,7 +1123,7 @@ pub async fn scraper_navigate(
         .expect("scraper last_navigated mutex") = Some(url);
     log_windows_scraper_event("scraper_navigate complete");
     if cfg!(target_os = "linux") {
-        log::info!("[scraper:linux] scraper_navigate complete");
+        log::debug!("[scraper:linux] scraper_navigate complete");
     }
     Ok(())
 }
@@ -1020,6 +1134,7 @@ pub async fn scraper_navigate(
     _app: AppHandle,
     _state: tauri::State<'_, ScraperState>,
     url: String,
+    _user_agent: Option<String>,
 ) -> Result<(), String> {
     Err(format!(
         "scraper_navigate is handled by the Android native scraper bridge: {url}"
@@ -1032,6 +1147,7 @@ pub async fn scraper_navigate(
     _app: AppHandle,
     _state: tauri::State<'_, ScraperState>,
     _url: String,
+    _user_agent: Option<String>,
 ) -> Result<(), String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
@@ -1126,7 +1242,7 @@ async fn prepare_fetch_context(
         return Ok(());
     }
 
-    log::info!("[scraper:fetch] prepare context navigate url={context_url}");
+    log::debug!("[scraper:fetch] prepare context navigate url={context_url}");
     scraper
         .navigate(target.clone())
         .map_err(|err| format!("scraper: navigate fetch context: {err}"))?;
@@ -1138,7 +1254,7 @@ async fn prepare_fetch_context(
     while started.elapsed() < deadline {
         tokio::time::sleep(poll_interval).await;
         if scraper_is_at_origin(scraper, &target) && document_is_ready(scraper).await {
-            log::info!("[scraper:fetch] prepare context ready url={context_url}");
+            log::debug!("[scraper:fetch] prepare context ready url={context_url}");
             return Ok(());
         }
     }
@@ -1373,13 +1489,21 @@ pub async fn webview_fetch(
     url: String,
     init: Option<FetchInit>,
     context_url: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<FetchResult, String> {
+    let user_agent = normalize_user_agent(user_agent);
     let fetch_context = fetch_context_url(&url, context_url.as_deref())?;
-    log::info!(
+    log::debug!(
         "[scraper:fetch] context selected request_url={url} configured_context={:?} fetch_context={fetch_context}",
         context_url
     );
-    let (_key, scraper) = scraper_handle_for_url(&app, &state, &fetch_context, "fetch context")?;
+    let (_key, scraper) = scraper_handle_for_url(
+        &app,
+        &state,
+        &fetch_context,
+        "fetch context",
+        user_agent.as_deref(),
+    )?;
     webview_fetch_with_ready_scraper(&scraper, url, init, Some(fetch_context)).await
 }
 
@@ -1391,6 +1515,7 @@ pub async fn webview_fetch(
     _url: String,
     _init: Option<FetchInit>,
     _context_url: Option<String>,
+    _user_agent: Option<String>,
 ) -> Result<FetchResult, String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
@@ -1461,8 +1586,11 @@ pub async fn webview_extract(
     url: String,
     before_script: Option<String>,
     timeout_ms: Option<u64>,
+    user_agent: Option<String>,
 ) -> Result<String, String> {
-    let (_key, scraper) = scraper_handle_for_url(&app, &state, &url, "extract")?;
+    let user_agent = normalize_user_agent(user_agent);
+    let (_key, scraper) =
+        scraper_handle_for_url(&app, &state, &url, "extract", user_agent.as_deref())?;
 
     // Embed the before-content script in the URL fragment. The
     // browser does not send the fragment to the server, and the
@@ -1484,7 +1612,7 @@ pub async fn webview_extract(
         format!("webview_extract: invalid url '{target_url_str}': {err}")
     })?;
 
-    eprintln!("[scraper] webview_extract navigate: {url}");
+    log::debug!("[scraper] webview_extract navigate: {url}");
 
     scraper
         .navigate(parsed)
@@ -1528,6 +1656,7 @@ pub async fn webview_extract(
     _url: String,
     _before_script: Option<String>,
     _timeout_ms: Option<u64>,
+    _user_agent: Option<String>,
 ) -> Result<String, String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }

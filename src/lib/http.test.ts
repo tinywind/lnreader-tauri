@@ -55,6 +55,7 @@ describe("pluginFetch", () => {
         body: "payload",
       },
       contextUrl: null,
+      userAgent: globalThis.navigator?.userAgent ?? null,
     });
 
     expect(response.status).toBe(200);
@@ -102,6 +103,26 @@ describe("pluginFetch", () => {
         body: undefined,
       },
       contextUrl: "https://ok.test",
+      userAgent: globalThis.navigator?.userAgent ?? null,
+    });
+  });
+
+  it("uses an explicit User-Agent header as the scraper user agent", async () => {
+    invokeMock.mockResolvedValueOnce(wireOk("hello"));
+
+    await pluginFetch("https://ok.test/path", {
+      headers: { "User-Agent": "Plugin UA" },
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("webview_fetch", {
+      url: "https://ok.test/path",
+      init: {
+        headers: { "User-Agent": "Plugin UA" },
+        method: undefined,
+        body: undefined,
+      },
+      contextUrl: null,
+      userAgent: "Plugin UA",
     });
   });
 

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { androidWebviewFetch } from "./android-scraper";
 import { isAndroidRuntime } from "./tauri-runtime";
+import { getScraperUserAgent } from "../store/user-agent";
 
 export interface HttpInit {
   method?: string;
@@ -34,6 +35,25 @@ interface FetchResultWire {
   bodyBase64?: string;
   headers: Record<string, string>;
   finalUrl: string;
+}
+
+function headerUserAgent(
+  headers: Record<string, string> | undefined,
+): string | null {
+  if (!headers) return null;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "user-agent") {
+      const trimmed = value.trim();
+      return trimmed === "" ? null : trimmed;
+    }
+  }
+  return null;
+}
+
+function scraperUserAgent(
+  headers: Record<string, string> | undefined,
+): string | null {
+  return headerUserAgent(headers) ?? getScraperUserAgent();
 }
 
 function serializeBody(body: unknown): string | undefined {
@@ -121,12 +141,14 @@ export async function pluginFetch(
 ): Promise<Response> {
   const wireInit = toWireInit(init);
   const contextUrl = init.contextUrl ?? null;
+  const userAgent = scraperUserAgent(wireInit.headers);
   const result = isAndroidRuntime()
-    ? await androidWebviewFetch(url, wireInit, contextUrl)
+    ? await androidWebviewFetch(url, wireInit, contextUrl, userAgent)
     : await invoke<FetchResultWire>("webview_fetch", {
         url,
         init: wireInit,
         contextUrl,
+        userAgent,
       });
   const response = new Response(bodyFromWire(result), {
     status: result.status,

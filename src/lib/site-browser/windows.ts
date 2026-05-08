@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getScraperUserAgent } from "../../store/user-agent";
 import type {
   SiteBrowserBounds,
   SiteBrowserControlMessage,
@@ -34,6 +35,7 @@ function invokeArgs(bounds: SiteBrowserBounds, url: string): {
   y: number;
   width: number;
   height: number;
+  userAgent: string | null;
 } {
   return {
     url,
@@ -41,6 +43,7 @@ function invokeArgs(bounds: SiteBrowserBounds, url: string): {
     y: bounds.y,
     width: bounds.width,
     height: bounds.height,
+    userAgent: getScraperUserAgent(),
   };
 }
 
@@ -59,9 +62,10 @@ export const windowsSiteBrowser: SiteBrowserPlatformApi = {
     debugWindowsSiteBrowser("setBounds complete", args);
   },
   navigate: async (url) => {
-    debugWindowsSiteBrowser("navigate invoke", { url });
-    await invoke("scraper_navigate", { url });
-    debugWindowsSiteBrowser("navigate complete", { url });
+    const args = { url, userAgent: getScraperUserAgent() };
+    debugWindowsSiteBrowser("navigate invoke", args);
+    await invoke("scraper_navigate", args);
+    debugWindowsSiteBrowser("navigate complete", args);
   },
   hide: async () => {
     debugWindowsSiteBrowser("hide invoke");
