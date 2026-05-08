@@ -18,7 +18,7 @@ on:
       - "tsconfig*.json"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -110,6 +110,25 @@ jobs:
             echo "::warning::Android release signing secrets are not configured; using the committed public test release key."
           fi
 
+      - name: Stamp build metadata
+        run: |
+          set -euo pipefail
+
+          channel="dev"
+          version=""
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            channel="release"
+            version="${{ github.ref_name }}"
+            version="${version#v}"
+          fi
+
+          echo "NOREA_BUILD_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "NOREA_BUILD_VERSION=$version" >> "$GITHUB_ENV"
+          echo "NOREA_BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+          echo "NOREA_GIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "NOREA_GITHUB_RUN_ID=${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+          echo "NOREA_GITHUB_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
       - name: Build arm64 and x86_64 release APKs
         run: pnpm android:apk:release
 
@@ -169,3 +188,9 @@ jobs:
           archive: false
           compression-level: 0
           retention-days: 3
+
+      - name: Upload signed APKs to GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "$RELEASE_SIGNED_APK_DIR"/* --clobber

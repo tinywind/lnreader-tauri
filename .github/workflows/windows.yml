@@ -18,7 +18,7 @@ on:
       - "tsconfig*.json"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -62,6 +62,18 @@ jobs:
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Stamp build metadata
+        shell: pwsh
+        run: |
+          $channel = if ("${{ github.ref_type }}" -eq "tag") { "release" } else { "dev" }
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "" }
+          "NOREA_BUILD_CHANNEL=$channel" >> $env:GITHUB_ENV
+          "NOREA_BUILD_VERSION=$version" >> $env:GITHUB_ENV
+          "NOREA_BUILD_TIME=$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))" >> $env:GITHUB_ENV
+          "NOREA_GIT_SHA=${{ github.sha }}" >> $env:GITHUB_ENV
+          "NOREA_GITHUB_RUN_ID=${{ github.run_id }}" >> $env:GITHUB_ENV
+          "NOREA_GITHUB_RUN_ATTEMPT=${{ github.run_attempt }}" >> $env:GITHUB_ENV
 
       - name: Build Windows release bundle
         run: pnpm tauri build --target ${{ matrix.rust-target }}
@@ -148,3 +160,14 @@ jobs:
           archive: false
           compression-level: 0
           retention-days: 3
+
+      - name: Upload Windows bundles to GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $assets = Get-ChildItem -Path $env:WINDOWS_BUNDLE_ARTIFACT_DIR -File |
+            ForEach-Object { $_.FullName }
+          gh release upload "${{ github.ref_name }}" $assets --clobber
