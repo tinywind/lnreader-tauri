@@ -6,6 +6,16 @@ It keeps your reading sources, library, downloads, and progress in one app.
 Norea is inspired by [lnreader/lnreader](https://github.com/lnreader/lnreader),
 but it is a separate app with its own data, backup, and source system.
 
+## Screenshots
+
+![Library with public-domain books and reading progress](docs/screenshots/library.png)
+
+![Standard Ebooks source search results](docs/screenshots/browse.png)
+
+![Reader view on a narrow window](docs/screenshots/reader.png)
+
+![Novel detail with metadata and chapter progress](docs/screenshots/novel-detail.png)
+
 ## What You Can Do
 
 - Browse and search installed reading sources.
