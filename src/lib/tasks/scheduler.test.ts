@@ -1,10 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cancelAndroidScraperBackground } from "../android-scraper";
-import { TaskScheduler } from "./scheduler";
-
-vi.mock("../android-scraper", () => ({
-  cancelAndroidScraperBackground: vi.fn(),
-}));
+import { describe, expect, it, vi } from "vitest";
+import { TaskScheduler, type TaskRunContext } from "./scheduler";
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
@@ -13,13 +8,8 @@ async function settle(): Promise<void> {
 }
 
 describe("TaskScheduler", () => {
-  beforeEach(() => {
-    vi.mocked(cancelAndroidScraperBackground).mockClear();
-  });
-
   it("runs main and source tasks independently", async () => {
     const scheduler = new TaskScheduler({
-      sourceBackgroundConcurrency: 1,
       sourceForegroundConcurrency: 1,
       sourceQueuesPaused: false,
     });
@@ -48,15 +38,62 @@ describe("TaskScheduler", () => {
     expect(scheduler.getSnapshot().running).toBe(0);
   });
 
-  it("orders queued main work by priority", async () => {
-    const scheduler = new TaskScheduler();
+  it("caps pool source work at the configured executor count", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 2,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+    const finishers: Array<() => void> = [];
+
+    const tasks = ["a", "b", "c"].map((sourceId) =>
+      scheduler.enqueueSource({
+        kind: "source.globalSearch",
+        title: `Search ${sourceId}`,
+        priority: "normal",
+        source: { id: sourceId, name: sourceId },
+        run: (context) =>
+          new Promise<void>((resolve) => {
+            order.push(`${sourceId}:${context.executor}:start`);
+            finishers.push(resolve);
+          }),
+      }),
+    );
+
+    await settle();
+    expect(order).toEqual([
+      "a:pool:0:start",
+      "b:pool:1:start",
+    ]);
+
+    finishers[0]?.();
+    await tasks[0]!.promise;
+    await settle();
+
+    expect(order).toEqual([
+      "a:pool:0:start",
+      "b:pool:1:start",
+      "c:pool:0:start",
+    ]);
+
+    finishers[1]?.();
+    finishers[2]?.();
+    await Promise.all(tasks.map((task) => task.promise));
+  });
+
+  it("keeps one active task per source even when later work has higher priority", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 2,
+      sourceQueuesPaused: false,
+    });
     const order: string[] = [];
     let finishActive!: () => void;
 
-    const active = scheduler.enqueueMain({
-      kind: "backup.export",
-      title: "Active main task",
+    const active = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Active search",
       priority: "normal",
+      source: { id: "p", name: "Plugin" },
       run: () =>
         new Promise<void>((resolve) => {
           order.push("active:start");
@@ -66,20 +103,13 @@ describe("TaskScheduler", () => {
 
     await settle();
 
-    const deferred = scheduler.enqueueMain({
-      kind: "library.refreshMetadata",
-      title: "Refresh metadata",
-      priority: "deferred",
+    const user = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "User download",
+      priority: "user",
+      source: { id: "p", name: "Plugin" },
       run: async () => {
-        order.push("deferred:start");
-      },
-    });
-    const normal = scheduler.enqueueMain({
-      kind: "repository.refreshIndex",
-      title: "Refresh repository",
-      priority: "normal",
-      run: async () => {
-        order.push("normal:start");
+        order.push("user:start");
       },
     });
 
@@ -87,1292 +117,252 @@ describe("TaskScheduler", () => {
     expect(order).toEqual(["active:start"]);
 
     finishActive();
-    await Promise.all([active.promise, deferred.promise, normal.promise]);
+    await Promise.all([active.promise, user.promise]);
 
-    expect(order).toEqual([
-      "active:start",
-      "normal:start",
-      "deferred:start",
-    ]);
+    expect(order).toEqual(["active:start", "user:start"]);
   });
 
-  it("runs foreground source work alongside lower-priority background work", async () => {
+  it("reserves the immediate executor for open site work without blocking the pool", async () => {
     const scheduler = new TaskScheduler({
-      sourceBackgroundConcurrency: 1,
       sourceForegroundConcurrency: 1,
       sourceQueuesPaused: false,
     });
     const order: string[] = [];
-    let finishFirstDownload!: () => void;
+    let closeSite!: () => void;
+    let finishPool!: () => void;
 
-    const firstDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download 1",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
+    const pool = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Pool work",
+      priority: "normal",
+      source: { id: "a", name: "Source A" },
+      run: (context) =>
         new Promise<void>((resolve) => {
-          order.push("download-1:start");
-          finishFirstDownload = () => {
-            order.push("download-1:finish");
-            resolve();
-          };
+          order.push(`pool:${context.executor}:start`);
+          finishPool = resolve;
         }),
     });
 
     await settle();
 
-    const secondDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download 2",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("download-2:start");
-      },
+    const site = scheduler.enqueueSource({
+      kind: "source.openSite",
+      title: "Open site",
+      priority: "interactive",
+      exclusive: true,
+      source: { id: "site", name: "Site" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`site:${context.executor}:start`);
+          closeSite = resolve;
+        }),
     });
-    const foreground = scheduler.enqueueSource({
+
+    await settle();
+    expect(order).toEqual(["pool:pool:0:start", "site:immediate:start"]);
+
+    closeSite();
+    finishPool();
+    await Promise.all([site.promise, pool.promise]);
+  });
+
+  it("lets open site work run while source queues are paused", async () => {
+    const scheduler = new TaskScheduler({ sourceQueuesPaused: true });
+    const order: string[] = [];
+
+    const search = scheduler.enqueueSource({
       kind: "source.search",
-      title: "Search source",
+      title: "Paused search",
       priority: "interactive",
       source: { id: "p", name: "Plugin" },
       run: async () => {
-        order.push("foreground:start");
+        order.push("search:start");
+      },
+    });
+    const site = scheduler.enqueueSource({
+      kind: "source.openSite",
+      title: "Open site",
+      priority: "interactive",
+      exclusive: true,
+      source: { id: "p", name: "Plugin" },
+      run: async (context) => {
+        order.push(`site:${context.executor}:start`);
+      },
+    });
+
+    await site.promise;
+    await settle();
+
+    expect(order).toEqual(["site:immediate:start"]);
+    expect(scheduler.getTask(search.id)?.status).toBe("queued");
+  });
+
+  it("limits background work inside the shared pool", async () => {
+    const scheduler = new TaskScheduler({
+      sourceBackgroundConcurrency: 1,
+      sourceForegroundConcurrency: 3,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+    let finishBackground!: () => void;
+
+    const firstBackground = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Background A",
+      priority: "background",
+      source: { id: "a", name: "A" },
+      run: () =>
+        new Promise<void>((resolve) => {
+          order.push("background-a:start");
+          finishBackground = resolve;
+        }),
+    });
+    const secondBackground = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Background B",
+      priority: "background",
+      source: { id: "b", name: "B" },
+      run: async () => {
+        order.push("background-b:start");
+      },
+    });
+    const foreground = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Foreground C",
+      priority: "normal",
+      source: { id: "c", name: "C" },
+      run: async () => {
+        order.push("foreground-c:start");
       },
     });
 
     await foreground.promise;
     await settle();
-    expect(order).toEqual(["download-1:start", "foreground:start"]);
 
-    finishFirstDownload();
-    await Promise.all([
-      firstDownload.promise,
-      secondDownload.promise,
-    ]);
+    expect(order).toEqual(["background-a:start", "foreground-c:start"]);
+
+    finishBackground();
+    await Promise.all([firstBackground.promise, secondBackground.promise]);
 
     expect(order).toEqual([
-      "download-1:start",
-      "foreground:start",
-      "download-1:finish",
-      "download-2:start",
+      "background-a:start",
+      "foreground-c:start",
+      "background-b:start",
     ]);
   });
 
-  it("blocks background downloads for any source while foreground source work is queued", async () => {
-    const scheduler = new TaskScheduler({
-      sourceBackgroundConcurrency: 1,
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishActiveDownload!: () => void;
-
-    const activeDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download active",
-      priority: "background",
-      source: { id: "a", name: "Source A" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("download-a:start");
-          finishActiveDownload = resolve;
-        }),
-    });
-
-    await settle();
-
-    const foreground = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Search source A",
-      priority: "interactive",
-      source: { id: "a", name: "Source A" },
-      run: async () => {
-        order.push("foreground-a:start");
-      },
-    });
-    const otherDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download other source",
-      priority: "background",
-      source: { id: "b", name: "Source B" },
-      run: async () => {
-        order.push("download-b:start");
-      },
-    });
-
-    await settle();
-    expect(order).toEqual(["download-a:start", "foreground-a:start"]);
-
-    finishActiveDownload();
-    await Promise.all([
-      activeDownload.promise,
-      foreground.promise,
-      otherDownload.promise,
-    ]);
-
-    expect(order).toEqual([
-      "download-a:start",
-      "foreground-a:start",
-      "download-b:start",
-    ]);
-  });
-
-  it("keeps exclusive source tasks ahead of other foreground source work", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 3,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let closeSite!: () => void;
-
-    const site = scheduler.enqueueSource({
-      kind: "source.openSite",
-      title: "Open site",
-      priority: "interactive",
-      exclusive: true,
-      source: { id: "site", name: "Site Source" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("site:start");
-          closeSite = resolve;
-        }),
-    });
-
-    await settle();
-
-    const firstSearch = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Search A",
-      priority: "interactive",
-      source: { id: "a", name: "Source A" },
-      run: async () => {
-        order.push("search-a:start");
-      },
-    });
-    const secondSearch = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Search B",
-      priority: "interactive",
-      source: { id: "b", name: "Source B" },
-      run: async () => {
-        order.push("search-b:start");
-      },
-    });
-
-    await settle();
-    expect(order).toEqual(["site:start"]);
-
-    closeSite();
-    await Promise.all([site.promise, firstSearch.promise, secondSearch.promise]);
-
-    expect(order).toEqual([
-      "site:start",
-      "search-a:start",
-      "search-b:start",
-    ]);
-  });
-
-  it("uses priority boost slots for interactive source work", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 2,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishFirstSearch!: () => void;
-    let finishSecondSearch!: () => void;
-    let finishInteractive!: () => void;
-
-    const firstSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search A",
-      priority: "normal",
-      source: { id: "a", name: "Source A" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("normal-a:start");
-          finishFirstSearch = resolve;
-        }),
-    });
-    const secondSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search B",
-      priority: "normal",
-      source: { id: "b", name: "Source B" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("normal-b:start");
-          finishSecondSearch = resolve;
-        }),
-    });
-
-    await settle();
-
-    const interactive = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Open novel",
-      priority: "interactive",
-      source: { id: "ui", name: "UI Source" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("interactive:start");
-          finishInteractive = resolve;
-        }),
-    });
-
-    await settle();
-    expect(order).toEqual([
-      "normal-a:start",
-      "normal-b:start",
-      "interactive:start",
-    ]);
-
-    const blockedSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search C",
-      priority: "normal",
-      source: { id: "c", name: "Source C" },
-      run: async () => {
-        order.push("normal-c:start");
-      },
-    });
-
-    await settle();
-    expect(order).toEqual([
-      "normal-a:start",
-      "normal-b:start",
-      "interactive:start",
-    ]);
-
-    finishInteractive();
-    await interactive.promise;
-    await settle();
-    expect(order).toEqual([
-      "normal-a:start",
-      "normal-b:start",
-      "interactive:start",
-    ]);
-
-    finishFirstSearch();
-    await Promise.all([firstSearch.promise, blockedSearch.promise]);
-    finishSecondSearch();
-    await secondSearch.promise;
-
-    expect(order).toEqual([
-      "normal-a:start",
-      "normal-b:start",
-      "interactive:start",
-      "normal-c:start",
-    ]);
-  });
-
-  it("boosts interactive work past lower-priority same-source work", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishSearch!: () => void;
-
-    const search = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search",
-      priority: "normal",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("search:start");
-          finishSearch = resolve;
-        }),
-    });
-
-    await settle();
-
-    const openNovel = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Open novel",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("open:start");
-      },
-    });
-
-    await openNovel.promise;
-    await settle();
-
-    expect(order).toEqual(["search:start", "open:start"]);
-    expect(cancelAndroidScraperBackground).toHaveBeenCalledWith(
-      "scraper: interrupted by higher-priority source task",
-    );
-
-    finishSearch();
-    await search.promise;
-  });
-
-  it("does not preempt native scraper while higher-priority source work is running", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishInteractive!: () => void;
-
-    const interactive = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Open novel",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("interactive:start");
-          finishInteractive = resolve;
-        }),
-    });
-
-    await settle();
-
-    const userDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download chapter",
-      priority: "user",
-      source: { id: "other", name: "Other" },
-      run: async () => {
-        order.push("user:start");
-      },
-    });
-
-    await userDownload.promise;
-    await settle();
-
-    expect(order).toEqual(["interactive:start", "user:start"]);
-    expect(cancelAndroidScraperBackground).not.toHaveBeenCalled();
-
-    finishInteractive();
-    await interactive.promise;
-  });
-
-  it("uses priority boost slots for user priority work", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishActive!: () => void;
-
-    const active = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search",
-      priority: "normal",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("normal:start");
-          finishActive = resolve;
-        }),
-    });
-
-    await settle();
-
-    const userDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download chapter",
-      priority: "user",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("user:start");
-      },
-    });
-
-    await userDownload.promise;
-    await settle();
-    expect(order).toEqual(["normal:start", "user:start"]);
-
-    finishActive();
-    await active.promise;
-  });
-
-  it("orders queued source work by the full priority hierarchy", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishActiveSearch!: () => void;
-
-    const activeSearch = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Active open novel",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("active:start");
-          finishActiveSearch = resolve;
-        }),
-    });
-
-    await settle();
-
-    const queuedBackground = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Batch download",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("background:start");
-      },
-    });
-    const queuedDeferred = scheduler.enqueueSource({
-      kind: "source.refreshNovel",
-      title: "Refresh metadata",
-      priority: "deferred",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("deferred:start");
-      },
-    });
-    const queuedNormal = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Queued global search",
-      priority: "normal",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("normal:start");
-      },
-    });
-    const queuedUser = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "User download",
-      priority: "user",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("user:start");
-      },
-    });
-    const queuedInteractive = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Open novel",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("interactive:start");
-      },
-    });
-
-    await settle();
-    expect(order).toEqual(["active:start"]);
-
-    finishActiveSearch();
-    await Promise.all([
-      activeSearch.promise,
-      queuedInteractive.promise,
-      queuedUser.promise,
-      queuedNormal.promise,
-      queuedDeferred.promise,
-      queuedBackground.promise,
-    ]);
-
-    expect(order).toEqual([
-      "active:start",
-      "interactive:start",
-      "user:start",
-      "normal:start",
-      "deferred:start",
-      "background:start",
-    ]);
-  });
-
-  it("delays source tasks with a matching source cooldown", async () => {
+  it("delays tasks with a matching source cooldown", async () => {
     vi.useFakeTimers();
     try {
       const scheduler = new TaskScheduler({
-        sourceBackgroundConcurrency: 1,
-        sourceQueuesPaused: false,
-      });
-      const order: string[] = [];
-      const cooldownKey = "chapter.download:p";
-
-      const firstDownload = scheduler.enqueueSource({
-        kind: "chapter.download",
-        title: "Download 1",
-        priority: "background",
-        source: { id: "p", name: "Plugin" },
-        sourceCooldownKey: cooldownKey,
-        sourceCooldownMs: 1_000,
-        run: async () => {
-          order.push("download-1:start");
-        },
-      });
-      await firstDownload.promise;
-
-      const secondDownload = scheduler.enqueueSource({
-        kind: "chapter.download",
-        title: "Download 2",
-        priority: "background",
-        source: { id: "p", name: "Plugin" },
-        sourceCooldownKey: cooldownKey,
-        sourceCooldownMs: 1_000,
-        run: async () => {
-          order.push("download-2:start");
-        },
-      });
-
-      await settle();
-      expect(order).toEqual(["download-1:start"]);
-
-      vi.advanceTimersByTime(999);
-      await settle();
-      expect(order).toEqual(["download-1:start"]);
-
-      vi.advanceTimersByTime(1);
-      await secondDownload.promise;
-
-      expect(order).toEqual(["download-1:start", "download-2:start"]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("lets interactive same-source work bypass cooled background downloads", async () => {
-    vi.useFakeTimers();
-    try {
-      const scheduler = new TaskScheduler({
-        sourceBackgroundConcurrency: 1,
         sourceForegroundConcurrency: 1,
         sourceQueuesPaused: false,
       });
       const order: string[] = [];
-      const cooldownKey = "chapter.download:p";
+      const cooldownKey = "source:p";
 
-      const firstDownload = scheduler.enqueueSource({
+      const first = scheduler.enqueueSource({
         kind: "chapter.download",
-        title: "Download 1",
+        title: "First",
         priority: "background",
         source: { id: "p", name: "Plugin" },
         sourceCooldownKey: cooldownKey,
         sourceCooldownMs: 1_000,
         run: async () => {
-          order.push("download-1:start");
+          order.push("first:start");
         },
       });
-      await firstDownload.promise;
+      await first.promise;
 
-      const secondDownload = scheduler.enqueueSource({
-        kind: "chapter.download",
-        title: "Download 2",
-        priority: "background",
+      const second = scheduler.enqueueSource({
+        kind: "source.globalSearch",
+        title: "Second",
+        priority: "user",
         source: { id: "p", name: "Plugin" },
         sourceCooldownKey: cooldownKey,
-        sourceCooldownMs: 1_000,
         run: async () => {
-          order.push("download-2:start");
-        },
-      });
-      const interactive = scheduler.enqueueSource({
-        kind: "source.openNovel",
-        title: "Open novel",
-        priority: "interactive",
-        source: { id: "p", name: "Plugin" },
-        run: async () => {
-          order.push("interactive:start");
+          order.push("second:start");
         },
       });
 
-      await interactive.promise;
       await settle();
+      expect(order).toEqual(["first:start"]);
 
-      expect(order).toEqual(["download-1:start", "interactive:start"]);
+      vi.advanceTimersByTime(999);
+      await settle();
+      expect(order).toEqual(["first:start"]);
 
-      vi.advanceTimersByTime(1_000);
-      await secondDownload.promise;
+      vi.advanceTimersByTime(1);
+      await second.promise;
 
-      expect(order).toEqual([
-        "download-1:start",
-        "interactive:start",
-        "download-2:start",
-      ]);
+      expect(order).toEqual(["first:start", "second:start"]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("uses priority boost slots for exclusive source work", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 2,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishFirstSearch!: () => void;
-    let finishSecondSearch!: () => void;
-    let closeSite!: () => void;
-
-    const firstSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search A",
-      priority: "normal",
-      source: { id: "a", name: "Source A" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("normal-a:start");
-          finishFirstSearch = resolve;
-        }),
-    });
-    const secondSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search B",
-      priority: "normal",
-      source: { id: "b", name: "Source B" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("normal-b:start");
-          finishSecondSearch = resolve;
-        }),
-    });
-
-    await settle();
-
-    const site = scheduler.enqueueSource({
-      kind: "source.openSite",
-      title: "Open site",
-      priority: "interactive",
-      exclusive: true,
-      source: { id: "site", name: "Site Source" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("site:start");
-          closeSite = resolve;
-        }),
-    });
-    const blockedSearch = scheduler.enqueueSource({
-      kind: "source.globalSearch",
-      title: "Global search C",
-      priority: "normal",
-      source: { id: "c", name: "Source C" },
-      run: async () => {
-        order.push("normal-c:start");
-      },
-    });
-
-    await settle();
-    expect(order).toEqual(["normal-a:start", "normal-b:start", "site:start"]);
-
-    closeSite();
-    await site.promise;
-    await settle();
-    expect(order).toEqual(["normal-a:start", "normal-b:start", "site:start"]);
-
-    finishFirstSearch();
-    await firstSearch.promise;
-    await settle();
-    expect(order).toEqual([
-      "normal-a:start",
-      "normal-b:start",
-      "site:start",
-      "normal-c:start",
-    ]);
-
-    finishSecondSearch();
-    await Promise.all([secondSearch.promise, blockedSearch.promise]);
-
-    expect(order).toEqual([
-      "normal-a:start",
-      "normal-b:start",
-      "site:start",
-      "normal-c:start",
-    ]);
-  });
-
-  it("cancels queued source tasks and retries them as new work", async () => {
+  it("does not reuse a cancelled running executor until the work settles", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 1,
       sourceQueuesPaused: false,
     });
     const order: string[] = [];
-    let finishActiveTask!: () => void;
+    let settleCancelled!: () => void;
 
-    const active = scheduler.enqueueSource({
+    const cancelled = scheduler.enqueueSource({
       kind: "source.search",
-      title: "Active search",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("active:start");
-          finishActiveTask = resolve;
-        }),
-    });
-    const queued = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Queued search",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("queued:start");
-      },
-    });
-
-    await settle();
-    expect(scheduler.cancel(queued.id)).toBe(true);
-    await expect(queued.promise).rejects.toThrow("Task was cancelled.");
-    expect(scheduler.getTask(queued.id)?.canRetry).toBe(true);
-
-    const retry = scheduler.retry(queued.id);
-    expect(retry).not.toBeNull();
-    expect(retry?.id).not.toBe(queued.id);
-
-    await settle();
-    expect(order).toEqual(["active:start"]);
-
-    finishActiveTask();
-    await Promise.all([active.promise, retry!.promise]);
-
-    expect(order).toEqual(["active:start", "queued:start"]);
-  });
-
-  it("cancels running tasks and keeps them cancelled after work settles", async () => {
-    const scheduler = new TaskScheduler({ sourceQueuesPaused: false });
-    const order: string[] = [];
-    let finishRunningTask!: () => void;
-
-    const running = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Running source task",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("running:start");
-          finishRunningTask = resolve;
-        }),
-    });
-
-    await settle();
-
-    expect(scheduler.getTask(running.id)?.canCancel).toBe(true);
-    expect(scheduler.cancel(running.id)).toBe(true);
-    await expect(running.promise).rejects.toThrow("Task was cancelled.");
-    expect(scheduler.getTask(running.id)?.status).toBe("cancelled");
-    expect(scheduler.getTask(running.id)?.canRetry).toBe(true);
-
-    finishRunningTask();
-    await settle();
-
-    expect(order).toEqual(["running:start"]);
-    expect(scheduler.getTask(running.id)?.status).toBe("cancelled");
-  });
-
-  it("cancels all active tasks in one request", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-
-    const main = scheduler.enqueueMain({
-      kind: "backup.export",
-      title: "Active main task",
-      run: () =>
-        new Promise<void>(() => {
-          order.push("main:start");
-        }),
-    });
-    const queuedMain = scheduler.enqueueMain({
-      kind: "library.refreshMetadata",
-      title: "Queued main task",
-      run: async () => {
-        order.push("queued-main:start");
-      },
-    });
-    const source = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Running source task",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>(() => {
-          order.push("source:start");
-        }),
-    });
-
-    await settle();
-
-    expect(order).toEqual(["main:start", "source:start"]);
-    expect(scheduler.cancelActiveTasks()).toBe(3);
-
-    const results = await Promise.allSettled([
-      main.promise,
-      queuedMain.promise,
-      source.promise,
-    ]);
-
-    expect(results.map((result) => result.status)).toEqual([
-      "rejected",
-      "rejected",
-      "rejected",
-    ]);
-    expect(scheduler.getTask(main.id)?.status).toBe("cancelled");
-    expect(scheduler.getTask(queuedMain.id)?.status).toBe("cancelled");
-    expect(scheduler.getTask(source.id)?.status).toBe("cancelled");
-    expect(order).toEqual(["main:start", "source:start"]);
-  });
-
-  it("cancels active tasks for one source only", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-
-    const activeSource = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Active source task",
+      title: "Cancelled",
       priority: "normal",
-      source: { id: "a", name: "Source A" },
+      source: { id: "a", name: "A" },
       run: () =>
-        new Promise<void>(() => {
-          order.push("source-a:start");
+        new Promise<void>((resolve) => {
+          order.push("cancelled:start");
+          settleCancelled = resolve;
         }),
     });
-    const queuedSource = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Queued source task",
+
+    await settle();
+    expect(scheduler.cancel(cancelled.id)).toBe(true);
+    await expect(cancelled.promise).rejects.toThrow("Task was cancelled.");
+
+    const next = scheduler.enqueueSource({
+      kind: "source.search",
+      title: "Next",
       priority: "normal",
-      source: { id: "a", name: "Source A" },
+      source: { id: "b", name: "B" },
       run: async () => {
-        order.push("source-a-queued:start");
+        order.push("next:start");
       },
     });
-    const otherSource = scheduler.enqueueSource({
+
+    await settle();
+    expect(order).toEqual(["cancelled:start"]);
+
+    settleCancelled();
+    await next.promise;
+
+    expect(order).toEqual(["cancelled:start", "next:start"]);
+  });
+
+  it("passes the assigned scraper executor through the task context", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    let executor: TaskRunContext["executor"];
+
+    const task = scheduler.enqueueSource({
       kind: "source.search",
-      title: "Other source task",
+      title: "Search",
       priority: "normal",
-      source: { id: "b", name: "Source B" },
-      run: async () => {
-        order.push("source-b:start");
-      },
-    });
-
-    await settle();
-
-    expect(order).toEqual(["source-a:start"]);
-    expect(scheduler.cancelActiveTasks({ sourceId: "a" })).toBe(2);
-
-    const cancelled = await Promise.allSettled([
-      activeSource.promise,
-      queuedSource.promise,
-    ]);
-    await otherSource.promise;
-
-    expect(cancelled.map((result) => result.status)).toEqual([
-      "rejected",
-      "rejected",
-    ]);
-    expect(scheduler.getTask(activeSource.id)?.status).toBe("cancelled");
-    expect(scheduler.getTask(queuedSource.id)?.status).toBe("cancelled");
-    expect(scheduler.getTask(otherSource.id)?.status).toBe("succeeded");
-    expect(order).toEqual(["source-a:start", "source-b:start"]);
-  });
-
-  it("runs the latest open site task while all source queues are paused", async () => {
-    const scheduler = new TaskScheduler({ sourceQueuesPaused: true });
-    const order: string[] = [];
-
-    const first = scheduler.enqueueSource({
-      kind: "source.openSite",
-      title: "Open first site",
-      priority: "interactive",
-      exclusive: true,
-      source: { id: "a", name: "Source A" },
-      dedupeKey: "source.openSite:a:https://a.test",
-      subject: { url: "https://a.test" },
-      run: () =>
-        new Promise<void>(() => {
-          order.push("site-1:start");
-        }),
-    });
-    const second = scheduler.enqueueSource({
-      kind: "source.openSite",
-      title: "Open second site",
-      priority: "interactive",
-      exclusive: true,
-      source: { id: "b", name: "Source B" },
-      dedupeKey: "source.openSite:b:https://b.test",
-      subject: { url: "https://b.test" },
-      run: async () => {
-        order.push("site-2:start");
-      },
-    });
-
-    await expect(first.promise).rejects.toThrow("Task was cancelled.");
-    await second.promise;
-
-    expect(first.id).not.toBe(second.id);
-    expect(scheduler.getTask(first.id)?.status).toBe("cancelled");
-    expect(order).toEqual(["site-1:start", "site-2:start"]);
-  });
-
-  it("replaces a running open site task with the latest request", async () => {
-    const scheduler = new TaskScheduler({ sourceQueuesPaused: false });
-    const order: string[] = [];
-    let closeSecondSite!: () => void;
-
-    const first = scheduler.enqueueSource({
-      kind: "source.openSite",
-      title: "Open first site",
-      priority: "interactive",
-      exclusive: true,
-      source: { id: "a", name: "Source A" },
-      dedupeKey: "source.openSite:a:https://same.test",
-      subject: { url: "https://same.test" },
-      run: () =>
-        new Promise<void>(() => {
-          order.push("site-1:start");
-        }),
-    });
-
-    await settle();
-
-    const second = scheduler.enqueueSource({
-      kind: "source.openSite",
-      title: "Open second site",
-      priority: "interactive",
-      exclusive: true,
-      source: { id: "a", name: "Source A" },
-      dedupeKey: "source.openSite:a:https://same.test",
-      subject: { url: "https://same.test" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("site-2:start");
-          closeSecondSite = resolve;
-        }),
-    });
-
-    expect(second.id).not.toBe(first.id);
-    await expect(first.promise).rejects.toThrow("Task was cancelled.");
-    await settle();
-
-    expect(order).toEqual(["site-1:start", "site-2:start"]);
-    expect(scheduler.getTask(first.id)?.status).toBe("cancelled");
-    expect(scheduler.getTask(second.id)?.status).toBe("running");
-
-    closeSecondSite();
-    await second.promise;
-  });
-
-  it("starts with source queues running by default", async () => {
-    const scheduler = new TaskScheduler();
-    const order: string[] = [];
-
-    const main = scheduler.enqueueMain({
-      kind: "backup.export",
-      title: "Export backup",
-      run: async () => {
-        order.push("main:start");
-      },
-    });
-    const source = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Search source",
-      priority: "interactive",
       source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("source:start");
+      run: async (context) => {
+        executor = context.executor;
       },
     });
 
-    await main.promise;
-    await source.promise;
+    await task.promise;
 
-    expect(order).toEqual(["main:start", "source:start"]);
-    expect(scheduler.getSnapshot().sourceQueuesPaused).toBe(false);
-  });
-
-  it("lets only interactive source tasks run while all source queues are paused", async () => {
-    const scheduler = new TaskScheduler({
-      sourceBackgroundConcurrency: 1,
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-
-    expect(scheduler.pauseSourceQueue()).toBe(true);
-    const download = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Paused download",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      run: async () => {
-        order.push("download:start");
-      },
-    });
-    const userDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "User download",
-      priority: "user",
-      source: { id: "q", name: "Other Plugin" },
-      run: async () => {
-        order.push("user:start");
-      },
-    });
-    const openNovel = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Open novel",
-      priority: "interactive",
-      source: { id: "r", name: "Reader Plugin" },
-      run: async () => {
-        order.push("open:start");
-      },
-    });
-
-    await openNovel.promise;
-    await settle();
-
-    expect(order).toEqual(["open:start"]);
-    expect(scheduler.getTask(download.id)?.status).toBe("queued");
-    expect(scheduler.getTask(userDownload.id)?.status).toBe("queued");
-
-    expect(scheduler.resumeSourceQueue()).toBe(true);
-    await Promise.all([userDownload.promise, download.promise]);
-
-    expect(order).toEqual(["open:start", "user:start", "download:start"]);
-  });
-
-  it("pauses and resumes one source queue without pausing other sources", async () => {
-    const scheduler = new TaskScheduler({
-      sourceBackgroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishOtherDownload!: () => void;
-
-    expect(scheduler.pauseSourceQueue("a")).toBe(true);
-    const pausedSourceDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download paused source",
-      priority: "background",
-      source: { id: "a", name: "Source A" },
-      run: async () => {
-        order.push("download-a:start");
-      },
-    });
-    const otherSourceDownload = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download other source",
-      priority: "background",
-      source: { id: "b", name: "Source B" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("download-b:start");
-          finishOtherDownload = resolve;
-        }),
-    });
-
-    await settle();
-
-    expect(order).toEqual(["download-b:start"]);
-    expect(scheduler.getTask(pausedSourceDownload.id)?.status).toBe("queued");
-    expect(scheduler.getSnapshot().pausedSourceIds).toEqual(["a"]);
-
-    finishOtherDownload();
-    await otherSourceDownload.promise;
-    await settle();
-    expect(order).toEqual(["download-b:start"]);
-
-    expect(scheduler.resumeSourceQueue("a")).toBe(true);
-    await pausedSourceDownload.promise;
-
-    expect(order).toEqual(["download-b:start", "download-a:start"]);
-    expect(scheduler.getSnapshot().pausedSourceIds).toEqual([]);
-  });
-
-  it("lets interactive same-source work bypass a paused source queue", async () => {
-    const scheduler = new TaskScheduler({
-      sourceBackgroundConcurrency: 1,
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-
-    expect(scheduler.pauseSourceQueue("a")).toBe(true);
-    const download = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Paused download",
-      priority: "background",
-      source: { id: "a", name: "Source A" },
-      run: async () => {
-        order.push("download:start");
-      },
-    });
-    const openNovel = scheduler.enqueueSource({
-      kind: "source.openNovel",
-      title: "Open novel",
-      priority: "interactive",
-      source: { id: "a", name: "Source A" },
-      run: async () => {
-        order.push("open:start");
-      },
-    });
-
-    await openNovel.promise;
-    await settle();
-
-    expect(order).toEqual(["open:start"]);
-    expect(scheduler.getTask(download.id)?.status).toBe("queued");
-
-    expect(scheduler.resumeSourceQueue("a")).toBe(true);
-    await download.promise;
-
-    expect(order).toEqual(["open:start", "download:start"]);
-  });
-
-  it("resumes all source queues and clears per-source pauses", async () => {
-    const scheduler = new TaskScheduler({ sourceQueuesPaused: false });
-
-    expect(scheduler.pauseSourceQueue("a")).toBe(true);
-    expect(scheduler.pauseSourceQueue()).toBe(true);
-    expect(scheduler.getSnapshot().pausedSourceIds).toEqual(["a"]);
-    expect(scheduler.getSnapshot().sourceQueuesPaused).toBe(true);
-
-    expect(scheduler.resumeSourceQueue()).toBe(true);
-
-    expect(scheduler.getSnapshot().pausedSourceIds).toEqual([]);
-    expect(scheduler.getSnapshot().sourceQueuesPaused).toBe(false);
-  });
-
-  it("deduplicates active tasks by key", async () => {
-    const scheduler = new TaskScheduler({ sourceQueuesPaused: false });
-    let finish!: () => void;
-    const first = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      dedupeKey: "chapter.download:1",
-      run: () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    });
-
-    const second = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Download duplicate",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      dedupeKey: "chapter.download:1",
-      run: async () => {
-        throw new Error("duplicate should not run");
-      },
-    });
-
-    expect(second.id).toBe(first.id);
-    await settle();
-    finish();
-    await Promise.all([first.promise, second.promise]);
-  });
-
-  it("upgrades queued deduplicated work to the higher requested priority", async () => {
-    const scheduler = new TaskScheduler({
-      sourceForegroundConcurrency: 1,
-      sourceQueuesPaused: false,
-    });
-    const order: string[] = [];
-    let finishActive!: () => void;
-
-    const active = scheduler.enqueueSource({
-      kind: "source.search",
-      title: "Active search",
-      priority: "interactive",
-      source: { id: "p", name: "Plugin" },
-      run: () =>
-        new Promise<void>((resolve) => {
-          order.push("active:start");
-          finishActive = resolve;
-        }),
-    });
-
-    await settle();
-
-    const first = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "Batch download",
-      priority: "background",
-      source: { id: "p", name: "Plugin" },
-      dedupeKey: "chapter.download:1",
-      run: async () => {
-        order.push("download:start");
-      },
-    });
-    const second = scheduler.enqueueSource({
-      kind: "chapter.download",
-      title: "User download",
-      priority: "user",
-      source: { id: "p", name: "Plugin" },
-      dedupeKey: "chapter.download:1",
-      run: async () => {
-        throw new Error("duplicate should not run");
-      },
-    });
-
-    expect(second.id).toBe(first.id);
-    expect(scheduler.getTask(first.id)?.priority).toBe("user");
-    await settle();
-    expect(order).toEqual(["active:start"]);
-
-    finishActive();
-    await Promise.all([active.promise, first.promise, second.promise]);
-
-    expect(order).toEqual(["active:start", "download:start"]);
-  });
-
-  it("removes succeeded and cancelled tasks after a short retention window", async () => {
-    vi.useFakeTimers();
-    try {
-      const scheduler = new TaskScheduler({
-        sourceQueuesPaused: false,
-        terminalTaskRetentionMs: 10,
-      });
-
-      const succeeded = scheduler.enqueueSource({
-        kind: "source.search",
-        title: "Finished task",
-        priority: "interactive",
-        source: { id: "p", name: "Plugin" },
-        run: async () => undefined,
-      });
-      const cancelled = scheduler.enqueueSource({
-        kind: "source.search",
-        title: "Cancelled task",
-        priority: "interactive",
-        source: { id: "q", name: "Other Plugin" },
-        run: async () => undefined,
-      });
-      const failed = scheduler.enqueueSource({
-        kind: "source.search",
-        title: "Failed task",
-        priority: "interactive",
-        source: { id: "r", name: "Failed Plugin" },
-        run: async () => {
-          throw new Error("failed");
-        },
-      });
-
-      expect(scheduler.cancel(cancelled.id)).toBe(true);
-      await expect(cancelled.promise).rejects.toThrow("Task was cancelled.");
-      await Promise.allSettled([succeeded.promise, failed.promise]);
-
-      expect(scheduler.getTask(succeeded.id)?.status).toBe("succeeded");
-      expect(scheduler.getTask(cancelled.id)?.status).toBe("cancelled");
-      expect(scheduler.getTask(failed.id)?.status).toBe("failed");
-
-      vi.advanceTimersByTime(10);
-
-      expect(scheduler.getTask(succeeded.id)).toBeUndefined();
-      expect(scheduler.getTask(cancelled.id)).toBeUndefined();
-      expect(scheduler.getTask(failed.id)?.status).toBe("failed");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(executor).toBe("pool:0");
   });
 });

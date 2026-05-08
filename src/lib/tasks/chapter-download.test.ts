@@ -7,6 +7,7 @@ const schedulerMocks = vi.hoisted(() => ({
 
 const pluginMocks = vi.hoisted(() => ({
   getPlugin: vi.fn(),
+  getPluginForExecutor: vi.fn(),
   loadInstalledFromDb: vi.fn(),
   parseChapter: vi.fn(),
 }));
@@ -28,6 +29,7 @@ vi.mock("../chapter-media", () => ({
 vi.mock("../plugins/manager", () => ({
   pluginManager: {
     getPlugin: pluginMocks.getPlugin,
+    getPluginForExecutor: pluginMocks.getPluginForExecutor,
     loadInstalledFromDb: pluginMocks.loadInstalledFromDb,
   },
 }));
@@ -61,12 +63,14 @@ beforeEach(() => {
       return { id: "task-1", promise: new Promise<void>(() => {}) };
     },
   );
-  pluginMocks.getPlugin.mockReturnValue({
+  const plugin = {
     id: "source-a",
     name: "Source A",
     site: "https://source.test",
     parseChapter: pluginMocks.parseChapter,
-  });
+  };
+  pluginMocks.getPlugin.mockReturnValue(plugin);
+  pluginMocks.getPluginForExecutor.mockReturnValue(plugin);
   pluginMocks.parseChapter.mockResolvedValue(`plain <chapter>`);
   vi.mocked(getChapterById).mockResolvedValue(null);
 });

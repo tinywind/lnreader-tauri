@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
+import { invoke } from "@tauri-apps/api/core";
 import {
   FilterTypes,
   bytesToUtf8,
@@ -9,6 +15,43 @@ import {
   utf8ToBytes,
 } from "./shims";
 import { NovelStatus } from "./types";
+import { useBrowseStore } from "../../store/browse";
+
+const invokeMock = vi.mocked(invoke);
+
+function installMemoryStorage(): void {
+  const values = new Map<string, string>();
+  const storage = {
+    get length() {
+      return values.size;
+    },
+    key(index: number) {
+      return [...values.keys()][index] ?? null;
+    },
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value);
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    },
+    clear() {
+      values.clear();
+    },
+  } as Storage;
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+}
+
+beforeEach(() => {
+  installMemoryStorage();
+  invokeMock.mockReset();
+  useBrowseStore.setState({ sourceRequestTimeoutSeconds: 30 });
+});
 
 describe("FilterTypes", () => {
   it("matches the upstream string discriminators", () => {
@@ -107,6 +150,26 @@ describe("createShimResolver", () => {
     expect(typeof lib.fetchApi).toBe("function");
     expect(typeof lib.fetchText).toBe("function");
     expect(typeof lib.fetchProto).toBe("function");
+  });
+
+  it("@libs/webView uses the configured source request timeout by default", async () => {
+    invokeMock.mockResolvedValueOnce("html");
+    useBrowseStore.setState({ sourceRequestTimeoutSeconds: 45 });
+    const lib = resolve("@libs/webView") as {
+      webViewFetch: (url: string) => Promise<string>;
+    };
+
+    await expect(lib.webViewFetch("https://source.test/page")).resolves.toBe(
+      "html",
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith("webview_extract", {
+      url: "https://source.test/page",
+      beforeScript: null,
+      timeoutMs: 45_000,
+      userAgent: globalThis.navigator?.userAgent ?? null,
+      queue: "immediate",
+    });
   });
 
   it("@libs/pluginInputs reads app-managed plugin input values", () => {

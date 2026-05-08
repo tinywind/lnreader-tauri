@@ -125,7 +125,11 @@ describe("PluginManager.installPlugin", () => {
     expect(manager.has("demo")).toBe(true);
     expect(manager.size()).toBe(1);
     expect(manager.getPlugin("demo")).toBe(plugin);
-    expect(mockedCreateFetchShim).toHaveBeenCalledWith(VALID_ITEM.site);
+    expect(mockedCreateFetchShim).toHaveBeenCalledWith(
+      VALID_ITEM.site,
+      VALID_ITEM.id,
+      "immediate",
+    );
   });
 
   it("throws PluginValidationError when ids don't match", async () => {
@@ -155,8 +159,8 @@ describe("PluginManager.installPluginFromSource", () => {
     expect(manager.size()).toBe(1);
     expect(manager.getPlugin("demo")).toBe(plugin);
     expect(mockedCreateFetchShim.mock.calls).toEqual([
-      [],
-      [VALID_ITEM.site],
+      [undefined, undefined, "immediate"],
+      [VALID_ITEM.site, VALID_ITEM.id, "immediate"],
     ]);
   });
 

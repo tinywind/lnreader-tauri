@@ -3,14 +3,20 @@ import { load } from "cheerio";
 import dayjs from "dayjs";
 import { Parser } from "htmlparser2";
 import { androidWebviewExtract } from "../android-scraper";
+import { getSourceRequestTimeoutMs } from "../../store/browse";
 import {
   createPluginFetch,
   createPluginFetchText,
   pluginFetch,
   pluginFetchText,
+  type HttpInit,
 } from "../http";
 import { isAndroidRuntime } from "../tauri-runtime";
 import { getScraperUserAgent } from "../../store/user-agent";
+import {
+  activeScraperExecutor,
+  type ScraperExecutorId,
+} from "../tasks/scraper-queue";
 import {
   createPluginInputsApi,
   deletePluginInputValue,
@@ -27,6 +33,8 @@ interface WebViewFetchOptions {
   /** Overrides the scraper WebView User-Agent for this request. */
   userAgent?: string;
   timeoutMs?: number;
+  scraperExecutor?: ScraperExecutorId;
+  sourceId?: string;
 }
 
 /**
@@ -44,21 +52,38 @@ async function webViewFetch(
   options: WebViewFetchOptions = {},
 ): Promise<string> {
   const userAgent = options.userAgent?.trim() || getScraperUserAgent();
+  const scraperExecutor =
+    options.scraperExecutor ?? activeScraperExecutor(options.sourceId);
+  const timeoutMs = options.timeoutMs ?? getSourceRequestTimeoutMs();
   if (isAndroidRuntime()) {
     return androidWebviewExtract(
       url,
       options.beforeContentScript ?? null,
-      options.timeoutMs ?? 30_000,
+      timeoutMs,
       userAgent,
+      scraperExecutor,
     );
   }
 
   return invoke<string>("webview_extract", {
     url,
     beforeScript: options.beforeContentScript ?? null,
-    timeoutMs: options.timeoutMs ?? 30_000,
+    timeoutMs,
     userAgent,
+    queue: scraperExecutor,
   });
+}
+
+function createWebViewFetch(
+  sourceId: string,
+  scraperExecutor: ScraperExecutorId,
+): typeof webViewFetch {
+  return (url: string, options: WebViewFetchOptions = {}) =>
+    webViewFetch(url, {
+      ...options,
+      scraperExecutor: options.scraperExecutor ?? scraperExecutor,
+      sourceId: options.sourceId ?? sourceId,
+    });
 }
 
 /**
@@ -293,15 +318,28 @@ function makeNamespacedStorage(
 export function createShimResolver(
   pluginId: string,
   siteUrl?: string,
+  scraperExecutor: ScraperExecutorId = "immediate",
 ): (id: string) => unknown {
   const prefix = getPluginInputPrefix(pluginId);
   const storage = makeNamespacedStorage(prefix, true);
   const sessionStg = makeNamespacedStorage(prefix, false);
   const pluginInputs = createPluginInputsApi(pluginId);
-  const fetchApi = siteUrl ? createPluginFetch(siteUrl) : pluginFetch;
+  const fetchApi = siteUrl
+    ? createPluginFetch(siteUrl, pluginId, scraperExecutor)
+    : (url: string, init: HttpInit = {}) =>
+        pluginFetch(url, {
+          ...init,
+          scraperExecutor: init.scraperExecutor ?? scraperExecutor,
+          sourceId: init.sourceId ?? pluginId,
+        });
   const fetchText = siteUrl
-    ? createPluginFetchText(siteUrl)
-    : pluginFetchText;
+    ? createPluginFetchText(siteUrl, pluginId, scraperExecutor)
+    : (url: string, init: HttpInit = {}) =>
+        pluginFetchText(url, {
+          ...init,
+          scraperExecutor: init.scraperExecutor ?? scraperExecutor,
+          sourceId: init.sourceId ?? pluginId,
+        });
 
   return (id) => {
     switch (id) {
@@ -350,7 +388,7 @@ export function createShimResolver(
           pluginInputs,
         };
       case "@libs/webView":
-        return { webViewFetch };
+        return { webViewFetch: createWebViewFetch(pluginId, scraperExecutor) };
       default:
         throw new Error(
           `Module '${id}' is not whitelisted in the plugin sandbox.`,

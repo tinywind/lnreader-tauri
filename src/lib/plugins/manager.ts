@@ -7,6 +7,7 @@ import {
   appFetchText,
   createPluginFetchShim,
 } from "../http";
+import type { ScraperExecutorId } from "../tasks/scraper-queue";
 import { clearPluginInputValues } from "./inputs";
 import { loadPlugin } from "./sandbox";
 import { createShimResolver } from "./shims";
@@ -123,6 +124,18 @@ function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
   return plugin;
 }
 
+function pluginItemFromPlugin(plugin: Plugin, sourceUrl: string): PluginItem {
+  return {
+    id: plugin.id,
+    name: plugin.name,
+    site: plugin.site,
+    lang: plugin.lang,
+    version: plugin.version,
+    iconUrl: plugin.iconUrl,
+    url: sourceUrl,
+  };
+}
+
 /**
  * Manages installed plugins for the running session.
  *
@@ -132,6 +145,11 @@ function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
  */
 export class PluginManager {
   private readonly installed = new Map<string, Plugin>();
+  private readonly installedSources = new Map<
+    string,
+    { item: PluginItem; source: string }
+  >();
+  private readonly executorRuntimes = new Map<string, Plugin>();
   private installedLoadPromise: Promise<void> | null = null;
 
   /**
@@ -169,8 +187,12 @@ export class PluginManager {
     const source = await appFetchText(item.url);
     const plugin = withPluginMetadata(
       loadPlugin(source, {
-        resolveRequire: createShimResolver(item.id, item.site),
-        fetch: createPluginFetchShim(item.site),
+        resolveRequire: createShimResolver(
+          item.id,
+          item.site,
+          "immediate",
+        ),
+        fetch: createPluginFetchShim(item.site, item.id, "immediate"),
       }),
       item,
     );
@@ -195,15 +217,27 @@ export class PluginManager {
   ): Promise<Plugin> {
     const item = pluginItemFromLocalSource(
       loadPlugin(source, {
-        resolveRequire: createShimResolver(sourceUrl),
-        fetch: createPluginFetchShim(),
+        resolveRequire: createShimResolver(
+          sourceUrl,
+          undefined,
+          "immediate",
+        ),
+        fetch: createPluginFetchShim(
+          undefined,
+          undefined,
+          "immediate",
+        ),
       }),
       sourceUrl,
     );
     const plugin = withPluginMetadata(
       loadPlugin(source, {
-        resolveRequire: createShimResolver(item.id, item.site),
-        fetch: createPluginFetchShim(item.site),
+        resolveRequire: createShimResolver(
+          item.id,
+          item.site,
+          "immediate",
+        ),
+        fetch: createPluginFetchShim(item.site, item.id, "immediate"),
       }),
       item,
     );
@@ -218,6 +252,11 @@ export class PluginManager {
     source: string,
   ): Promise<void> {
     this.installed.set(plugin.id, plugin);
+    this.installedSources.set(plugin.id, {
+      item: pluginItemFromPlugin(plugin, sourceUrl),
+      source,
+    });
+    this.clearExecutorRuntimes(plugin.id);
     // Some plugin sources (e.g. Komga) only set `id`/`name`/
     // `version`/`site` on the loaded instance and rely on the
     // repository index for `lang`/`iconUrl`. Fall back to the
@@ -256,6 +295,8 @@ export class PluginManager {
   async reloadInstalledFromDb(): Promise<void> {
     this.installedLoadPromise = null;
     this.installed.clear();
+    this.installedSources.clear();
+    this.executorRuntimes.clear();
     await this.loadInstalledFromDb();
   }
 
@@ -265,8 +306,12 @@ export class PluginManager {
       try {
         const plugin = withPluginMetadata(
           loadPlugin(row.sourceCode, {
-            resolveRequire: createShimResolver(row.id, row.site),
-            fetch: createPluginFetchShim(row.site),
+            resolveRequire: createShimResolver(
+              row.id,
+              row.site,
+              "immediate",
+            ),
+            fetch: createPluginFetchShim(row.site, row.id, "immediate"),
           }),
           {
             id: row.id,
@@ -280,6 +325,18 @@ export class PluginManager {
         );
         assertPluginContract(plugin, row.sourceUrl);
         this.installed.set(plugin.id, plugin);
+        this.installedSources.set(plugin.id, {
+          item: {
+            id: row.id,
+            name: row.name,
+            site: row.site,
+            lang: row.lang,
+            version: row.version,
+            iconUrl: row.iconUrl,
+            url: row.sourceUrl,
+          },
+          source: row.sourceCode,
+        });
       } catch (error) {
         // eslint-disable-next-line no-console
         console.warn(
@@ -294,9 +351,45 @@ export class PluginManager {
     return this.installed.get(id);
   }
 
+  getPluginForExecutor(id: string, executor: ScraperExecutorId): Plugin {
+    const base = this.installed.get(id);
+    if (!base) {
+      throw new PluginValidationError(`Plugin '${id}' is not installed.`);
+    }
+    if (executor === "immediate") return base;
+
+    const runtimeKey = `${executor}:${id}`;
+    const cached = this.executorRuntimes.get(runtimeKey);
+    if (cached) return cached;
+
+    const installed = this.installedSources.get(id);
+    if (!installed) return base;
+
+    const plugin = withPluginMetadata(
+      loadPlugin(installed.source, {
+        resolveRequire: createShimResolver(
+          installed.item.id,
+          installed.item.site,
+          executor,
+        ),
+        fetch: createPluginFetchShim(
+          installed.item.site,
+          installed.item.id,
+          executor,
+        ),
+      }),
+      installed.item,
+    );
+    assertPluginContract(plugin, installed.item.url);
+    this.executorRuntimes.set(runtimeKey, plugin);
+    return plugin;
+  }
+
   uninstallPlugin(id: string): boolean {
     const removed = this.installed.delete(id);
     if (removed) {
+      this.installedSources.delete(id);
+      this.clearExecutorRuntimes(id);
       clearPluginInputValues(id);
       void deleteInstalledPlugin(id).catch((error: unknown) => {
         // eslint-disable-next-line no-console
@@ -319,6 +412,12 @@ export class PluginManager {
 
   size(): number {
     return this.installed.size;
+  }
+
+  private clearExecutorRuntimes(pluginId: string): void {
+    for (const key of [...this.executorRuntimes.keys()]) {
+      if (key.endsWith(`:${pluginId}`)) this.executorRuntimes.delete(key);
+    }
   }
 }
 

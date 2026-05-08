@@ -693,11 +693,8 @@ export function PluginSearchSection({
       t("tasks.task.openSite", { source: plugin.name }),
     ).promise.catch(() => undefined);
   };
-  const globalSearchConcurrency = useBrowseStore(
-    (s) => s.globalSearchConcurrency,
-  );
-  const globalSearchTimeoutSeconds = useBrowseStore(
-    (s) => s.globalSearchTimeoutSeconds,
+  const sourceWorkConcurrency = useBrowseStore(
+    (s) => s.sourceWorkConcurrency,
   );
   const setLastUsedPluginId = useBrowseStore((s) => s.setLastUsedPluginId);
   const pinnedPluginIds = useBrowseStore((s) => s.pinnedPluginIds);
@@ -947,8 +944,7 @@ export function PluginSearchSection({
     });
 
     globalSearch(pluginManager, trimmedQuery, {
-      concurrency: globalSearchConcurrency,
-      timeoutMs: globalSearchTimeoutSeconds * 1000,
+      concurrency: sourceWorkConcurrency,
       plugins: pluginsToStart,
       signal: controller.signal,
       taskTitle: (plugin) =>
@@ -997,8 +993,7 @@ export function PluginSearchSection({
     clearGlobalSearch,
     currentSearchKey,
     finishGlobalSearch,
-    globalSearchConcurrency,
-    globalSearchTimeoutSeconds,
+    sourceWorkConcurrency,
     globalSearchState,
     pluginsToSearch,
     retryPluginIdSet,
@@ -1029,7 +1024,14 @@ export function PluginSearchSection({
           title: t("tasks.task.openNovel", { name: novel.name }),
           subject: { novelName: novel.name, path: novel.path },
           dedupeKey: `source.openNovel:${plugin.id}:${novel.path}`,
-          run: () => importNovelFromSource(plugin, novel),
+          run: (context) =>
+            importNovelFromSource(
+              pluginManager.getPluginForExecutor(
+                plugin.id,
+                context.executor ?? "immediate",
+              ),
+              novel,
+            ),
         }).promise;
         await queryClient.invalidateQueries({ queryKey: ["novel"] });
         await navigate({ to: "/novel", search: { id } });

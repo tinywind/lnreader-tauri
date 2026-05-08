@@ -112,7 +112,6 @@ async function runLibraryUpdateCheck(
       reportProgress(novel.name);
       continue;
     }
-
     try {
       const handle = enqueueSourceTask({
         plugin,
@@ -125,9 +124,12 @@ async function runLibraryUpdateCheck(
           path: novel.path,
         },
         dedupeKey: `source.checkLibraryUpdates:${plugin.id}:${novel.path}`,
-        run: () =>
+        run: (context) =>
           syncNovelFromSource(
-            plugin,
+            pluginManager.getPluginForExecutor(
+              novel.pluginId,
+              context.executor ?? "immediate",
+            ),
             { name: novel.name, path: novel.path },
             { notifyUpdatesIndex: false, preserveMissingMetadata: true },
           ),

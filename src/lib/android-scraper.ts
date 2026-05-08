@@ -1,4 +1,5 @@
 import { isAndroidRuntime } from "./tauri-runtime";
+import type { ScraperExecutorId } from "./tasks/scraper-queue";
 
 interface AndroidScraperBridge {
   cancel?(payload: string): void;
@@ -133,11 +134,14 @@ function callNative<T>(
   });
 }
 
-export function cancelAndroidScraperBackground(message: string): boolean {
+export function cancelAndroidScraperExecutor(
+  message: string,
+  executor: ScraperExecutorId,
+): boolean {
   if (!isAndroidRuntime() || typeof window === "undefined") return false;
   const nativeBridge = window.__NoreaAndroidScraper;
   if (!nativeBridge?.cancelBackground) return false;
-  nativeBridge.cancelBackground(JSON.stringify({ message }));
+  nativeBridge.cancelBackground(JSON.stringify({ message, queue: executor }));
   return true;
 }
 
@@ -146,6 +150,8 @@ export function androidWebviewFetch(
   init: AndroidFetchInitWire,
   contextUrl: string | null,
   userAgent: string | null,
+  executor: ScraperExecutorId,
+  timeoutMs: number,
 ): Promise<AndroidFetchResultWire> {
   return callNative<AndroidFetchResultWire>(
     "fetch",
@@ -154,8 +160,10 @@ export function androidWebviewFetch(
       init,
       contextUrl,
       userAgent,
+      queue: executor,
+      timeoutMs,
     },
-    75_000,
+    timeoutMs + 5_000,
   );
 }
 
@@ -164,6 +172,7 @@ export function androidWebviewExtract(
   beforeScript: string | null,
   timeoutMs: number,
   userAgent: string | null,
+  executor: ScraperExecutorId,
 ): Promise<string> {
   return callNative<string>(
     "extract",
@@ -172,6 +181,7 @@ export function androidWebviewExtract(
       beforeScript,
       timeoutMs,
       userAgent,
+      queue: executor,
     },
     timeoutMs + 5_000,
   );
