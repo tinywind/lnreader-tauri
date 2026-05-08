@@ -9,6 +9,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  position: relative;
   width: 100%;
 }
 
@@ -361,11 +362,101 @@
   height: 100%;
 }
 
+.lnr-reader-settings-overlay {
+  inset: 0;
+  pointer-events: auto;
+  position: absolute;
+  z-index: 12;
+}
+
+.lnr-reader-settings-sheet {
+  background: var(--lnr-design-surface);
+  border-top: 1px solid var(--lnr-design-rule-strong);
+  bottom: 0;
+  box-shadow: 0 -0.75rem 2rem rgba(15, 23, 42, 0.18);
+  color: var(--lnr-design-ink);
+  display: flex;
+  flex-direction: column;
+  height: 50%;
+  left: 0;
+  min-height: 0;
+  overflow: hidden;
+  pointer-events: auto;
+  position: absolute;
+  right: 0;
+}
+
+.lnr-reader-settings-header {
+  align-items: center;
+  background: var(--lnr-design-panel);
+  border-bottom: 1px solid var(--lnr-design-rule);
+  display: flex;
+  flex: 0 0 2.5rem;
+  gap: 0.625rem;
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+}
+
+.lnr-reader-settings-title {
+  color: var(--lnr-design-ink);
+  flex: 1 1 auto;
+  font-family: var(--lnr-font-ui);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0;
+  min-width: 0;
+}
+
+.lnr-reader-settings-actions {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.375rem;
+}
+
+.lnr-reader-settings-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.lnr-reader-shell[data-full-page="true"] .lnr-reader-settings-sheet {
+  bottom: var(--lnr-app-bottom-inset);
+}
+
 .lnr-reader-shell[data-full-page="true"] {
   height: var(--lnr-viewport-height);
   padding: var(--lnr-safe-area-top) var(--lnr-safe-area-right)
     var(--lnr-safe-area-bottom) var(--lnr-safe-area-left);
   position: relative;
+}
+
+@media (min-width: 992px) {
+  .lnr-reader-settings-overlay {
+    bottom: auto;
+    height: 50%;
+    left: auto;
+    right: var(--lnr-safe-area-right);
+    top: calc(var(--lnr-safe-area-top) + 2.25rem);
+    width: min(100%, 34rem);
+  }
+
+  .lnr-reader-settings-sheet {
+    border-bottom: 1px solid var(--lnr-design-rule-strong);
+    border-left: 1px solid var(--lnr-design-rule-strong);
+    border-radius: 0 0 0 0.5rem;
+    bottom: auto;
+    box-shadow: var(--lnr-design-shadow-floating);
+    height: 100%;
+    left: 0;
+    right: 0;
+    top: 0;
+  }
+
+  .lnr-reader-shell[data-full-page="true"] .lnr-reader-settings-sheet {
+    bottom: auto;
+  }
 }
 
 .lnr-reader-shell[data-full-page="true"] .lnr-reader-body {

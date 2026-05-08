@@ -35,7 +35,7 @@ export function startTrayTaskProgress(
         items: payload.items,
         summary: payload.summary,
       }).catch((error) => {
-        console.info("[tray-task-progress] update failed", error);
+        console.warn("[tray-task-progress] update failed", error);
       });
     }, TRAY_UPDATE_DELAY_MS);
   };

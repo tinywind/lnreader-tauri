@@ -25,7 +25,15 @@
   width: 100%;
 }
 
+.lnr-task-overview-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+}
+
 .lnr-task-overview-action {
+  flex: 1 1 0;
+  min-width: 0;
   width: 100%;
 }
 
@@ -54,7 +62,7 @@
   border-top: 1px solid var(--lnr-design-rule);
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   padding: 0.875rem 1rem;
 }
 
@@ -109,7 +117,7 @@
 }
 
 .lnr-task-row-actions {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .lnr-task-source-group {
@@ -123,26 +131,4 @@
 
 .lnr-task-source-group > .lnr-console-section-header {
   padding: 0.875rem 1rem 0.625rem;
-}
-
-@media (max-width: 720px) {
-  .lnr-task-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .lnr-task-row-actions {
-    justify-content: flex-start;
-  }
-}
-
-@media (min-width: 1120px) {
-  .lnr-task-shell {
-    align-items: start;
-    grid-template-columns: minmax(15rem, 18.75rem) minmax(0, 1fr);
-  }
-
-  .lnr-task-overview {
-    position: sticky;
-    top: calc(var(--lnr-safe-area-top) + 1.5rem);
-  }
 }

@@ -21,7 +21,7 @@ interface SourceTaskOptions<T> {
 }
 
 function debugOpenSiteTask(message: string, data?: unknown): void {
-  console.info(`[site-browser:task] ${message}`, data);
+  console.debug(`[site-browser:task] ${message}`, data);
 }
 
 export function enqueueSourceTask<T>({

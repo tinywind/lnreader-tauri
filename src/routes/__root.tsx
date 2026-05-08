@@ -166,13 +166,13 @@ function NavIcon({ icon }: { icon: NavItem["icon"] }) {
   const common = {
     "aria-hidden": true,
     fill: "none",
-    height: 16,
+    height: 24,
     stroke: "currentColor",
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
     strokeWidth: 2,
     viewBox: "0 0 24 24",
-    width: 16,
+    width: 24,
   };
 
   switch (icon) {

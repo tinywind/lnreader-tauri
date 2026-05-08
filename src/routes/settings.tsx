@@ -15,10 +15,10 @@ import {
   Title,
   UnstyledButton,
 } from "@mantine/core";
-import { invoke } from "@tauri-apps/api/core";
+import { notifications } from "@mantine/notifications";
+import { useQueryClient } from "@tanstack/react-query";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { PageFrame, StateView } from "../components/AppFrame";
-import { BackIconButton } from "../components/BackIconButton";
+import { PageFrame } from "../components/AppFrame";
 import { BrowseSettingsPanel } from "../components/BrowseSettingsPanel";
 import { ConsoleChip } from "../components/ConsolePrimitives";
 import { LibrarySettingsPanel } from "../components/LibrarySettingsPanel";
@@ -31,19 +31,36 @@ import {
 } from "../components/SettingsPrimitives";
 import { TextButton } from "../components/TextButton";
 import {
-  clearCachedNovels,
+  clearDownloadedChapterContent,
+  clearLibraryMembership,
+  clearReadingProgress,
   clearUpdatesTab,
-  deleteReadDownloadedChapters,
 } from "../db/queries/maintenance";
 import {
   exportBackupToFile,
   importBackupFromFile,
 } from "../lib/backup/io";
+import { pluginManager } from "../lib/plugins/manager";
 import { isAndroidRuntime } from "../lib/tauri-runtime";
 import { enqueueMainTask } from "../lib/tasks/main-tasks";
 import type { MainTaskKind } from "../lib/tasks/scheduler";
+import {
+  checkDevUpdate,
+  checkOfficialUpdate,
+  getBuildInfo,
+  installUpdate,
+  type BuildInfo,
+  type UpdateCandidate,
+  type UpdateChannel,
+} from "../lib/update";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
-import { SUPPORTED_APP_LOCALES, useTranslation } from "../i18n";
+import {
+  formatDateTimeForLocale,
+  SUPPORTED_APP_LOCALES,
+  useTranslation,
+  type AppLocale,
+  type TranslationKey,
+} from "../i18n";
 import {
   DEFAULT_APPEARANCE,
   MAX_ANDROID_VIEW_SCALE_PERCENT,
@@ -54,22 +71,17 @@ import {
   normalizeAppThemeMode,
   useAppearanceStore,
 } from "../store/appearance";
-import {
-  DEFAULT_USER_AGENT,
-  useUserAgentStore,
-} from "../store/user-agent";
+import { useBrowseStore } from "../store/browse";
+import { useLibraryStore } from "../store/library";
+import { LOG_LEVELS, type LogLevel, useLoggingStore } from "../store/logging";
+import { useReaderStore } from "../store/reader";
+import { useUserAgentStore } from "../store/user-agent";
 import {
   normalizeTaskNotificationMode,
   useNotificationStore,
 } from "../store/notifications";
 import { APP_THEME_OPTIONS } from "../theme/md3";
 import "../styles/settings.css";
-
-type Status =
-  | { kind: "idle" }
-  | { kind: "busy"; message: string }
-  | { kind: "ok"; message: string }
-  | { kind: "error"; message: string };
 
 type SettingsCategoryId =
   | "app"
@@ -82,43 +94,80 @@ type SettingsCategoryId =
 interface SettingsCategory {
   content: ReactNode;
   id: SettingsCategoryId;
-  summary: string;
   title: string;
 }
 
 const LATEST_RELEASE_URL = "https://github.com/tinywind/norea/releases/latest";
-const PLUGIN_STORAGE_PREFIX = "plugin:";
+const ROOT_FONT_SIZE_PX = 16;
+const MIN_ROOT_FONT_SIZE_PX = Math.round(
+  (ROOT_FONT_SIZE_PX * MIN_FONT_SCALE_PERCENT) / 100,
+);
+const MAX_ROOT_FONT_SIZE_PX = Math.round(
+  (ROOT_FONT_SIZE_PX * MAX_FONT_SCALE_PERCENT) / 100,
+);
+const LOG_LEVEL_LABEL_KEYS: Record<LogLevel, TranslationKey> = {
+  trace: "settings.about.logLevel.trace",
+  debug: "settings.about.logLevel.debug",
+  info: "settings.about.logLevel.info",
+  warn: "settings.about.logLevel.warn",
+  error: "settings.about.logLevel.error",
+  off: "settings.about.logLevel.off",
+};
+
+const SETTINGS_TOAST_AUTO_CLOSE_MS = 5000;
+
+type SettingsToastColor = "blue" | "green" | "red";
+
+function showSettingsToast(
+  color: SettingsToastColor,
+  title: string,
+  message?: string,
+): void {
+  notifications.show({
+    color,
+    title,
+    message,
+    autoClose: SETTINGS_TOAST_AUTO_CLOSE_MS,
+  });
+}
+
+function showSettingsLoadingToast(
+  id: string,
+  title: string,
+  message: string,
+): void {
+  notifications.show({
+    id,
+    color: "blue",
+    title,
+    message,
+    loading: true,
+    autoClose: false,
+    withCloseButton: false,
+  });
+}
+
+function updateSettingsToast(
+  id: string,
+  color: Exclude<SettingsToastColor, "blue">,
+  title: string,
+  message: string,
+): void {
+  notifications.update({
+    id,
+    color,
+    title,
+    message,
+    loading: false,
+    autoClose: SETTINGS_TOAST_AUTO_CLOSE_MS,
+    withCloseButton: true,
+  });
+}
+
+type UpdateBusy = `${UpdateChannel}:check` | `${UpdateChannel}:install`;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function clearStorageByPrefix(storage: Storage, prefix: string): number {
-  const keys: string[] = [];
-  for (let i = 0; i < storage.length; i += 1) {
-    const key = storage.key(i);
-    if (key?.startsWith(prefix)) {
-      keys.push(key);
-    }
-  }
-  for (const key of keys) {
-    storage.removeItem(key);
-  }
-  return keys.length;
-}
-
-function clearAccessibleCookies(): number {
-  if (document.cookie.trim() === "") {
-    return 0;
-  }
-  const cookies = document.cookie.split(";");
-  for (const cookie of cookies) {
-    const name = cookie.split("=")[0]?.trim();
-    if (name) {
-      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
-    }
-  }
-  return cookies.length;
 }
 
 function normalizeSection(section: string | undefined): SettingsCategoryId {
@@ -139,42 +188,29 @@ function normalizeSection(section: string | undefined): SettingsCategoryId {
   }
 }
 
-function StatusBanner({ status }: { status: Status }) {
-  const { t } = useTranslation();
+function fontScalePercentToRootFontSize(fontScalePercent: number): number {
+  return Math.round((ROOT_FONT_SIZE_PX * fontScalePercent) / 100);
+}
 
-  if (status.kind === "ok") {
-    return (
-      <StateView
-        color="green"
-        title={t("settings.updatedTitle")}
-        message={status.message}
-      />
-    );
-  }
-  if (status.kind === "error") {
-    return (
-      <StateView
-        color="red"
-        title={t("settings.errorTitle")}
-        message={status.message}
-      />
-    );
-  }
-  if (status.kind === "busy") {
-    return (
-      <StateView
-        color="blue"
-        title={t("settings.workingTitle")}
-        message={status.message}
-      />
-    );
-  }
-  return null;
+function rootFontSizeToFontScalePercent(rootFontSize: unknown): number {
+  return (Number(rootFontSize) / ROOT_FONT_SIZE_PX) * 100;
+}
+
+async function rehydrateImportedSettings(): Promise<void> {
+  await Promise.all([
+    useAppearanceStore.persist.rehydrate(),
+    useBrowseStore.persist.rehydrate(),
+    useLibraryStore.persist.rehydrate(),
+    useLoggingStore.persist.rehydrate(),
+    useNotificationStore.persist.rehydrate(),
+    useReaderStore.persist.rehydrate(),
+    useUserAgentStore.persist.rehydrate(),
+  ]);
 }
 
 function AppSettingsSection() {
   const appearance = useAppearanceStore();
-  const notifications = useNotificationStore();
+  const notificationSettings = useNotificationStore();
   const { t } = useTranslation();
   const showAndroidViewScale = isAndroidRuntime();
 
@@ -182,7 +218,6 @@ function AppSettingsSection() {
     <Stack gap="md">
       <SettingsSection
         title={t("settings.app.appearance.title")}
-        summary={t("settings.app.appearance.summary")}
       >
         <SettingsFieldRow
           label={t("settings.app.themeMode.label")}
@@ -235,11 +270,13 @@ function AppSettingsSection() {
         </SettingsFieldRow>
         {showAndroidViewScale ? (
           <SettingsFieldRow
-            layout="stacked"
             label={t("settings.app.androidViewScale.label")}
             description={t("settings.app.androidViewScale.description")}
           >
-            <div className="lnr-settings-ui-scale-control">
+            <div className="lnr-settings-slider-control">
+              <Text className="lnr-settings-slider-value">
+                {appearance.androidViewScalePercent}%
+              </Text>
               <Slider
                 value={appearance.androidViewScalePercent}
                 min={MIN_ANDROID_VIEW_SCALE_PERCENT}
@@ -252,49 +289,30 @@ function AppSettingsSection() {
                 ]}
                 onChange={appearance.setAndroidViewScalePercent}
               />
-              <NumberInput
-                value={appearance.androidViewScalePercent}
-                min={MIN_ANDROID_VIEW_SCALE_PERCENT}
-                max={MAX_ANDROID_VIEW_SCALE_PERCENT}
-                step={5}
-                onChange={appearance.setAndroidViewScalePercent}
-              />
             </div>
           </SettingsFieldRow>
         ) : null}
         <SettingsFieldRow
-          layout="stacked"
           label={t("settings.app.fontScale.label")}
           description={t("settings.app.fontScale.description")}
         >
-          <div className="lnr-settings-ui-scale-control">
-            <Slider
-              value={appearance.fontScalePercent}
-              min={MIN_FONT_SCALE_PERCENT}
-              max={MAX_FONT_SCALE_PERCENT}
-              step={5}
-              label={(value) => `${value}%`}
-              marks={[
-                { value: MIN_FONT_SCALE_PERCENT, label: "75%" },
-                { value: 100, label: "100%" },
-                { value: MAX_FONT_SCALE_PERCENT, label: "150%" },
-              ]}
-              onChange={appearance.setFontScalePercent}
-            />
-            <NumberInput
-              value={appearance.fontScalePercent}
-              min={MIN_FONT_SCALE_PERCENT}
-              max={MAX_FONT_SCALE_PERCENT}
-              step={5}
-              onChange={appearance.setFontScalePercent}
-            />
-          </div>
+          <NumberInput
+            value={fontScalePercentToRootFontSize(appearance.fontScalePercent)}
+            min={MIN_ROOT_FONT_SIZE_PX}
+            max={MAX_ROOT_FONT_SIZE_PX}
+            step={1}
+            suffix="px"
+            onChange={(rootFontSize) =>
+              appearance.setFontScalePercent(
+                rootFontSizeToFontScalePercent(rootFontSize),
+              )
+            }
+          />
         </SettingsFieldRow>
       </SettingsSection>
 
       <SettingsSection
         title={t("settings.app.localization.title")}
-        summary={t("settings.app.localization.summary")}
       >
         <SettingsFieldRow
           label={t("settings.app.locale.label")}
@@ -315,7 +333,6 @@ function AppSettingsSection() {
 
       <SettingsSection
         title={t("settings.app.notifications.title")}
-        summary={t("settings.app.notifications.summary")}
       >
         <SettingsFieldRow
           label={t("settings.app.taskNotifications.label")}
@@ -336,9 +353,9 @@ function AppSettingsSection() {
                 label: t("settings.app.taskNotifications.progress"),
               },
             ]}
-            value={notifications.taskProgressMode}
+            value={notificationSettings.taskProgressMode}
             onChange={(taskProgressMode) =>
-              notifications.setTaskProgressMode(
+              notificationSettings.setTaskProgressMode(
                 normalizeTaskNotificationMode(taskProgressMode),
               )
             }
@@ -348,7 +365,6 @@ function AppSettingsSection() {
 
       <SettingsSection
         title={t("settings.app.navigation.title")}
-        summary={t("settings.app.navigation.summary")}
       >
         <SettingsFieldRow
           label={t("settings.app.historyTab.label")}
@@ -406,10 +422,11 @@ function AppSettingsSection() {
           />
         </SettingsFieldRow>
         <SettingsFieldRow
+          label={t("settings.app.reset.label")}
           description={t("settings.app.reset.description")}
         >
           <TextButton variant="default" onClick={appearance.resetAppearance}>
-            {t("settings.app.reset.button")}
+            {t("common.reset")}
           </TextButton>
         </SettingsFieldRow>
       </SettingsSection>
@@ -422,8 +439,6 @@ function DataSettingsSection({
   onExport,
   onImport,
   onRunMaintenance,
-  onClearStorage,
-  onStatusChange,
 }: {
   isBusy: boolean;
   onExport: () => void;
@@ -434,21 +449,22 @@ function DataSettingsSection({
     message: string,
     warning: string,
     action: () => Promise<{ rowsAffected: number }>,
+    successMessage: (rowsAffected: number) => string,
   ) => void;
-  onClearStorage: () => void;
-  onStatusChange: (status: Status) => void;
 }) {
   const { t } = useTranslation();
   const userAgent = useUserAgentStore((state) => state.userAgent);
   const setUserAgent = useUserAgentStore((state) => state.setUserAgent);
   const resetUserAgent = useUserAgentStore((state) => state.resetUserAgent);
+  const resetReadingProgressState = useReaderStore(
+    (state) => state.resetReadingProgress,
+  );
   const [userAgentInput, setUserAgentInput] = useState(userAgent);
 
   return (
     <Stack gap="md">
       <SettingsSection
         title={t("settings.data.backup.title")}
-        summary={t("settings.data.backup.summary")}
       >
         <SettingsFieldRow
           label={t("settings.data.backupFile.label")}
@@ -472,27 +488,55 @@ function DataSettingsSection({
 
       <SettingsSection
         title={t("settings.data.maintenance.title")}
-        summary={t("settings.data.maintenance.summary")}
       >
         <SettingsFieldRow
-          label={t("settings.data.cachedNovels.label")}
-          description={t("settings.data.cachedNovels.description")}
+          label={t("settings.data.libraryMembership.label")}
+          description={t("settings.data.libraryMembership.description")}
         >
           <TextButton
             disabled={isBusy}
             loading={isBusy}
             variant="default"
             onClick={() => {
-                onRunMaintenance(
-                  "maintenance.clearCachedNovels",
-                  t("settings.data.cachedNovels.button"),
-                  t("settings.data.cachedNovels.busy"),
-                t("settings.data.cachedNovels.warning"),
-                clearCachedNovels,
+              onRunMaintenance(
+                "maintenance.clearLibraryMembership",
+                t("settings.data.libraryMembership.button"),
+                t("settings.data.libraryMembership.busy"),
+                t("settings.data.libraryMembership.warning"),
+                clearLibraryMembership,
+                (rowsAffected) =>
+                  t("settings.data.libraryMembership.done", {
+                    count: rowsAffected,
+                  }),
               );
             }}
           >
-            {t("settings.data.cachedNovels.button")}
+            {t("common.clear")}
+          </TextButton>
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.data.downloadedContent.label")}
+          description={t("settings.data.downloadedContent.description")}
+        >
+          <TextButton
+            disabled={isBusy}
+            loading={isBusy}
+            variant="default"
+            onClick={() => {
+              onRunMaintenance(
+                "maintenance.clearDownloadedContent",
+                t("settings.data.downloadedContent.button"),
+                t("settings.data.downloadedContent.busy"),
+                t("settings.data.downloadedContent.warning"),
+                clearDownloadedChapterContent,
+                (rowsAffected) =>
+                  t("settings.data.downloadedContent.done", {
+                    count: rowsAffected,
+                  }),
+              );
+            }}
+          >
+            {t("common.clear")}
           </TextButton>
         </SettingsFieldRow>
         <SettingsFieldRow
@@ -504,52 +548,55 @@ function DataSettingsSection({
             loading={isBusy}
             variant="default"
             onClick={() => {
-                onRunMaintenance(
-                  "maintenance.clearUpdates",
-                  t("settings.data.updatesQueue.button"),
-                  t("settings.data.updatesQueue.busy"),
+              onRunMaintenance(
+                "maintenance.clearUpdates",
+                t("settings.data.updatesQueue.button"),
+                t("settings.data.updatesQueue.busy"),
                 t("settings.data.updatesQueue.warning"),
                 clearUpdatesTab,
+                (rowsAffected) =>
+                  t("settings.data.updatesQueue.done", {
+                    count: rowsAffected,
+                  }),
               );
             }}
           >
-            {t("settings.data.updatesQueue.button")}
+            {t("common.clear")}
           </TextButton>
         </SettingsFieldRow>
         <SettingsFieldRow
-          label={t("settings.data.readDownloads.label")}
-          description={t("settings.data.readDownloads.description")}
+          label={t("settings.data.readingProgress.label")}
+          description={t("settings.data.readingProgress.description")}
         >
           <TextButton
             disabled={isBusy}
             loading={isBusy}
             variant="default"
             onClick={() => {
-                onRunMaintenance(
-                  "maintenance.deleteReadDownloads",
-                  t("settings.data.readDownloads.button"),
-                  t("settings.data.readDownloads.busy"),
-                t("settings.data.readDownloads.warning"),
-                deleteReadDownloadedChapters,
+              onRunMaintenance(
+                "maintenance.clearReadingProgress",
+                t("settings.data.readingProgress.button"),
+                t("settings.data.readingProgress.busy"),
+                t("settings.data.readingProgress.warning"),
+                async () => {
+                  const result = await clearReadingProgress();
+                  resetReadingProgressState();
+                  return result;
+                },
+                (rowsAffected) =>
+                  t("settings.data.readingProgress.done", {
+                    count: rowsAffected,
+                  }),
               );
             }}
           >
-            {t("settings.data.readDownloads.button")}
-          </TextButton>
-        </SettingsFieldRow>
-        <SettingsFieldRow
-          label={t("settings.data.pluginStorage.label")}
-          description={t("settings.data.pluginStorage.description")}
-        >
-          <TextButton variant="default" onClick={onClearStorage}>
-            {t("settings.data.pluginStorage.button")}
+            {t("common.clear")}
           </TextButton>
         </SettingsFieldRow>
       </SettingsSection>
 
       <SettingsSection
         title={t("settings.data.network.title")}
-        summary={t("settings.data.network.summary")}
       >
         <SettingsFieldRow
           label={t("settings.data.userAgent.label")}
@@ -566,29 +613,24 @@ function DataSettingsSection({
           </SettingsWideField>
         </SettingsFieldRow>
         <SettingsFieldRow
+          label={t("settings.data.saveUserAgent.label")}
           description={t("settings.data.saveUserAgent.description")}
         >
           <SettingsInlineControls>
             <TextButton
               onClick={() => {
                 setUserAgent(userAgentInput);
-                onStatusChange({
-                  kind: "ok",
-                  message: t("settings.data.userAgentSaved"),
-                });
+                showSettingsToast("green", t("settings.toast.saved"));
               }}
             >
-              {t("settings.data.saveUserAgent.button")}
+              {t("common.save")}
             </TextButton>
             <TextButton
               variant="default"
               onClick={() => {
-                resetUserAgent();
-                setUserAgentInput(DEFAULT_USER_AGENT);
-                onStatusChange({
-                  kind: "ok",
-                  message: t("settings.data.userAgentReset"),
-                });
+                const userAgent = resetUserAgent();
+                setUserAgentInput(userAgent);
+                showSettingsToast("green", t("settings.toast.reset"));
               }}
             >
               {t("common.reset")}
@@ -600,32 +642,309 @@ function DataSettingsSection({
   );
 }
 
-function AboutSettingsSection({ onOpenRelease }: { onOpenRelease: () => void }) {
-  const { t } = useTranslation();
+function formatOptionalBuildTime(
+  locale: AppLocale,
+  buildTime: string | null | undefined,
+): string {
+  if (!buildTime) return "";
+  const timestamp = Date.parse(buildTime);
+  return Number.isFinite(timestamp)
+    ? formatDateTimeForLocale(locale, timestamp)
+    : buildTime;
+}
+
+function updateStatusLabel(
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+  candidate: UpdateCandidate | null,
+): string {
+  if (!candidate) return "";
+  switch (candidate.status) {
+    case "newer":
+      return t("settings.about.update.status.newer");
+    case "current":
+      return t("settings.about.update.status.current");
+    case "unknown":
+      return t("settings.about.update.status.unknown");
+  }
+}
+
+function updateStatusMessage(
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+  candidate: UpdateCandidate,
+): string {
+  switch (candidate.status) {
+    case "newer":
+      return t("settings.about.update.available", {
+        name: candidate.displayName,
+      });
+    case "current":
+      return t("settings.about.update.current", {
+        name: candidate.displayName,
+      });
+    case "unknown":
+      return t("settings.about.update.unknown", {
+        name: candidate.displayName,
+      });
+  }
+}
+
+function canInstallUpdate(candidate: UpdateCandidate | null): boolean {
+  return Boolean(candidate && candidate.status !== "current");
+}
+
+function AboutSettingsSection({
+  onOpenRelease,
+}: {
+  onOpenRelease: () => void;
+}) {
+  const { locale, t } = useTranslation();
+  const logLevel = useLoggingStore((state) => state.logLevel);
+  const setLogLevel = useLoggingStore((state) => state.setLogLevel);
+  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  const [officialUpdate, setOfficialUpdate] =
+    useState<UpdateCandidate | null>(null);
+  const [devUpdate, setDevUpdate] = useState<UpdateCandidate | null>(null);
+  const [updateBusy, setUpdateBusy] = useState<UpdateBusy | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getBuildInfo()
+      .then((info) => {
+        if (!cancelled) setBuildInfo(info);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          showSettingsToast(
+            "red",
+            t("settings.about.build.title"),
+            t("settings.about.buildInfoFailed", {
+              error: describeError(error),
+            }),
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
+
+  async function checkUpdate(channel: UpdateChannel): Promise<void> {
+    if (!buildInfo) return;
+
+    setUpdateBusy(`${channel}:check` as UpdateBusy);
+    const toastId = `settings:update:${channel}:check`;
+    const title = t(
+      channel === "official"
+        ? "settings.about.officialUpdate.label"
+        : "settings.about.devUpdate.label",
+    );
+    showSettingsLoadingToast(
+      toastId,
+      title,
+      t(
+        channel === "official"
+          ? "settings.about.update.checkingOfficial"
+          : "settings.about.update.checkingDev",
+      ),
+    );
+    try {
+      const candidate =
+        channel === "official"
+          ? await checkOfficialUpdate(buildInfo)
+          : await checkDevUpdate(buildInfo);
+      if (channel === "official") {
+        setOfficialUpdate(candidate);
+      } else {
+        setDevUpdate(candidate);
+      }
+      updateSettingsToast(
+        toastId,
+        "green",
+        title,
+        updateStatusMessage(t, candidate),
+      );
+    } catch (error) {
+      updateSettingsToast(
+        toastId,
+        "red",
+        title,
+        t("settings.about.update.checkFailed", {
+          error: describeError(error),
+        }),
+      );
+    } finally {
+      setUpdateBusy(null);
+    }
+  }
+
+  async function openUpdate(candidate: UpdateCandidate): Promise<void> {
+    if (!canInstallUpdate(candidate)) return;
+    if (
+      !window.confirm(
+        t("settings.about.update.installConfirm", {
+          name: candidate.assetName,
+        }),
+      )
+    ) {
+      return;
+    }
+
+    setUpdateBusy(`${candidate.channel}:install` as UpdateBusy);
+    const toastId = `settings:update:${candidate.channel}:install`;
+    const title = t("settings.about.update.install");
+    showSettingsLoadingToast(
+      toastId,
+      title,
+      t("settings.about.update.installing", {
+        name: candidate.assetName,
+      }),
+    );
+    try {
+      const path = await installUpdate(candidate);
+      updateSettingsToast(
+        toastId,
+        "green",
+        title,
+        t("settings.about.update.installerOpened", { path }),
+      );
+    } catch (error) {
+      updateSettingsToast(
+        toastId,
+        "red",
+        title,
+        t("settings.about.update.installFailed", {
+          error: describeError(error),
+        }),
+      );
+    } finally {
+      setUpdateBusy(null);
+    }
+  }
+
+  const buildVersion = buildInfo?.buildVersion
+    ? `v${buildInfo.buildVersion}`
+    : "";
+  const buildTime = formatOptionalBuildTime(locale, buildInfo?.buildTime);
+  const platform = buildInfo?.platform ?? "";
+  const buildChannel = buildInfo?.buildChannel ?? "";
 
   return (
     <Stack gap="md">
       <SettingsSection
         title={t("settings.about.build.title")}
-        summary={t("settings.about.build.summary")}
       >
         <SettingsFieldRow
           label={t("settings.about.version.label")}
           description={t("settings.about.version.description")}
         >
-          <ConsoleChip tone="accent">v0.1</ConsoleChip>
+          <ConsoleChip tone="accent">{buildVersion}</ConsoleChip>
         </SettingsFieldRow>
         <SettingsFieldRow
-          label={t("settings.about.autoUpdate.label")}
-          description={t("settings.about.autoUpdate.description")}
+          label={t("settings.about.buildTime.label")}
+          description={t("settings.about.buildTime.description")}
         >
-          <ConsoleChip>{t("settings.about.manualReleaseCheck")}</ConsoleChip>
+          <ConsoleChip>{buildTime}</ConsoleChip>
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.about.platform.label")}
+          description={t("settings.about.platform.description")}
+        >
+          <ConsoleChip>{platform}</ConsoleChip>
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.about.buildChannel.label")}
+          description={t("settings.about.buildChannel.description")}
+        >
+          <ConsoleChip>{buildChannel}</ConsoleChip>
+        </SettingsFieldRow>
+      </SettingsSection>
+
+      <SettingsSection
+        title={t("settings.about.updates.title")}
+      >
+        <SettingsFieldRow
+          label={t("settings.about.officialUpdate.label")}
+          description={t("settings.about.officialUpdate.description")}
+        >
+          <SettingsInlineControls>
+            {officialUpdate ? (
+              <ConsoleChip>{updateStatusLabel(t, officialUpdate)}</ConsoleChip>
+            ) : null}
+            <TextButton
+              loading={updateBusy === "official:check"}
+              disabled={!buildInfo || updateBusy !== null}
+              onClick={() => {
+                void checkUpdate("official");
+              }}
+            >
+              {t("settings.about.update.check")}
+            </TextButton>
+            <TextButton
+              variant="default"
+              loading={updateBusy === "official:install"}
+              disabled={!canInstallUpdate(officialUpdate) || updateBusy !== null}
+              onClick={() => {
+                if (officialUpdate) void openUpdate(officialUpdate);
+              }}
+            >
+              {t("settings.about.update.install")}
+            </TextButton>
+          </SettingsInlineControls>
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.about.devUpdate.label")}
+          description={t("settings.about.devUpdate.description")}
+        >
+          <SettingsInlineControls>
+            {devUpdate ? (
+              <ConsoleChip>{updateStatusLabel(t, devUpdate)}</ConsoleChip>
+            ) : null}
+            <TextButton
+              loading={updateBusy === "dev:check"}
+              disabled={!buildInfo || updateBusy !== null}
+              onClick={() => {
+                void checkUpdate("dev");
+              }}
+            >
+              {t("settings.about.update.check")}
+            </TextButton>
+            <TextButton
+              variant="default"
+              loading={updateBusy === "dev:install"}
+              disabled={!canInstallUpdate(devUpdate) || updateBusy !== null}
+              onClick={() => {
+                if (devUpdate) void openUpdate(devUpdate);
+              }}
+            >
+              {t("settings.about.update.install")}
+            </TextButton>
+          </SettingsInlineControls>
+        </SettingsFieldRow>
+      </SettingsSection>
+
+      <SettingsSection
+        title={t("settings.about.diagnostics.title")}
+      >
+        <SettingsFieldRow
+          label={t("settings.about.logLevel.label")}
+          description={t("settings.about.logLevel.description")}
+        >
+          <Select
+            allowDeselect={false}
+            data={LOG_LEVELS.map((level) => ({
+              value: level,
+              label: t(LOG_LEVEL_LABEL_KEYS[level]),
+            }))}
+            value={logLevel}
+            onChange={setLogLevel}
+          />
         </SettingsFieldRow>
       </SettingsSection>
 
       <SettingsSection
         title={t("settings.about.links.title")}
-        summary={t("settings.about.links.summary")}
       >
         <SettingsFieldRow
           label={t("settings.about.latestRelease.label")}
@@ -687,19 +1006,19 @@ function SettingsCategoryList({
           })}
         </div>
       </ScrollArea>
-      <div className="lnr-settings-nav-footer">v0.1 / Tauri 2</div>
+      <div className="lnr-settings-nav-footer">Tauri 2</div>
     </aside>
   );
 }
 
 function SettingsDetail({
+  categories,
   category,
-  onBackToList,
-  status,
+  onSelect,
 }: {
+  categories: readonly SettingsCategory[];
   category: SettingsCategory;
-  onBackToList: () => void;
-  status: Status;
+  onSelect: (id: SettingsCategoryId) => void;
 }) {
   const { t } = useTranslation();
 
@@ -716,13 +1035,8 @@ function SettingsDetail({
           className="lnr-settings-detail-header"
           align="center"
           justify="flex-start"
-          wrap="nowrap"
+          wrap="wrap"
         >
-          <BackIconButton
-            className="lnr-settings-mobile-back"
-            label={t("settings.backToSettings")}
-            onClick={onBackToList}
-          />
           <Box className="lnr-settings-detail-copy">
             <Title
               className="lnr-settings-detail-title"
@@ -731,13 +1045,22 @@ function SettingsDetail({
             >
               {category.title}
             </Title>
-            <Text className="lnr-settings-detail-summary">
-              {category.summary}
-            </Text>
           </Box>
+          <Select
+            allowDeselect={false}
+            aria-label={t("settings.sectionSelect.label")}
+            className="lnr-settings-section-select"
+            data={categories.map((item) => ({
+              value: item.id,
+              label: item.title,
+            }))}
+            value={category.id}
+            onChange={(value) => {
+              const nextCategory = categories.find((item) => item.id === value);
+              if (nextCategory) onSelect(nextCategory.id);
+            }}
+          />
         </Group>
-
-        <StatusBanner status={status} />
 
         <Stack className="lnr-settings-detail-body" gap="md">
           {category.content}
@@ -753,40 +1076,52 @@ interface SettingsPageProps {
 
 export function SettingsPage({ section }: SettingsPageProps = {}) {
   const { t } = useTranslation();
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const queryClient = useQueryClient();
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsCategoryId>(() =>
     normalizeSection(section),
   );
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
-  const isBusy = status.kind === "busy";
+  const isBusy = busyAction !== null;
 
   useEffect(() => {
     setActiveSection(normalizeSection(section));
   }, [section]);
 
   async function handleExport(): Promise<void> {
-    setStatus({ kind: "busy", message: t("settings.data.savingBackup") });
+    const toastId = "settings:backup:export";
+    setBusyAction(toastId);
+    showSettingsLoadingToast(
+      toastId,
+      t("settings.data.exportBackup"),
+      t("settings.data.savingBackup"),
+    );
     try {
       const path = await enqueueMainTask({
         kind: "backup.export",
         title: t("settings.data.exportBackup"),
         run: exportBackupToFile,
       }).promise;
-      setStatus(
-        path
-          ? {
-              kind: "ok",
-              message: t("settings.data.backupSaved", { path }),
-            }
-          : { kind: "idle" },
-      );
+      if (path) {
+        updateSettingsToast(
+          toastId,
+          "green",
+          t("settings.data.exportBackup"),
+          t("settings.data.backupSaved", { path }),
+        );
+      } else {
+        notifications.hide(toastId);
+      }
     } catch (error) {
-      setStatus({
-        kind: "error",
-        message: t("settings.data.exportFailed", {
+      updateSettingsToast(
+        toastId,
+        "red",
+        t("settings.data.exportBackup"),
+        t("settings.data.exportFailed", {
           error: describeError(error),
         }),
-      });
+      );
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -794,28 +1129,55 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     if (!window.confirm(t("settings.data.restoreWarning"))) {
       return;
     }
-    setStatus({ kind: "busy", message: t("settings.data.restoringBackup") });
+    const toastId = "settings:backup:restore";
+    setBusyAction(toastId);
+    showSettingsLoadingToast(
+      toastId,
+      t("settings.data.importBackup"),
+      t("settings.data.restoringBackup"),
+    );
     try {
       const path = await enqueueMainTask({
         kind: "backup.restore",
         title: t("settings.data.importBackup"),
-        run: importBackupFromFile,
+        run: async () => {
+          const path = await importBackupFromFile();
+          if (path) {
+            await pluginManager.reloadInstalledFromDb();
+            await rehydrateImportedSettings();
+            await Promise.all([
+              queryClient.invalidateQueries({
+                queryKey: ["plugin", "installed"],
+              }),
+              queryClient.invalidateQueries({
+                queryKey: ["repository", "list"],
+              }),
+            ]);
+          }
+          return path;
+        },
       }).promise;
-      setStatus(
-        path
-          ? {
-              kind: "ok",
-              message: t("settings.data.restoredBackup", { path }),
-            }
-          : { kind: "idle" },
-      );
+      if (path) {
+        updateSettingsToast(
+          toastId,
+          "green",
+          t("settings.data.importBackup"),
+          t("settings.data.restoredBackup", { path }),
+        );
+      } else {
+        notifications.hide(toastId);
+      }
     } catch (error) {
-      setStatus({
-        kind: "error",
-        message: t("settings.data.restoreFailed", {
+      updateSettingsToast(
+        toastId,
+        "red",
+        t("settings.data.importBackup"),
+        t("settings.data.restoreFailed", {
           error: describeError(error),
         }),
-      });
+      );
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -825,11 +1187,13 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     message: string,
     warning: string,
     action: () => Promise<{ rowsAffected: number }>,
+    successMessage: (rowsAffected: number) => string,
   ): Promise<void> {
     if (!window.confirm(warning)) {
       return;
     }
-    setStatus({ kind: "busy", message });
+    setBusyAction(kind);
+    showSettingsLoadingToast(kind, title, message);
     try {
       const result = await enqueueMainTask({
         kind,
@@ -839,77 +1203,49 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
       if (kind === "maintenance.clearUpdates" && result.rowsAffected > 0) {
         markUpdatesIndexDirty("updates-cleared");
       }
-      setStatus({
-        kind: "ok",
-        message: t("settings.data.maintenanceDone", {
-          rows: result.rowsAffected,
-        }),
-      });
+      if (
+        kind === "maintenance.clearLibraryMembership" &&
+        result.rowsAffected > 0
+      ) {
+        markUpdatesIndexDirty("library-membership");
+        void queryClient.invalidateQueries({ queryKey: ["category"] });
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+      }
+      if (
+        kind === "maintenance.clearReadingProgress" &&
+        result.rowsAffected > 0
+      ) {
+        markUpdatesIndexDirty("read-progress");
+      }
+      updateSettingsToast(
+        kind,
+        "green",
+        title,
+        successMessage(result.rowsAffected),
+      );
     } catch (error) {
-      setStatus({
-        kind: "error",
-        message: `${message} ${t("settings.data.maintenanceFailed", {
+      updateSettingsToast(
+        kind,
+        "red",
+        title,
+        t("settings.data.maintenanceFailed", {
           error: describeError(error),
-        })}`,
-      });
-    }
-  }
-
-  async function handleClearStorage(): Promise<void> {
-    setStatus({ kind: "busy", message: t("settings.data.clearStorageBusy") });
-    let localCount = 0;
-    let sessionCount = 0;
-    let cookieCount = 0;
-    try {
-      const result = await enqueueMainTask({
-        kind: "maintenance.clearPluginStorage",
-        title: t("settings.data.pluginStorage.button"),
-        run: async () => {
-          localCount = clearStorageByPrefix(
-            window.localStorage,
-            PLUGIN_STORAGE_PREFIX,
-          );
-          sessionCount = clearStorageByPrefix(
-            window.sessionStorage,
-            PLUGIN_STORAGE_PREFIX,
-          );
-          cookieCount = clearAccessibleCookies();
-          const webviewCookieCount = await invoke<number>("scraper_clear_cookies");
-          return {
-            cookieCount,
-            storageCount: localCount + sessionCount,
-            webviewCookieCount,
-          };
-        },
-      }).promise;
-      setStatus({
-        kind: "ok",
-        message: t("settings.data.clearStorageOk", {
-          cookieCount: result.cookieCount,
-          storageCount: result.storageCount,
-          webviewCookieCount: result.webviewCookieCount,
         }),
-      });
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        message: t("settings.data.clearStoragePartial", {
-          cookieCount,
-          error: describeError(error),
-          storageCount: localCount + sessionCount,
-        }),
-      });
+      );
+    } finally {
+      setBusyAction(null);
     }
   }
 
   function openLatestRelease(): void {
     void openExternal(LATEST_RELEASE_URL).catch((error: unknown) => {
-      setStatus({
-        kind: "error",
-        message: t("settings.data.openReleaseFailed", {
+      showSettingsToast(
+        "red",
+        t("settings.about.githubReleases"),
+        t("settings.data.openReleaseFailed", {
           error: describeError(error),
         }),
-      });
+      );
     });
   }
 
@@ -917,52 +1253,26 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     {
       id: "app",
       title: t("settings.category.app.title"),
-      summary: t("settings.category.app.summary"),
       content: <AppSettingsSection />,
     },
     {
       id: "reader",
       title: t("settings.category.reader.title"),
-      summary: t("settings.category.reader.summary"),
-      content: (
-        <SettingsSection
-          title={t("settings.reader.preferences.title")}
-          summary={t("settings.reader.preferences.summary")}
-        >
-          <ReaderSettingsPanel />
-        </SettingsSection>
-      ),
+      content: <ReaderSettingsPanel />,
     },
     {
       id: "library",
       title: t("settings.category.library.title"),
-      summary: t("settings.category.library.summary"),
-      content: (
-        <SettingsSection
-          title={t("settings.library.preferences.title")}
-          summary={t("settings.library.preferences.summary")}
-        >
-          <LibrarySettingsPanel />
-        </SettingsSection>
-      ),
+      content: <LibrarySettingsPanel />,
     },
     {
       id: "browse",
       title: t("settings.category.browse.title"),
-      summary: t("settings.category.browse.summary"),
-      content: (
-        <SettingsSection
-          title={t("settings.browse.preferences.title")}
-          summary={t("settings.browse.preferences.summary")}
-        >
-          <BrowseSettingsPanel />
-        </SettingsSection>
-      ),
+      content: <BrowseSettingsPanel />,
     },
     {
       id: "data",
       title: t("settings.category.data.title"),
-      summary: t("settings.category.data.summary"),
       content: (
         <DataSettingsSection
           isBusy={isBusy}
@@ -972,20 +1282,29 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
           onImport={() => {
             void handleImport();
           }}
-          onRunMaintenance={(kind, title, message, warning, action) => {
-            void runMaintenance(kind, title, message, warning, action);
+          onRunMaintenance={(
+            kind,
+            title,
+            message,
+            warning,
+            action,
+            successMessage,
+          ) => {
+            void runMaintenance(
+              kind,
+              title,
+              message,
+              warning,
+              action,
+              successMessage,
+            );
           }}
-          onClearStorage={() => {
-            void handleClearStorage();
-          }}
-          onStatusChange={setStatus}
         />
       ),
     },
     {
       id: "about",
       title: t("settings.category.about.title"),
-      summary: t("settings.category.about.summary"),
       content: <AboutSettingsSection onOpenRelease={openLatestRelease} />,
     },
   ];
@@ -996,24 +1315,20 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
 
   const selectCategory = (id: SettingsCategoryId) => {
     setActiveSection(id);
-    setMobileDetailOpen(true);
   };
 
   return (
     <PageFrame className="lnr-settings-page" size="full">
-      <div
-        className="lnr-settings-shell"
-        data-mobile-detail-open={mobileDetailOpen}
-      >
+      <div className="lnr-settings-shell">
         <SettingsCategoryList
           activeId={activeCategory.id}
           categories={categories}
           onSelect={selectCategory}
         />
         <SettingsDetail
+          categories={categories}
           category={activeCategory}
-          onBackToList={() => setMobileDetailOpen(false)}
-          status={status}
+          onSelect={selectCategory}
         />
       </div>
     </PageFrame>

@@ -412,7 +412,6 @@
 }
 
 .lnr-library-view-toggle {
-  border: 1px solid var(--lnr-design-rule-strong);
   border-radius: 0.25rem;
   display: inline-flex;
   flex: 0 0 auto;

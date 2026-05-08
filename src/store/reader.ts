@@ -8,7 +8,8 @@ export type ReaderTapPresetId =
   | "balanced"
   | "side-columns"
   | "vertical-scroll"
-  | "bottom-forward";
+  | "bottom-forward"
+  | "bottom-forward-wide";
 export type ReaderTapZone =
   | "topLeft"
   | "topCenter"
@@ -23,10 +24,7 @@ export type ReaderTapZoneMap = Record<ReaderTapZone, ReaderTapAction>;
 
 export interface ReaderTapPreset {
   id: ReaderTapPresetId;
-  label: string;
-  description: string;
-  portrait: ReaderTapZoneMap;
-  landscape: ReaderTapZoneMap;
+  zones: ReaderTapZoneMap;
 }
 
 export interface ReaderThemeDefinition {
@@ -53,8 +51,7 @@ export interface ReaderGeneralSettings {
   bionicReading: boolean;
   removeExtraParagraphSpacing: boolean;
   tapZonePresetId: ReaderTapPresetId;
-  portraitTapZones: ReaderTapZoneMap;
-  landscapeTapZones: ReaderTapZoneMap;
+  tapZones: ReaderTapZoneMap;
 }
 
 export interface ReaderAppearanceSettings {
@@ -86,6 +83,7 @@ interface ReaderState {
   setFullPageReaderChromeVisible: (visible: boolean) => void;
   setLastReadChapter: (novelId: number, chapterId: number) => void;
   setNovelPageIndex: (novelId: number, pageIndex: number) => void;
+  resetReadingProgress: () => void;
   resetReaderSettings: () => void;
 }
 
@@ -152,10 +150,7 @@ export const READER_TAP_ZONES: ReaderTapZone[] = [
 export const READER_TAP_PRESETS: ReaderTapPreset[] = [
   {
     id: "balanced",
-    label: "Balanced",
-    description:
-      "Top and left go back, bottom and right go forward, center opens the menu.",
-    portrait: {
+    zones: {
       topLeft: "previous",
       topCenter: "previous",
       topRight: "previous",
@@ -166,35 +161,10 @@ export const READER_TAP_PRESETS: ReaderTapPreset[] = [
       bottomCenter: "next",
       bottomRight: "next",
     },
-    landscape: {
-      topLeft: "previous",
-      topCenter: "menu",
-      topRight: "next",
-      middleLeft: "previous",
-      middleCenter: "menu",
-      middleRight: "next",
-      bottomLeft: "previous",
-      bottomCenter: "menu",
-      bottomRight: "next",
-    },
   },
   {
     id: "side-columns",
-    label: "Side columns",
-    description:
-      "Left column goes back and right column goes forward. The middle column opens the menu.",
-    portrait: {
-      topLeft: "previous",
-      topCenter: "menu",
-      topRight: "next",
-      middleLeft: "previous",
-      middleCenter: "menu",
-      middleRight: "next",
-      bottomLeft: "previous",
-      bottomCenter: "menu",
-      bottomRight: "next",
-    },
-    landscape: {
+    zones: {
       topLeft: "previous",
       topCenter: "menu",
       topRight: "next",
@@ -208,21 +178,7 @@ export const READER_TAP_PRESETS: ReaderTapPreset[] = [
   },
   {
     id: "vertical-scroll",
-    label: "Vertical scroll",
-    description:
-      "Top goes back, bottom goes forward, and the middle row opens the menu.",
-    portrait: {
-      topLeft: "previous",
-      topCenter: "previous",
-      topRight: "previous",
-      middleLeft: "menu",
-      middleCenter: "menu",
-      middleRight: "menu",
-      bottomLeft: "next",
-      bottomCenter: "next",
-      bottomRight: "next",
-    },
-    landscape: {
+    zones: {
       topLeft: "previous",
       topCenter: "previous",
       topRight: "previous",
@@ -236,10 +192,7 @@ export const READER_TAP_PRESETS: ReaderTapPreset[] = [
   },
   {
     id: "bottom-forward",
-    label: "Bottom forward",
-    description:
-      "Large lower area advances, upper area goes back, center still opens the menu.",
-    portrait: {
+    zones: {
       topLeft: "previous",
       topCenter: "previous",
       topRight: "previous",
@@ -250,7 +203,10 @@ export const READER_TAP_PRESETS: ReaderTapPreset[] = [
       bottomCenter: "next",
       bottomRight: "next",
     },
-    landscape: {
+  },
+  {
+    id: "bottom-forward-wide",
+    zones: {
       topLeft: "previous",
       topCenter: "menu",
       topRight: "next",
@@ -266,8 +222,7 @@ export const READER_TAP_PRESETS: ReaderTapPreset[] = [
 
 const DEFAULT_TAP_ZONE_PRESET = READER_TAP_PRESETS[0]!;
 
-export const PORTRAIT_TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.portrait;
-export const LANDSCAPE_TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.landscape;
+export const TAP_ZONE_DEFAULTS = DEFAULT_TAP_ZONE_PRESET.zones;
 
 export const READER_GENERAL_DEFAULTS: ReaderGeneralSettings = {
   fullPageReader: false,
@@ -286,8 +241,7 @@ export const READER_GENERAL_DEFAULTS: ReaderGeneralSettings = {
   bionicReading: false,
   removeExtraParagraphSpacing: false,
   tapZonePresetId: DEFAULT_TAP_ZONE_PRESET.id,
-  portraitTapZones: PORTRAIT_TAP_ZONE_DEFAULTS,
-  landscapeTapZones: LANDSCAPE_TAP_ZONE_DEFAULTS,
+  tapZones: TAP_ZONE_DEFAULTS,
 };
 
 export const READER_APPEARANCE_DEFAULTS: ReaderAppearanceSettings = {
@@ -327,20 +281,9 @@ function normalizeGeneral(
     ...(settings.tapZonePresetId !== undefined
       ? { tapZonePresetId: normalizeTapZonePresetId(settings.tapZonePresetId) }
       : {}),
-    ...(settings.portraitTapZones !== undefined
+    ...(settings.tapZones !== undefined
       ? {
-          portraitTapZones: normalizeTapZones(
-            settings.portraitTapZones,
-            PORTRAIT_TAP_ZONE_DEFAULTS,
-          ),
-        }
-      : {}),
-    ...(settings.landscapeTapZones !== undefined
-      ? {
-          landscapeTapZones: normalizeTapZones(
-            settings.landscapeTapZones,
-            LANDSCAPE_TAP_ZONE_DEFAULTS,
-          ),
+          tapZones: normalizeTapZones(settings.tapZones, TAP_ZONE_DEFAULTS),
         }
       : {}),
   };
@@ -469,14 +412,7 @@ export const useReaderStore = create<ReaderState>()(
             general: {
               ...state.general,
               tapZonePresetId: preset.id,
-              portraitTapZones: normalizeTapZones(
-                preset.portrait,
-                PORTRAIT_TAP_ZONE_DEFAULTS,
-              ),
-              landscapeTapZones: normalizeTapZones(
-                preset.landscape,
-                LANDSCAPE_TAP_ZONE_DEFAULTS,
-              ),
+              tapZones: normalizeTapZones(preset.zones, TAP_ZONE_DEFAULTS),
             },
           };
         }),
@@ -496,6 +432,11 @@ export const useReaderStore = create<ReaderState>()(
             [novelId]: Math.max(1, Math.round(pageIndex)),
           },
         })),
+      resetReadingProgress: () =>
+        set({
+          lastReadChapterByNovel: {},
+          novelPageIndexByNovel: {},
+        }),
       resetReaderSettings: () =>
         set({
           general: READER_GENERAL_DEFAULTS,
@@ -516,19 +457,14 @@ export const useReaderStore = create<ReaderState>()(
         const tapZonePreset = getTapZonePreset(tapZonePresetId);
         const persistedGeneral = { ...(persisted.general ?? {}) } as Partial<
           ReaderGeneralSettings
-        > & { fullScreen?: unknown };
-        delete persistedGeneral.fullScreen;
+        >;
         const general = {
           ...READER_GENERAL_DEFAULTS,
           ...persistedGeneral,
           tapZonePresetId,
-          portraitTapZones: normalizeTapZones(
-            persistedGeneral.portraitTapZones ?? tapZonePreset.portrait,
-            tapZonePreset.portrait,
-          ),
-          landscapeTapZones: normalizeTapZones(
-            persistedGeneral.landscapeTapZones ?? tapZonePreset.landscape,
-            tapZonePreset.landscape,
+          tapZones: normalizeTapZones(
+            persistedGeneral.tapZones ?? tapZonePreset.zones,
+            tapZonePreset.zones,
           ),
         };
         if (!general.pageReader) {

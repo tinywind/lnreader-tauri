@@ -862,6 +862,118 @@ describe("TaskScheduler", () => {
     expect(scheduler.getTask(running.id)?.status).toBe("cancelled");
   });
 
+  it("cancels all active tasks in one request", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+
+    const main = scheduler.enqueueMain({
+      kind: "backup.export",
+      title: "Active main task",
+      run: () =>
+        new Promise<void>(() => {
+          order.push("main:start");
+        }),
+    });
+    const queuedMain = scheduler.enqueueMain({
+      kind: "library.refreshMetadata",
+      title: "Queued main task",
+      run: async () => {
+        order.push("queued-main:start");
+      },
+    });
+    const source = scheduler.enqueueSource({
+      kind: "source.search",
+      title: "Running source task",
+      priority: "interactive",
+      source: { id: "p", name: "Plugin" },
+      run: () =>
+        new Promise<void>(() => {
+          order.push("source:start");
+        }),
+    });
+
+    await settle();
+
+    expect(order).toEqual(["main:start", "source:start"]);
+    expect(scheduler.cancelActiveTasks()).toBe(3);
+
+    const results = await Promise.allSettled([
+      main.promise,
+      queuedMain.promise,
+      source.promise,
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual([
+      "rejected",
+      "rejected",
+      "rejected",
+    ]);
+    expect(scheduler.getTask(main.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(queuedMain.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(source.id)?.status).toBe("cancelled");
+    expect(order).toEqual(["main:start", "source:start"]);
+  });
+
+  it("cancels active tasks for one source only", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+
+    const activeSource = scheduler.enqueueSource({
+      kind: "source.search",
+      title: "Active source task",
+      priority: "normal",
+      source: { id: "a", name: "Source A" },
+      run: () =>
+        new Promise<void>(() => {
+          order.push("source-a:start");
+        }),
+    });
+    const queuedSource = scheduler.enqueueSource({
+      kind: "source.openNovel",
+      title: "Queued source task",
+      priority: "normal",
+      source: { id: "a", name: "Source A" },
+      run: async () => {
+        order.push("source-a-queued:start");
+      },
+    });
+    const otherSource = scheduler.enqueueSource({
+      kind: "source.search",
+      title: "Other source task",
+      priority: "normal",
+      source: { id: "b", name: "Source B" },
+      run: async () => {
+        order.push("source-b:start");
+      },
+    });
+
+    await settle();
+
+    expect(order).toEqual(["source-a:start"]);
+    expect(scheduler.cancelActiveTasks({ sourceId: "a" })).toBe(2);
+
+    const cancelled = await Promise.allSettled([
+      activeSource.promise,
+      queuedSource.promise,
+    ]);
+    await otherSource.promise;
+
+    expect(cancelled.map((result) => result.status)).toEqual([
+      "rejected",
+      "rejected",
+    ]);
+    expect(scheduler.getTask(activeSource.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(queuedSource.id)?.status).toBe("cancelled");
+    expect(scheduler.getTask(otherSource.id)?.status).toBe("succeeded");
+    expect(order).toEqual(["source-a:start", "source-b:start"]);
+  });
+
   it("runs the latest open site task while all source queues are paused", async () => {
     const scheduler = new TaskScheduler({ sourceQueuesPaused: true });
     const order: string[] = [];

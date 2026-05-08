@@ -12,6 +12,10 @@ import {
   QueryClient,
   QueryClientProvider,
 } from "@tanstack/react-query";
+import {
+  installRuntimeLogLevelFilter,
+  setRuntimeLogLevel,
+} from "./lib/logging";
 import { pluginManager } from "./lib/plugins/manager";
 import { isAndroidRuntime, isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
@@ -20,8 +24,9 @@ import {
   normalizeFontScalePercent,
   useAppearanceStore,
 } from "./store/appearance";
-import { makeMantineColorScale, resolveMd3Palette } from "./theme/md3";
+import { useLoggingStore } from "./store/logging";
 import { translate } from "./i18n";
+import { makeMantineColorScale, resolveMd3Palette } from "./theme/md3";
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -35,6 +40,8 @@ function showErrorToast(title: string, error: unknown): void {
     autoClose: 7_000,
   });
 }
+
+installRuntimeLogLevelFilter(useLoggingStore.getState().logLevel);
 
 /**
  * Global error fallbacks for any mutation or query that doesn't
@@ -85,7 +92,7 @@ if (isTauriRuntime()) {
  */
 window.addEventListener("unhandledrejection", (event) => {
   // eslint-disable-next-line no-console
-  console.warn("[unhandledrejection]", event.reason);
+  console.error("[unhandledrejection]", event.reason);
 });
 
 const rootElement = document.getElementById("root");
@@ -439,6 +446,7 @@ function AppProviders() {
   const customAccentColor = useAppearanceStore(
     (state) => state.customAccentColor,
   );
+  const logLevel = useLoggingStore((state) => state.logLevel);
   const colorScheme = useResolvedColorScheme();
   const palette = useMemo(
     () =>
@@ -545,6 +553,10 @@ function AppProviders() {
     document.body.style.background = palette.background;
     document.body.style.color = palette.onBackground;
   }, [appLocale, colorScheme, palette]);
+
+  useEffect(() => {
+    setRuntimeLogLevel(logLevel);
+  }, [logLevel]);
 
   useEffect(() => {
     applyRuntimeUiScale(fontScalePercent, androidViewScalePercent);

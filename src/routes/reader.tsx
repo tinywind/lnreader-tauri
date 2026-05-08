@@ -9,6 +9,7 @@ import {
 } from "../components/ReaderContent";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
+import { ReaderSettingsPanel } from "../components/ReaderSettingsPanel";
 import {
   getAdjacentChapter,
   getChapterById,
@@ -114,6 +115,7 @@ function ReaderTopChrome({
   onOpenSettings,
   onToggleBookmark,
   progress,
+  settingsOpen,
 }: {
   chapter: ChapterRow | null | undefined;
   chapterCount: number;
@@ -125,6 +127,7 @@ function ReaderTopChrome({
   onOpenSettings: () => void;
   onToggleBookmark: () => void;
   progress: number;
+  settingsOpen: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -165,6 +168,7 @@ function ReaderTopChrome({
         <BookmarkIcon />
       </IconButton>
       <IconButton
+        active={settingsOpen}
         className="lnr-reader-icon-button"
         label={t("reader.openSettings")}
         onClick={onOpenSettings}
@@ -192,6 +196,70 @@ function SettingsIcon() {
       <path d="M8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
       <path d="M16 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
     </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M6 6l12 12" />
+      <path d="M18 6L6 18" />
+    </svg>
+  );
+}
+
+function ReaderSettingsOverlay({
+  onClose,
+  onOpenSettingsPage,
+}: {
+  onClose: () => void;
+  onOpenSettingsPage: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div
+      className="lnr-reader-settings-overlay"
+      onPointerDown={(event) => event.stopPropagation()}
+      onPointerMove={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      <section
+        aria-labelledby="reader-settings-overlay-title"
+        className="lnr-reader-settings-sheet"
+        role="dialog"
+      >
+        <header className="lnr-reader-settings-header">
+          <h2
+            className="lnr-reader-settings-title"
+            id="reader-settings-overlay-title"
+          >
+            {t("settings.category.reader.title")}
+          </h2>
+          <div className="lnr-reader-settings-actions">
+            <IconButton
+              className="lnr-reader-icon-button"
+              label={t("reader.openFullSettings")}
+              onClick={onOpenSettingsPage}
+              size="sm"
+            >
+              <SettingsIcon />
+            </IconButton>
+            <IconButton
+              className="lnr-reader-icon-button"
+              label={t("reader.closeSettings")}
+              onClick={onClose}
+              size="sm"
+            >
+              <CloseIcon />
+            </IconButton>
+          </div>
+        </header>
+        <div className="lnr-reader-settings-scroll">
+          <ReaderSettingsPanel />
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -322,6 +390,7 @@ export function ReaderPage() {
   const openRequestRef = useRef(0);
   const chromeHideTimerRef = useRef<number | null>(null);
   const [fullPageChromeVisible, setFullPageChromeVisible] = useState(false);
+  const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
 
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const fullPageReader = useReaderStore((state) => state.general.fullPageReader);
@@ -370,6 +439,20 @@ export function ReaderPage() {
     fullPageReader,
     scheduleFullPageChromeHide,
   ]);
+
+  const openReaderSettingsPanel = useCallback(() => {
+    clearFullPageChromeTimer();
+    setFullPageChromeVisible(true);
+    setReaderSettingsOpen(true);
+  }, [clearFullPageChromeTimer]);
+
+  const closeReaderSettingsPanel = useCallback(() => {
+    setReaderSettingsOpen(false);
+  }, []);
+
+  const openReaderSettingsPage = useCallback(() => {
+    void navigate({ to: "/settings", search: { section: "reader" } });
+  }, [navigate]);
 
   useEffect(() => {
     clearFullPageChromeTimer();
@@ -574,6 +657,13 @@ export function ReaderPage() {
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
+      if (readerSettingsOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeReaderSettingsPanel();
+        }
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (
         target &&
@@ -618,7 +708,12 @@ export function ReaderPage() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [handleFullPageActivity, handleReaderBack]);
+  }, [
+    closeReaderSettingsPanel,
+    handleFullPageActivity,
+    handleReaderBack,
+    readerSettingsOpen,
+  ]);
 
   const chapter = chapterQuery.data;
   const chapters = chapterListQuery.data ?? [];
@@ -749,11 +844,10 @@ export function ReaderPage() {
         bookmarkLoading={bookmarkMutation.isPending}
         incognitoMode={incognitoMode}
         onBack={handleReaderBack}
-        onOpenSettings={() => {
-          void navigate({ to: "/settings" });
-        }}
+        onOpenSettings={openReaderSettingsPanel}
         onToggleBookmark={() => bookmarkMutation.mutate()}
         progress={progress}
+        settingsOpen={readerSettingsOpen}
       />
       <Box className="lnr-reader-body">
         <ReaderChapterPanel
@@ -764,6 +858,12 @@ export function ReaderPage() {
         />
         <Box className="lnr-reader-content-frame">{readerContent}</Box>
       </Box>
+      {readerSettingsOpen ? (
+        <ReaderSettingsOverlay
+          onClose={closeReaderSettingsPanel}
+          onOpenSettingsPage={openReaderSettingsPage}
+        />
+      ) : null}
       <ReaderBottomStrip
         currentLabel={chapter ? getChapterLabel(chapter, t) : t("reader.sample")}
         hasNextChapter={!!nextChapter}

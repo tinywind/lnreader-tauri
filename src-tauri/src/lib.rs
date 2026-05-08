@@ -2,9 +2,28 @@ mod backup;
 mod plugin_host;
 mod scraper;
 mod tray;
+mod update;
 
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+fn parse_runtime_log_level(level: &str) -> Result<log::LevelFilter, String> {
+    match level {
+        "trace" => Ok(log::LevelFilter::Trace),
+        "debug" => Ok(log::LevelFilter::Debug),
+        "info" => Ok(log::LevelFilter::Info),
+        "warn" => Ok(log::LevelFilter::Warn),
+        "error" => Ok(log::LevelFilter::Error),
+        "off" => Ok(log::LevelFilter::Off),
+        _ => Err(format!("invalid log level: {level}")),
+    }
+}
+
+#[tauri::command]
+fn set_runtime_log_level(level: String) -> Result<(), String> {
+    log::set_max_level(parse_runtime_log_level(&level)?);
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -90,7 +109,10 @@ pub fn run() {
             scraper::scraper_poll_control_message,
             scraper::scraper_clear_cookies,
             scraper::scraper_open_devtools,
+            set_runtime_log_level,
             tray::tray_set_task_progress,
+            update::download_and_open_update,
+            update::get_build_info,
         ])
         .setup(|app| {
             app.manage(scraper::ScraperState::default());
@@ -100,9 +122,10 @@ pub fn run() {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
+                        .level(log::LevelFilter::Trace)
                         .build(),
                 )?;
+                log::set_max_level(log::LevelFilter::Info);
             }
             Ok(())
         })

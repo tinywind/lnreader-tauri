@@ -1,6 +1,6 @@
 import { NumberInput, Select, Stack, Switch } from "@mantine/core";
 import { SegmentedToggle } from "./SegmentedToggle";
-import { SettingsFieldRow } from "./SettingsPrimitives";
+import { SettingsFieldRow, SettingsSection } from "./SettingsPrimitives";
 import { useTranslation, type TranslationKey } from "../i18n";
 import {
   useLibraryStore,
@@ -81,84 +81,119 @@ export function LibrarySettingsPanel() {
   );
 
   return (
-    <Stack gap="sm">
-      <SettingsFieldRow label={t("librarySettings.sort")}>
-        <Select
-          data={SORT_ORDERS.map((value) => ({
-            value,
-            label: t(SORT_ORDER_LABEL_KEYS[value]),
-          }))}
-          value={sortOrder}
-          onChange={(value) => {
-            if (value) setSortOrder(value as LibrarySortOrder);
-          }}
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.novelsPerRow")}>
-        <NumberInput
-          min={1}
-          max={5}
-          value={novelsPerRow}
-          onChange={(value) => {
-            if (typeof value === "number") setNovelsPerRow(value);
-          }}
-          disabled={displayMode === "list"}
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.defaultChapterSort")}>
-        <Select
-          data={[
-            { value: "asc", label: t("librarySettings.oldestFirst") },
-            { value: "desc", label: t("librarySettings.newestFirst") },
-          ]}
-          value={defaultChapterSort}
-          onChange={(value) => {
-            if (value) setDefaultChapterSort(value as DefaultChapterSort);
-          }}
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.displayMode")}>
-        <SegmentedToggle
-          data={DISPLAY_MODES.map((value) => ({
-            value,
-            label: t(DISPLAY_MODE_LABEL_KEYS[value]),
-          }))}
-          value={displayMode}
-          onChange={(value) => setDisplayMode(value as LibraryDisplayMode)}
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.incognito")}>
-        <Switch
-          checked={incognitoMode}
-          onChange={(event) =>
-            setIncognitoMode(event.currentTarget.checked)
-          }
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.downloadedBadges")}>
-        <Switch
-          checked={showDownloadBadges}
-          onChange={(event) =>
-            setShowDownloadBadges(event.currentTarget.checked)
-          }
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.unreadBadges")}>
-        <Switch
-          checked={showUnreadBadges}
-          onChange={(event) =>
-            setShowUnreadBadges(event.currentTarget.checked)
-          }
-        />
-      </SettingsFieldRow>
-      <SettingsFieldRow label={t("librarySettings.numberBadges")}>
-        <Switch
-          checked={showNumberBadges}
-          onChange={(event) =>
-            setShowNumberBadges(event.currentTarget.checked)
-          }
-        />
-      </SettingsFieldRow>
+    <Stack gap="md">
+      <SettingsSection title={t("librarySettings.group.sorting")}>
+        <SettingsFieldRow
+          label={t("librarySettings.sort")}
+          description={t("librarySettings.sort.description")}
+        >
+          <Select
+            data={SORT_ORDERS.map((value) => ({
+              value,
+              label: t(SORT_ORDER_LABEL_KEYS[value]),
+            }))}
+            value={sortOrder}
+            onChange={(value) => {
+              if (value) setSortOrder(value as LibrarySortOrder);
+            }}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("librarySettings.defaultChapterSort")}
+          description={t("librarySettings.defaultChapterSort.description")}
+        >
+          <Select
+            data={[
+              { value: "asc", label: t("librarySettings.oldestFirst") },
+              { value: "desc", label: t("librarySettings.newestFirst") },
+            ]}
+            value={defaultChapterSort}
+            onChange={(value) => {
+              if (value) setDefaultChapterSort(value as DefaultChapterSort);
+            }}
+          />
+        </SettingsFieldRow>
+      </SettingsSection>
+
+      <SettingsSection title={t("librarySettings.group.layout")}>
+        <SettingsFieldRow
+          label={t("librarySettings.displayMode")}
+          description={t("librarySettings.displayMode.description")}
+        >
+          <SegmentedToggle
+            data={DISPLAY_MODES.map((value) => ({
+              value,
+              label: t(DISPLAY_MODE_LABEL_KEYS[value]),
+            }))}
+            value={displayMode}
+            onChange={(value) => setDisplayMode(value as LibraryDisplayMode)}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("librarySettings.novelsPerRow")}
+          description={t("librarySettings.novelsPerRow.description")}
+        >
+          <NumberInput
+            min={1}
+            max={5}
+            value={novelsPerRow}
+            onChange={(value) => {
+              if (typeof value === "number") setNovelsPerRow(value);
+            }}
+            disabled={displayMode === "list"}
+          />
+        </SettingsFieldRow>
+      </SettingsSection>
+
+      <SettingsSection title={t("librarySettings.group.badges")}>
+        <SettingsFieldRow
+          label={t("librarySettings.downloadedBadges")}
+          description={t("librarySettings.downloadedBadges.description")}
+        >
+          <Switch
+            checked={showDownloadBadges}
+            onChange={(event) =>
+              setShowDownloadBadges(event.currentTarget.checked)
+            }
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("librarySettings.unreadBadges")}
+          description={t("librarySettings.unreadBadges.description")}
+        >
+          <Switch
+            checked={showUnreadBadges}
+            onChange={(event) =>
+              setShowUnreadBadges(event.currentTarget.checked)
+            }
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("librarySettings.numberBadges")}
+          description={t("librarySettings.numberBadges.description")}
+        >
+          <Switch
+            checked={showNumberBadges}
+            onChange={(event) =>
+              setShowNumberBadges(event.currentTarget.checked)
+            }
+          />
+        </SettingsFieldRow>
+      </SettingsSection>
+
+      <SettingsSection title={t("librarySettings.group.privacy")}>
+        <SettingsFieldRow
+          label={t("librarySettings.incognito")}
+          description={t("librarySettings.incognito.description")}
+        >
+          <Switch
+            checked={incognitoMode}
+            onChange={(event) =>
+              setIncognitoMode(event.currentTarget.checked)
+            }
+          />
+        </SettingsFieldRow>
+      </SettingsSection>
     </Stack>
   );
 }

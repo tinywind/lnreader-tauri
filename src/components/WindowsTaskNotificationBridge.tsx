@@ -87,7 +87,7 @@ async function ensureNotificationPermission(): Promise<boolean> {
       if (await isPermissionGranted()) return true;
       return (await requestPermission()) === "granted";
     } catch (error) {
-      console.info("[task-notifications] permission unavailable", error);
+      console.warn("[task-notifications] permission unavailable", error);
       return false;
     }
   })();
@@ -132,7 +132,7 @@ export function WindowsTaskNotificationBridge({
           await window.unminimize();
           await window.setFocus();
         } catch (error) {
-          console.info("[task-notifications] window focus failed", error);
+          console.warn("[task-notifications] window focus failed", error);
         }
         void navigate({ to: route });
       })();
@@ -145,7 +145,7 @@ export function WindowsTaskNotificationBridge({
         actionListener = listener;
       })
       .catch((error) => {
-        console.info("[task-notifications] action listener failed", error);
+        console.warn("[task-notifications] action listener failed", error);
       });
 
     const unsubscribeSnapshots = taskScheduler.subscribe(() => {
@@ -200,7 +200,7 @@ export function WindowsTaskNotificationBridge({
             },
           });
         } catch (error) {
-          console.info("[task-notifications] send failed", error);
+          console.warn("[task-notifications] send failed", error);
         }
       });
     });

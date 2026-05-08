@@ -1,10 +1,9 @@
-import { Stack, Text } from "@mantine/core";
+import { Text } from "@mantine/core";
 import type { ReactNode } from "react";
 import { ConsolePanel } from "./ConsolePrimitives";
 
 interface SettingsSectionProps {
   children: ReactNode;
-  summary?: string;
   title: string;
 }
 
@@ -21,20 +20,12 @@ interface SettingsInlineControlsProps {
 
 export function SettingsSection({
   children,
-  summary,
   title,
 }: SettingsSectionProps) {
   return (
     <ConsolePanel
       className="lnr-settings-group"
-      title={
-        <Stack gap={2}>
-          <Text className="lnr-settings-group-title">{title}</Text>
-          {summary ? (
-            <Text className="lnr-settings-group-summary">{summary}</Text>
-          ) : null}
-        </Stack>
-      }
+      title={<Text className="lnr-settings-group-title">{title}</Text>}
     >
       <div className="lnr-settings-group-body">{children}</div>
     </ConsolePanel>

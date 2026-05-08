@@ -625,15 +625,11 @@ function ReaderContentInner(
     const rect = node.getBoundingClientRect();
 
     const zone = getTapZone(rect, event.clientX, event.clientY);
-    const zoneMap =
-      rect.width > rect.height
-        ? general.landscapeTapZones
-        : general.portraitTapZones;
     const action: ReaderTapAction =
       zone === "middleCenter"
         ? "menu"
         : general.tapToScroll
-          ? zoneMap[zone]
+          ? general.tapZones[zone]
           : "none";
 
     switch (action) {

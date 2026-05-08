@@ -1,24 +1,22 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 import {
-  Accordion,
-  Badge,
   ColorInput,
-  Group,
   NumberInput,
-  Paper,
   Select,
   SimpleGrid,
   Slider,
   Stack,
   Switch,
+  Tabs,
   Text,
   Textarea,
-  Title,
+  UnstyledButton,
 } from "@mantine/core";
 import { SegmentedToggle } from "./SegmentedToggle";
 import {
   SettingsFieldRow,
   SettingsInlineControls,
+  SettingsSection,
   SettingsWideField,
 } from "./SettingsPrimitives";
 import { TextButton } from "./TextButton";
@@ -32,28 +30,14 @@ import {
   type ReaderTapAction,
   type ReaderTapPreset,
   type ReaderTapPresetId,
-  type ReaderTapZoneMap,
 } from "../store/reader";
+import "../styles/settings.css";
 
 const TAP_ACTION_LABEL_KEYS: Record<ReaderTapAction, TranslationKey> = {
   none: "readerSettings.tapAction.none",
   previous: "readerSettings.tapAction.previous",
   menu: "readerSettings.tapAction.menu",
   next: "readerSettings.tapAction.next",
-};
-
-const TAP_PRESET_LABEL_KEYS: Record<ReaderTapPresetId, TranslationKey> = {
-  balanced: "readerSettings.tapPreset.balanced.label",
-  "side-columns": "readerSettings.tapPreset.sideColumns.label",
-  "vertical-scroll": "readerSettings.tapPreset.verticalScroll.label",
-  "bottom-forward": "readerSettings.tapPreset.bottomForward.label",
-};
-
-const TAP_PRESET_DESCRIPTION_KEYS: Record<ReaderTapPresetId, TranslationKey> = {
-  balanced: "readerSettings.tapPreset.balanced.description",
-  "side-columns": "readerSettings.tapPreset.sideColumns.description",
-  "vertical-scroll": "readerSettings.tapPreset.verticalScroll.description",
-  "bottom-forward": "readerSettings.tapPreset.bottomForward.description",
 };
 
 const READER_THEME_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -105,10 +89,29 @@ export function ReaderSettingsPanel() {
   }
 
   return (
-    <Stack gap="lg">
-      <ReaderSettingSection
+    <Tabs
+      className="lnr-reader-settings-tabs"
+      defaultValue="reading"
+      keepMounted={false}
+    >
+      <Tabs.List className="lnr-reader-settings-tab-list">
+        <Tabs.Tab value="reading">
+          {t("readerSettings.reading.title")}
+        </Tabs.Tab>
+        <Tabs.Tab value="text">{t("readerSettings.text.title")}</Tabs.Tab>
+        <Tabs.Tab value="controls">
+          {t("readerSettings.controls.title")}
+        </Tabs.Tab>
+        <Tabs.Tab value="indicators">
+          {t("readerSettings.indicators.title")}
+        </Tabs.Tab>
+        <Tabs.Tab value="advanced">{t("readerSettings.advanced")}</Tabs.Tab>
+      </Tabs.List>
+
+      <Tabs.Panel className="lnr-reader-settings-tab-panel" value="reading">
+        <Stack gap="lg">
+      <SettingsSection
         title={t("readerSettings.reading.title")}
-        description={t("readerSettings.reading.description")}
       >
         <SettingsFieldRow
           label={t("readerSettings.readingMode")}
@@ -144,7 +147,10 @@ export function ReaderSettingsPanel() {
             }}
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.autoScroll")}>
+        <SettingsFieldRow
+          label={t("readerSettings.autoScroll")}
+          description={t("readerSettings.autoScroll.description")}
+        >
           <Switch
             checked={!general.pageReader && general.autoScroll}
             disabled={general.pageReader}
@@ -155,7 +161,10 @@ export function ReaderSettingsPanel() {
         </SettingsFieldRow>
         {!general.pageReader && general.autoScroll ? (
           <>
-            <SettingsFieldRow label={t("readerSettings.autoScrollInterval")}>
+            <SettingsFieldRow
+              label={t("readerSettings.autoScrollInterval")}
+              description={t("readerSettings.autoScrollInterval.description")}
+            >
               <NumberInput
                 value={general.autoScrollInterval}
                 min={16}
@@ -167,7 +176,10 @@ export function ReaderSettingsPanel() {
                 }}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label={t("readerSettings.autoScrollOffset")}>
+            <SettingsFieldRow
+              label={t("readerSettings.autoScrollOffset")}
+              description={t("readerSettings.autoScrollOffset.description")}
+            >
               <NumberInput
                 value={general.autoScrollOffset}
                 min={0.25}
@@ -193,7 +205,10 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.keepScreenOn")}>
+        <SettingsFieldRow
+          label={t("readerSettings.keepScreenOn")}
+          description={t("readerSettings.keepScreenOn.description")}
+        >
           <Switch
             checked={general.keepScreenOn}
             onChange={(event) =>
@@ -201,13 +216,19 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-      </ReaderSettingSection>
+      </SettingsSection>
+        </Stack>
+      </Tabs.Panel>
 
-      <ReaderSettingSection
+      <Tabs.Panel className="lnr-reader-settings-tab-panel" value="text">
+        <Stack gap="lg">
+      <SettingsSection
         title={t("readerSettings.text.title")}
-        description={t("readerSettings.text.description")}
       >
-        <SettingsFieldRow label={t("readerSettings.readerTheme")}>
+        <SettingsFieldRow
+          label={t("readerSettings.readerTheme")}
+          description={t("readerSettings.readerTheme.description")}
+        >
           <Select
             data={readerThemes.map((theme) => ({
               value: theme.id,
@@ -222,7 +243,10 @@ export function ReaderSettingsPanel() {
             }}
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.background")}>
+        <SettingsFieldRow
+          label={t("readerSettings.background")}
+          description={t("readerSettings.background.description")}
+        >
           <ColorInput
             value={appearance.backgroundColor}
             onChange={(backgroundColor) =>
@@ -230,7 +254,10 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.textColor")}>
+        <SettingsFieldRow
+          label={t("readerSettings.textColor")}
+          description={t("readerSettings.textColor.description")}
+        >
           <ColorInput
             value={appearance.textColor}
             onChange={(textColor) => setAppearance({ textColor })}
@@ -238,6 +265,7 @@ export function ReaderSettingsPanel() {
         </SettingsFieldRow>
         <SettingSlider
           label={t("readerSettings.textSize")}
+          description={t("readerSettings.textSize.description")}
           valueLabel={`${appearance.textSize}px`}
           min={12}
           max={36}
@@ -247,6 +275,7 @@ export function ReaderSettingsPanel() {
         />
         <SettingSlider
           label={t("readerSettings.lineHeight")}
+          description={t("readerSettings.lineHeight.description")}
           valueLabel={appearance.lineHeight.toFixed(2)}
           min={1}
           max={2.6}
@@ -256,6 +285,7 @@ export function ReaderSettingsPanel() {
         />
         <SettingSlider
           label={t("readerSettings.padding")}
+          description={t("readerSettings.padding.description")}
           valueLabel={`${appearance.padding}px`}
           min={0}
           max={64}
@@ -263,7 +293,10 @@ export function ReaderSettingsPanel() {
           value={appearance.padding}
           onChange={(padding) => setAppearance({ padding })}
         />
-        <SettingsFieldRow label={t("readerSettings.font")}>
+        <SettingsFieldRow
+          label={t("readerSettings.font")}
+          description={t("readerSettings.font.description")}
+        >
           <Select
             data={READER_FONT_OPTIONS.map((option) => ({
               ...option,
@@ -278,7 +311,10 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.alignment")}>
+        <SettingsFieldRow
+          label={t("readerSettings.alignment")}
+          description={t("readerSettings.alignment.description")}
+        >
           <SegmentedToggle
             value={appearance.textAlign}
             onChange={(textAlign) =>
@@ -297,23 +333,32 @@ export function ReaderSettingsPanel() {
             ]}
           />
         </SettingsFieldRow>
-        <SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("readerSettings.actions")}
+          description={t("readerSettings.actions.description")}
+        >
           <SettingsInlineControls>
             <TextButton variant="default" onClick={handleSaveCustomTheme}>
               {t("readerSettings.saveCustomTheme")}
             </TextButton>
             <TextButton variant="default" onClick={resetReaderSettings}>
-              {t("readerSettings.reset")}
+              {t("common.reset")}
             </TextButton>
           </SettingsInlineControls>
         </SettingsFieldRow>
-      </ReaderSettingSection>
+      </SettingsSection>
+        </Stack>
+      </Tabs.Panel>
 
-      <ReaderSettingSection
+      <Tabs.Panel className="lnr-reader-settings-tab-panel" value="controls">
+        <Stack gap="lg">
+      <SettingsSection
         title={t("readerSettings.controls.title")}
-        description={t("readerSettings.controls.description")}
       >
-        <SettingsFieldRow label={t("readerSettings.swipeGestures")}>
+        <SettingsFieldRow
+          label={t("readerSettings.swipeGestures")}
+          description={t("readerSettings.swipeGestures.description")}
+        >
           <Switch
             checked={general.swipeGestures}
             onChange={(event) =>
@@ -321,7 +366,10 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.tapControls")}>
+        <SettingsFieldRow
+          label={t("readerSettings.tapControls")}
+          description={t("readerSettings.tapControls.description")}
+        >
           <Switch
             checked={general.tapToScroll}
             onChange={(event) =>
@@ -330,28 +378,39 @@ export function ReaderSettingsPanel() {
           />
         </SettingsFieldRow>
         {general.tapToScroll ? (
-          <SettingsFieldRow layout="stacked">
+          <SettingsFieldRow
+            label={t("readerSettings.tapPreset")}
+            description={t("readerSettings.tapPreset.description")}
+            layout="stacked"
+          >
             <SettingsWideField>
-              <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-                {READER_TAP_PRESETS.map((preset) => (
+              <div className="lnr-reader-tap-preset-grid">
+                {READER_TAP_PRESETS.map((preset, index) => (
                   <TapZonePresetCard
                     key={preset.id}
+                    index={index}
                     preset={preset}
                     selected={preset.id === general.tapZonePresetId}
                     onApply={applyTapZonePreset}
                   />
                 ))}
-              </SimpleGrid>
+              </div>
             </SettingsWideField>
           </SettingsFieldRow>
         ) : null}
-      </ReaderSettingSection>
+      </SettingsSection>
+        </Stack>
+      </Tabs.Panel>
 
-      <ReaderSettingSection
+      <Tabs.Panel className="lnr-reader-settings-tab-panel" value="indicators">
+        <Stack gap="lg">
+      <SettingsSection
         title={t("readerSettings.indicators.title")}
-        description={t("readerSettings.indicators.description")}
       >
-        <SettingsFieldRow label={t("readerSettings.seekbar")}>
+        <SettingsFieldRow
+          label={t("readerSettings.seekbar")}
+          description={t("readerSettings.seekbar.description")}
+        >
           <Switch
             checked={general.showSeekbar}
             onChange={(event) =>
@@ -360,7 +419,10 @@ export function ReaderSettingsPanel() {
           />
         </SettingsFieldRow>
         {general.showSeekbar ? (
-          <SettingsFieldRow label={t("readerSettings.verticalSeekbar")}>
+          <SettingsFieldRow
+            label={t("readerSettings.verticalSeekbar")}
+            description={t("readerSettings.verticalSeekbar.description")}
+          >
             <Switch
               checked={general.verticalSeekbar}
               onChange={(event) =>
@@ -369,7 +431,10 @@ export function ReaderSettingsPanel() {
             />
           </SettingsFieldRow>
         ) : null}
-        <SettingsFieldRow label={t("readerSettings.scrollPercentage")}>
+        <SettingsFieldRow
+          label={t("readerSettings.scrollPercentage")}
+          description={t("readerSettings.scrollPercentage.description")}
+        >
           <Switch
             checked={general.showScrollPercentage}
             onChange={(event) =>
@@ -379,7 +444,10 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-        <SettingsFieldRow label={t("readerSettings.batteryTimeFooter")}>
+        <SettingsFieldRow
+          label={t("readerSettings.batteryTimeFooter")}
+          description={t("readerSettings.batteryTimeFooter.description")}
+        >
           <Switch
             checked={general.showBatteryAndTime}
             onChange={(event) =>
@@ -389,14 +457,18 @@ export function ReaderSettingsPanel() {
             }
           />
         </SettingsFieldRow>
-      </ReaderSettingSection>
+      </SettingsSection>
+        </Stack>
+      </Tabs.Panel>
 
-      <Accordion variant="contained">
-        <Accordion.Item value="advanced">
-          <Accordion.Control>{t("readerSettings.advanced")}</Accordion.Control>
-          <Accordion.Panel>
+      <Tabs.Panel className="lnr-reader-settings-tab-panel" value="advanced">
+        <Stack gap="lg">
+          <SettingsSection title={t("readerSettings.advanced")}>
             <Stack gap="md">
-              <SettingsFieldRow label={t("readerSettings.bionicReading")}>
+              <SettingsFieldRow
+                label={t("readerSettings.bionicReading")}
+                description={t("readerSettings.bionicReading.description")}
+              >
                 <Switch
                   checked={general.bionicReading}
                   onChange={(event) =>
@@ -406,6 +478,9 @@ export function ReaderSettingsPanel() {
               </SettingsFieldRow>
               <SettingsFieldRow
                 label={t("readerSettings.removeExtraParagraphSpacing")}
+                description={t(
+                  "readerSettings.removeExtraParagraphSpacing.description",
+                )}
               >
                 <Switch
                   checked={general.removeExtraParagraphSpacing}
@@ -419,6 +494,7 @@ export function ReaderSettingsPanel() {
               </SettingsFieldRow>
               <SettingsFieldRow
                 label={t("readerSettings.customCss")}
+                description={t("readerSettings.customCss.description")}
                 layout="stacked"
               >
                 <SettingsWideField>
@@ -434,6 +510,7 @@ export function ReaderSettingsPanel() {
               </SettingsFieldRow>
               <SettingsFieldRow
                 label={t("readerSettings.customJs")}
+                description={t("readerSettings.customJs.description")}
                 layout="stacked"
               >
                 <SettingsWideField>
@@ -448,37 +525,16 @@ export function ReaderSettingsPanel() {
                 </SettingsWideField>
               </SettingsFieldRow>
             </Stack>
-          </Accordion.Panel>
-        </Accordion.Item>
-      </Accordion>
-    </Stack>
-  );
-}
-
-function ReaderSettingSection({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <Stack gap="sm">
-      <Stack className="lnr-reader-settings-section-heading" gap={2}>
-        <Title order={4}>{title}</Title>
-        <Text size="sm" c="dimmed">
-          {description}
-        </Text>
-      </Stack>
-      {children}
-    </Stack>
+          </SettingsSection>
+        </Stack>
+      </Tabs.Panel>
+    </Tabs>
   );
 }
 
 function SettingSlider({
   label,
+  description,
   valueLabel,
   min,
   max,
@@ -487,6 +543,7 @@ function SettingSlider({
   onChange,
 }: {
   label: string;
+  description: string;
   valueLabel: string;
   min: number;
   max: number;
@@ -495,7 +552,7 @@ function SettingSlider({
   onChange: (value: number) => void;
 }) {
   return (
-    <SettingsFieldRow label={label}>
+    <SettingsFieldRow label={label} description={description}>
       <div className="lnr-settings-slider-control">
         <Text className="lnr-settings-slider-value">{valueLabel}</Text>
         <Slider
@@ -511,10 +568,12 @@ function SettingSlider({
 }
 
 function TapZonePresetCard({
+  index,
   preset,
   selected,
   onApply,
 }: {
+  index: number;
   preset: ReaderTapPreset;
   selected: boolean;
   onApply: (presetId: ReaderTapPresetId) => void;
@@ -522,83 +581,43 @@ function TapZonePresetCard({
   const { t } = useTranslation();
 
   return (
-    <Paper
-      withBorder
-      p="md"
-      radius="md"
-      style={{
-        borderColor: selected
-          ? "var(--mantine-color-blue-5)"
-          : "var(--mantine-color-default-border)",
-      }}
+    <UnstyledButton
+      aria-label={`${t("readerSettings.tapControls")} ${index + 1}`}
+      aria-pressed={selected}
+      className="lnr-reader-tap-preset"
+      data-selected={selected}
+      onClick={() => onApply(preset.id)}
+      type="button"
     >
-      <Stack gap="sm">
-        <Group justify="space-between" align="center">
-          <Text fw={700}>{t(TAP_PRESET_LABEL_KEYS[preset.id])}</Text>
-          {selected ? (
-            <Badge variant="light">{t("common.selected")}</Badge>
-          ) : null}
-        </Group>
-        <Text size="sm" c="dimmed">
-          {t(TAP_PRESET_DESCRIPTION_KEYS[preset.id])}
-        </Text>
-        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-          <TapZonePreview
-            title={t("readerSettings.orientation.portrait")}
-            zones={preset.portrait}
-          />
-          <TapZonePreview
-            title={t("readerSettings.orientation.landscape")}
-            zones={preset.landscape}
-          />
-        </SimpleGrid>
-        {selected ? null : (
-          <TextButton variant="default" onClick={() => onApply(preset.id)}>
-            {t("common.usePreset")}
-          </TextButton>
-        )}
-      </Stack>
-    </Paper>
+      <TapZonePreview preset={preset} />
+    </UnstyledButton>
   );
 }
 
-function TapZonePreview({
-  title,
-  zones,
-}: {
-  title: string;
-  zones: ReaderTapZoneMap;
-}) {
+function TapZonePreview({ preset }: { preset: ReaderTapPreset }) {
   const { t } = useTranslation();
+  const actions = READER_TAP_ZONES.map((zone) => preset.zones[zone]);
 
   return (
-    <Stack gap={6}>
-      <Text size="xs" fw={600} c="dimmed">
-        {title}
-      </Text>
-      <SimpleGrid cols={3} spacing={4}>
-        {READER_TAP_ZONES.map((zone) => {
-          const action = zones[zone];
-          return (
-            <Text
-              key={zone}
-              size="xs"
-              ta="center"
-              fw={600}
-              style={{
-                border: "1px solid var(--mantine-color-default-border)",
-                borderRadius: "0.25rem",
-                padding: "0.5rem 0.25rem",
-                background: getTapActionBackground(action),
-                color: getTapActionColor(action),
-              }}
-            >
-              {t(TAP_ACTION_LABEL_KEYS[action])}
-            </Text>
-          );
-        })}
-      </SimpleGrid>
-    </Stack>
+    <SimpleGrid cols={3} spacing={4}>
+      {actions.map((action, index) => (
+        <Text
+          key={`${preset.id}-${index}`}
+          size="xs"
+          ta="center"
+          fw={600}
+          style={{
+            border: "1px solid var(--mantine-color-default-border)",
+            borderRadius: "0.25rem",
+            padding: "0.5rem 0.25rem",
+            background: getTapActionBackground(action),
+            color: getTapActionColor(action),
+          }}
+        >
+          {t(TAP_ACTION_LABEL_KEYS[action])}
+        </Text>
+      ))}
+    </SimpleGrid>
   );
 }
 

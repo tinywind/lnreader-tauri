@@ -60,6 +60,9 @@ export const novelRoute = createRoute({
 export const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
+  validateSearch: (search: Record<string, unknown>) => ({
+    section: typeof search.section === "string" ? search.section : undefined,
+  }),
   component: SettingsRoutePage,
 });
 
@@ -120,7 +123,8 @@ function BrowseRoutePage() {
 }
 
 function SettingsRoutePage() {
-  return <SettingsPage />;
+  const { section } = settingsRoute.useSearch();
+  return <SettingsPage section={section} />;
 }
 
 declare module "@tanstack/react-router" {

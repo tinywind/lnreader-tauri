@@ -21,6 +21,7 @@ tauri-build = { version = "2.6.0", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 tauri = { version = "2.11.0", features = ["tray-icon", "unstable"] }
 tauri-plugin-log = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }

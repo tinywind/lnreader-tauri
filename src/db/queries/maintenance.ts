@@ -4,23 +4,32 @@ export interface MaintenanceResult {
   rowsAffected: number;
 }
 
-export async function clearCachedNovels(): Promise<MaintenanceResult> {
+export async function clearLibraryMembership(): Promise<MaintenanceResult> {
   const db = await getDb();
-  await db.execute(
-    `DELETE FROM chapter
-     WHERE novel_id IN (
-       SELECT id FROM novel WHERE in_library = 0
-     )`,
-  );
-  await db.execute(
-    `DELETE FROM novel_category
-     WHERE novel_id IN (
-       SELECT id FROM novel WHERE in_library = 0
-     )`,
-  );
   const result = await db.execute(
-    `DELETE FROM novel
-     WHERE in_library = 0`,
+    `UPDATE novel
+     SET
+       in_library = 0,
+       library_added_at = NULL,
+       updated_at = unixepoch()
+     WHERE in_library = 1
+       OR library_added_at IS NOT NULL`,
+  );
+  return { rowsAffected: result.rowsAffected };
+}
+
+export async function clearDownloadedChapterContent(): Promise<MaintenanceResult> {
+  const db = await getDb();
+  const result = await db.execute(
+    `UPDATE chapter
+     SET
+       content = NULL,
+       content_bytes = 0,
+       is_downloaded = 0,
+       updated_at = unixepoch()
+     WHERE content IS NOT NULL
+       OR content_bytes > 0
+       OR is_downloaded = 1`,
   );
   return { rowsAffected: result.rowsAffected };
 }
@@ -43,17 +52,23 @@ export async function clearUpdatesTab(): Promise<MaintenanceResult> {
   return { rowsAffected: result.rowsAffected };
 }
 
-export async function deleteReadDownloadedChapters(): Promise<MaintenanceResult> {
+export async function clearReadingProgress(): Promise<MaintenanceResult> {
   const db = await getDb();
   const result = await db.execute(
     `UPDATE chapter
      SET
-       content = NULL,
-       content_bytes = 0,
-       is_downloaded = 0,
+       progress = 0,
+       unread = 1,
+       read_at = NULL,
        updated_at = unixepoch()
-     WHERE unread = 0
-       AND is_downloaded = 1`,
+     WHERE progress <> 0
+       OR unread = 0
+       OR read_at IS NOT NULL`,
+  );
+  await db.execute(
+    `UPDATE novel
+     SET last_read_at = NULL, updated_at = unixepoch()
+     WHERE last_read_at IS NOT NULL`,
   );
   return { rowsAffected: result.rowsAffected };
 }

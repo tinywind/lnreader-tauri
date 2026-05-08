@@ -21,10 +21,10 @@ export type MainTaskKind =
   | "backup.restore"
   | "library.checkUpdates"
   | "library.refreshMetadata"
-  | "maintenance.clearCachedNovels"
+  | "maintenance.clearLibraryMembership"
+  | "maintenance.clearDownloadedContent"
+  | "maintenance.clearReadingProgress"
   | "maintenance.clearUpdates"
-  | "maintenance.deleteReadDownloads"
-  | "maintenance.clearPluginStorage"
   | "repository.add"
   | "repository.remove"
   | "repository.refreshIndex"
@@ -139,6 +139,10 @@ export interface SourceTaskSpec<T> extends Omit<TaskSpec<T>, "lane"> {
 export interface TaskHandle<T> {
   id: string;
   promise: Promise<T>;
+}
+
+export interface TaskCancelOptions {
+  sourceId?: string;
 }
 
 interface TaskEntry {
@@ -266,7 +270,7 @@ export class TaskScheduler {
     entry?: TaskEntry,
     extra?: Record<string, unknown>,
   ): void {
-    console.info(`[task-scheduler] ${message}`, {
+    console.debug(`[task-scheduler] ${message}`, {
       activeBackgroundCount: this.activeBackgroundCount,
       activeForegroundBaseCount: this.activeForegroundBaseCount,
       activeForegroundBoostCount: this.activeForegroundBoostCount,
@@ -408,6 +412,24 @@ export class TaskScheduler {
     return true;
   }
 
+  cancelActiveTasks(options: TaskCancelOptions = {}): number {
+    const cancellableTaskIds = [...this.entries.values()]
+      .filter((entry) => this.isCancellableActiveEntry(entry, options))
+      .sort((left, right) => {
+        const leftRank = left.record.status === "queued" ? 0 : 1;
+        const rightRank = right.record.status === "queued" ? 0 : 1;
+        return leftRank - rightRank;
+      })
+      .map((entry) => entry.record.id);
+    let cancelled = 0;
+
+    for (const taskId of cancellableTaskIds) {
+      if (this.cancel(taskId)) cancelled += 1;
+    }
+
+    return cancelled;
+  }
+
   private cancelOtherOpenSiteTasks(taskId: string): void {
     for (const entry of [...this.entries.values()]) {
       if (
@@ -418,6 +440,21 @@ export class TaskScheduler {
         this.cancel(entry.record.id);
       }
     }
+  }
+
+  private isCancellableActiveEntry(
+    entry: TaskEntry,
+    options: TaskCancelOptions,
+  ): boolean {
+    if (!entry.record.canCancel) return false;
+    if (entry.record.status !== "queued" && entry.record.status !== "running") {
+      return false;
+    }
+    if (!options.sourceId) return true;
+    return (
+      entry.record.lane === "source" &&
+      entry.record.source?.id === options.sourceId
+    );
   }
 
   retry(id: string): TaskHandle<unknown> | null {

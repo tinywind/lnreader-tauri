@@ -211,7 +211,7 @@ async function fetchAllAvailable(
         itemCount: items.length,
       });
     } catch (error) {
-      console.error("[browse:repository] available repo failed", {
+      console.warn("[browse:repository] available repo failed", {
         repoId: repo.id,
         repoUrl: repo.url,
         error,
