@@ -50,9 +50,9 @@ Release assets are the stable public downloads.
 For a newer tester build from the current `main` branch, use GitHub Actions:
 
 1. Open the latest successful workflow run for your platform:
-   [Windows](https://github.com/tinywind/norea/actions/workflows/windows.yml),
-   [Linux](https://github.com/tinywind/norea/actions/workflows/linux.yml), or
-   [Android](https://github.com/tinywind/norea/actions/workflows/android.yml).
+   [Windows](https://github.com/tinywind/norea/actions/workflows/windows.yml?query=branch%3Amain+is%3Asuccess),
+   [Linux](https://github.com/tinywind/norea/actions/workflows/linux.yml?query=branch%3Amain+is%3Asuccess), or
+   [Android](https://github.com/tinywind/norea/actions/workflows/android.yml?query=branch%3Amain+is%3Asuccess).
 2. Open the run and scroll to Artifacts.
 3. Download the matching artifact:
 

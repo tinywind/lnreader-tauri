@@ -1,0 +1,97 @@
+name: Actions Cache Cleanup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 20 * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CACHE_MAX_TOTAL_BYTES: "8589934592"
+  RUST_CACHE_KEY_PREFIX: "v0-rust-"
+  RUST_CACHE_MAX_AGE_DAYS: "3"
+
+jobs:
+  cleanup:
+    name: Prune stale Rust caches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete old Rust caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cache_file="$(mktemp)"
+          delete_file="$(mktemp)"
+          trap 'rm -f "$cache_file" "$delete_file"' EXIT
+
+          gh cache list \
+            --repo "$REPOSITORY" \
+            --limit 100 \
+            --sort last_accessed_at \
+            --order asc \
+            --json id,key,lastAccessedAt,sizeInBytes > "$cache_file"
+
+          total_bytes="$(jq '([.[].sizeInBytes] | add) // 0' "$cache_file")"
+          cutoff_epoch="$(date -u -d "${RUST_CACHE_MAX_AGE_DAYS} days ago" +%s)"
+
+          while IFS=$'\t' read -r id key last_accessed size_bytes; do
+            if [ -z "$id" ]; then
+              continue
+            fi
+
+            last_accessed_epoch="$(date -u -d "$last_accessed" +%s)"
+            if [ "$last_accessed_epoch" -lt "$cutoff_epoch" ]; then
+              printf '%s\t%s\t%s\t%s\n' "$id" "$key" "$last_accessed" "$size_bytes" >> "$delete_file"
+              total_bytes=$((total_bytes - size_bytes))
+            fi
+          done < <(
+            jq -r --arg prefix "$RUST_CACHE_KEY_PREFIX" \
+              '.[] | select(.key | startswith($prefix)) | [.id, .key, .lastAccessedAt, .sizeInBytes] | @tsv' \
+              "$cache_file"
+          )
+
+          if [ "$total_bytes" -gt "$CACHE_MAX_TOTAL_BYTES" ]; then
+            while IFS=$'\t' read -r id key last_accessed size_bytes; do
+              if [ -z "$id" ]; then
+                continue
+              fi
+
+              if grep -q "^${id}[[:space:]]" "$delete_file"; then
+                continue
+              fi
+
+              if [ "$total_bytes" -le "$CACHE_MAX_TOTAL_BYTES" ]; then
+                break
+              fi
+
+              printf '%s\t%s\t%s\t%s\n' "$id" "$key" "$last_accessed" "$size_bytes" >> "$delete_file"
+              total_bytes=$((total_bytes - size_bytes))
+            done < <(
+              jq -r --arg prefix "$RUST_CACHE_KEY_PREFIX" \
+                '.[] | select(.key | startswith($prefix)) | [.id, .key, .lastAccessedAt, .sizeInBytes] | @tsv' \
+                "$cache_file"
+            )
+          fi
+
+          if [ ! -s "$delete_file" ]; then
+            echo "No Rust caches need pruning."
+            exit 0
+          fi
+
+          sort -u "$delete_file" |
+            while IFS=$'\t' read -r id key last_accessed size_bytes; do
+              echo "Deleting Rust cache $id ($key, $size_bytes bytes, last accessed $last_accessed)"
+              gh cache delete "$id" --repo "$REPOSITORY"
+            done
