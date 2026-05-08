@@ -101,9 +101,12 @@ async function runLibraryMetadataRefresh(
           path: novel.path,
         },
         dedupeKey: `source.refreshNovel:${plugin.id}:${novel.path}`,
-        run: () =>
+        run: (context) =>
           syncNovelFromSource(
-            plugin,
+            pluginManager.getPluginForExecutor(
+              novel.pluginId,
+              context.executor ?? "immediate",
+            ),
             {
               cover: novel.cover ?? undefined,
               name: novel.name,

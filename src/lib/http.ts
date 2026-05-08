@@ -2,7 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { androidWebviewFetch } from "./android-scraper";
 import { isAndroidRuntime } from "./tauri-runtime";
+import { getSourceRequestTimeoutMs } from "../store/browse";
 import { getScraperUserAgent } from "../store/user-agent";
+import {
+  activeScraperExecutor,
+  type ScraperExecutorId,
+} from "./tasks/scraper-queue";
 
 export interface HttpInit {
   method?: string;
@@ -18,6 +23,12 @@ export interface HttpInit {
   body?: unknown;
   /** Plugin-owned site origin to prepare in the scraper WebView. */
   contextUrl?: string;
+  /** Source id used to infer an executor when no explicit scraper executor is bound. */
+  sourceId?: string;
+  /** Executor-owned WebView that must execute plugin-owned site traffic. */
+  scraperExecutor?: ScraperExecutorId;
+  /** Per-request timeout for plugin-owned site traffic. */
+  timeoutMs?: number;
   /** Accepted for API compatibility; the WebView fetch IPC ignores it today. */
   signal?: AbortSignal;
 }
@@ -81,6 +92,13 @@ function toWireInit(init: HttpInit): FetchInitWire {
   };
 }
 
+function requestTimeoutMs(timeoutMs: number | undefined): number {
+  const numeric =
+    typeof timeoutMs === "number" ? timeoutMs : getSourceRequestTimeoutMs();
+  if (!Number.isFinite(numeric)) return getSourceRequestTimeoutMs();
+  return Math.max(1, Math.round(numeric));
+}
+
 function decodeBase64Body(bodyBase64: string): Uint8Array {
   const binary = atob(bodyBase64);
   const bytes = new Uint8Array(binary.length);
@@ -142,13 +160,25 @@ export async function pluginFetch(
   const wireInit = toWireInit(init);
   const contextUrl = init.contextUrl ?? null;
   const userAgent = scraperUserAgent(wireInit.headers);
+  const scraperExecutor =
+    init.scraperExecutor ?? activeScraperExecutor(init.sourceId);
+  const timeoutMs = requestTimeoutMs(init.timeoutMs);
   const result = isAndroidRuntime()
-    ? await androidWebviewFetch(url, wireInit, contextUrl, userAgent)
+    ? await androidWebviewFetch(
+        url,
+        wireInit,
+        contextUrl,
+        userAgent,
+        scraperExecutor,
+        timeoutMs,
+      )
     : await invoke<FetchResultWire>("webview_fetch", {
         url,
         init: wireInit,
         contextUrl,
         userAgent,
+        queue: scraperExecutor,
+        timeoutMs,
       });
   const response = new Response(bodyFromWire(result), {
     status: result.status,
@@ -182,21 +212,29 @@ export async function pluginFetchText(
 
 export function createPluginFetch(
   contextUrl: string,
+  sourceId?: string,
+  scraperExecutor?: ScraperExecutorId,
 ): (url: string, init?: HttpInit) => Promise<Response> {
   return (url, init = {}) =>
     pluginFetch(url, {
       ...init,
       contextUrl: init.contextUrl ?? contextUrl,
+      sourceId: init.sourceId ?? sourceId,
+      scraperExecutor: init.scraperExecutor ?? scraperExecutor,
     });
 }
 
 export function createPluginFetchText(
   contextUrl: string,
+  sourceId?: string,
+  scraperExecutor?: ScraperExecutorId,
 ): (url: string, init?: HttpInit) => Promise<string> {
   return (url, init = {}) =>
     pluginFetchText(url, {
       ...init,
       contextUrl: init.contextUrl ?? contextUrl,
+      sourceId: init.sourceId ?? sourceId,
+      scraperExecutor: init.scraperExecutor ?? scraperExecutor,
     });
 }
 
@@ -237,13 +275,20 @@ export function pluginFetchShim(
 
 export function createPluginFetchShim(
   contextUrl?: string,
+  sourceId?: string,
+  scraperExecutor?: ScraperExecutorId,
 ): (
   input: string | URL | Request,
   init?: RequestInit,
 ) => Promise<Response> {
   return (input, init) => {
     const pluginInit = init as
-      | (RequestInit & { contextUrl?: string })
+      | (RequestInit & {
+          contextUrl?: string;
+          scraperExecutor?: ScraperExecutorId;
+          sourceId?: string;
+          timeoutMs?: number;
+        })
       | undefined;
     const url =
       typeof input === "string"
@@ -256,6 +301,9 @@ export function createPluginFetchShim(
       headers: normalizeHeaders(pluginInit?.headers),
       body: pluginInit?.body,
       contextUrl: pluginInit?.contextUrl ?? contextUrl,
+      sourceId: pluginInit?.sourceId ?? sourceId,
+      scraperExecutor: pluginInit?.scraperExecutor ?? scraperExecutor,
+      timeoutMs: pluginInit?.timeoutMs,
       signal: pluginInit?.signal ?? undefined,
     });
   };

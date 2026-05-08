@@ -55,6 +55,8 @@ describe("pluginFetch", () => {
         body: "payload",
       },
       contextUrl: null,
+      queue: "immediate",
+      timeoutMs: 30_000,
       userAgent: globalThis.navigator?.userAgent ?? null,
     });
 
@@ -103,6 +105,8 @@ describe("pluginFetch", () => {
         body: undefined,
       },
       contextUrl: "https://ok.test",
+      queue: "immediate",
+      timeoutMs: 30_000,
       userAgent: globalThis.navigator?.userAgent ?? null,
     });
   });
@@ -122,7 +126,30 @@ describe("pluginFetch", () => {
         body: undefined,
       },
       contextUrl: null,
+      queue: "immediate",
+      timeoutMs: 30_000,
       userAgent: "Plugin UA",
+    });
+  });
+
+  it("forwards an explicit source request timeout to the scraper IPC", async () => {
+    invokeMock.mockResolvedValueOnce(wireOk("hello"));
+
+    await pluginFetch("https://ok.test/path", {
+      timeoutMs: 12_345,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("webview_fetch", {
+      url: "https://ok.test/path",
+      init: {
+        headers: undefined,
+        method: undefined,
+        body: undefined,
+      },
+      contextUrl: null,
+      queue: "immediate",
+      timeoutMs: 12_345,
+      userAgent: globalThis.navigator?.userAgent ?? null,
     });
   });
 

@@ -8,17 +8,17 @@ import { useBrowseStore } from "../store/browse";
 
 export function BrowseSettingsPanel() {
   const { t } = useTranslation();
-  const globalSearchConcurrency = useBrowseStore(
-    (s) => s.globalSearchConcurrency,
+  const sourceWorkConcurrency = useBrowseStore(
+    (s) => s.sourceWorkConcurrency,
   );
-  const setGlobalSearchConcurrency = useBrowseStore(
-    (s) => s.setGlobalSearchConcurrency,
+  const setSourceWorkConcurrency = useBrowseStore(
+    (s) => s.setSourceWorkConcurrency,
   );
-  const globalSearchTimeoutSeconds = useBrowseStore(
-    (s) => s.globalSearchTimeoutSeconds,
+  const sourceRequestTimeoutSeconds = useBrowseStore(
+    (s) => s.sourceRequestTimeoutSeconds,
   );
-  const setGlobalSearchTimeoutSeconds = useBrowseStore(
-    (s) => s.setGlobalSearchTimeoutSeconds,
+  const setSourceRequestTimeoutSeconds = useBrowseStore(
+    (s) => s.setSourceRequestTimeoutSeconds,
   );
   const chapterDownloadCooldownSeconds = useBrowseStore(
     (s) => s.chapterDownloadCooldownSeconds,
@@ -31,28 +31,28 @@ export function BrowseSettingsPanel() {
     <Stack gap="md">
       <SettingsSection title={t("browseSettings.group.search")}>
         <SettingsFieldRow
-          label={t("browseSettings.globalSearchConcurrency")}
-          description={t("browseSettings.globalSearchConcurrency.description")}
+          label={t("browseSettings.sourceWorkConcurrency")}
+          description={t("browseSettings.sourceWorkConcurrency.description")}
         >
           <NumberInput
-            value={globalSearchConcurrency}
+            value={sourceWorkConcurrency}
             min={1}
             max={10}
             step={1}
             clampBehavior="strict"
             onChange={(value) => {
               if (typeof value === "number") {
-                setGlobalSearchConcurrency(value);
+                setSourceWorkConcurrency(value);
               }
             }}
           />
         </SettingsFieldRow>
         <SettingsFieldRow
-          label={t("browseSettings.globalSearchTimeout")}
-          description={t("browseSettings.globalSearchTimeout.description")}
+          label={t("browseSettings.sourceRequestTimeout")}
+          description={t("browseSettings.sourceRequestTimeout.description")}
         >
           <NumberInput
-            value={globalSearchTimeoutSeconds}
+            value={sourceRequestTimeoutSeconds}
             min={5}
             max={120}
             step={5}
@@ -60,7 +60,7 @@ export function BrowseSettingsPanel() {
             suffix={` ${t("common.seconds")}`}
             onChange={(value) => {
               if (typeof value === "number") {
-                setGlobalSearchTimeoutSeconds(value);
+                setSourceRequestTimeoutSeconds(value);
               }
             }}
           />

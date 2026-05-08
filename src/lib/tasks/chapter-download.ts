@@ -305,17 +305,20 @@ export function enqueueChapterDownload(
     dedupeKey: chapterDownloadDedupeKey(job.id),
     sourceCooldownKey: chapterDownloadCooldownKey(job.pluginId),
     sourceCooldownMs: chapterDownloadCooldownMs(),
-    run: async ({ setProgress, signal }) => {
+    run: async ({ executor, setProgress, signal }) => {
       setProgress({ current: 0, total: 1 });
       try {
         if (isTauriRuntime()) {
           await pluginManager.loadInstalledFromDb();
         }
-        const plugin = pluginManager.getPlugin(job.pluginId);
-        if (!plugin) {
-          throw new Error(`Plugin '${job.pluginId}' is not installed.`);
-        }
+        const plugin = pluginManager.getPluginForExecutor(
+          job.pluginId,
+          executor ?? "immediate",
+        );
         const html = await plugin.parseChapter(job.chapterPath);
+        if (signal.aborted) {
+          throw new DOMException("Task was cancelled.", "AbortError");
+        }
         if (html.trim() === "") {
           throw new Error("Downloaded chapter content is empty.");
         }

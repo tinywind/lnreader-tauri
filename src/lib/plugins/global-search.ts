@@ -1,7 +1,8 @@
 import type { PluginManager } from "./manager";
 import type { NovelItem, Plugin } from "./types";
 import { enqueueSourceTask } from "../tasks/source-tasks";
-import { cancelAndroidScraperBackground } from "../android-scraper";
+import { taskScheduler, type TaskHandle } from "../tasks/scheduler";
+import { cancelAndroidScraperExecutor } from "../android-scraper";
 
 export interface GlobalSearchResult {
   pluginId: string;
@@ -11,7 +12,7 @@ export interface GlobalSearchResult {
 }
 
 export interface GlobalSearchOptions {
-  /** Default 3, mirrors upstream's `globalSearchConcurrency`. */
+  /** Default 3, mirrors the queued source work setting. */
   concurrency?: number;
   plugins?: readonly Plugin[];
   /** When the signal aborts, no further results are yielded. */
@@ -64,40 +65,9 @@ async function withTimeout<T>(
 }
 
 /**
- * Tiny in-process semaphore. Each task is a thunk returning a
- * promise; runs at most `concurrency` at a time. Inline so we
- * don't pull in a 30-line npm dep for what's effectively a queue.
- */
-function makeLimiter(concurrency: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  const drain = () => {
-    while (active < concurrency && queue.length > 0) {
-      const next = queue.shift();
-      if (next) {
-        active += 1;
-        next();
-      }
-    }
-  };
-  return <T>(task: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-      queue.push(() => {
-        task()
-          .then(resolve, reject)
-          .finally(() => {
-            active -= 1;
-            drain();
-          });
-      });
-      drain();
-    });
-}
-
-/**
  * Fan a single search query across every installed plugin with a
- * bounded concurrency. Returns the per-plugin result list once
- * every task has settled.
+ * scheduler-bounded concurrency. Returns the per-plugin result list
+ * once every task has settled.
  *
  * If the {@link AbortSignal} fires, in-flight plugin tasks may still
  * finish (the upstream plugin contract does not guarantee abortable
@@ -117,52 +87,71 @@ export async function globalSearch(
     1,
     options.concurrency ?? DEFAULT_CONCURRENCY,
   );
-  const limit = makeLimiter(concurrency);
+  taskScheduler.setSourceForegroundConcurrency(concurrency);
   const { signal, onResult } = options;
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   const collected: GlobalSearchResult[] = [];
+  const handles: TaskHandle<NovelItem[]>[] = [];
 
-  const tasks = plugins.map((plugin) =>
-    limit(async () => {
-      if (signal?.aborted) return;
-      let result: GlobalSearchResult;
-      try {
-        const novels = await enqueueSourceTask<NovelItem[]>({
-          plugin,
-          kind: "source.globalSearch",
-          priority: "normal",
-          title: options.taskTitle?.(plugin) ?? plugin.name,
-          subject: { path: term },
-          dedupeKey: `source.globalSearch:${plugin.id}:${term}`,
-          run: () =>
+  const cancelQueuedSearches = () => {
+    for (const handle of handles) taskScheduler.cancel(handle.id);
+  };
+  signal?.addEventListener("abort", cancelQueuedSearches, { once: true });
+
+  const tasks = plugins.map(async (plugin) => {
+    if (signal?.aborted) return;
+    let result: GlobalSearchResult;
+    try {
+      const handle = enqueueSourceTask<NovelItem[]>({
+        plugin,
+        kind: "source.globalSearch",
+        priority: "user",
+        title: options.taskTitle?.(plugin) ?? plugin.name,
+        subject: { path: term },
+        dedupeKey: `source.globalSearch:${plugin.id}:${term}`,
+        run: (context) => {
+          const executor = context.executor ?? "immediate";
+          const runtimePlugin = manager.getPluginForExecutor(
+            plugin.id,
+            executor,
+          );
+          return (
             withTimeout(
-              () => plugin.searchNovels(term, 1),
+              () => runtimePlugin.searchNovels(term, 1),
               timeoutMs,
               () =>
-                cancelAndroidScraperBackground(
+                cancelAndroidScraperExecutor(
                   "scraper: global search timed out",
+                  executor,
                 ),
-            ),
-        }).promise;
-        result = {
-          pluginId: plugin.id,
-          pluginName: plugin.name,
-          novels,
-        };
-      } catch (error) {
-        result = {
-          pluginId: plugin.id,
-          pluginName: plugin.name,
-          novels: [],
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-      if (signal?.aborted) return;
-      collected.push(result);
-      onResult?.(result);
-    }),
-  );
+            )
+          );
+        },
+      });
+      handles.push(handle);
+      const novels = await handle.promise;
+      result = {
+        pluginId: plugin.id,
+        pluginName: plugin.name,
+        novels,
+      };
+    } catch (error) {
+      result = {
+        pluginId: plugin.id,
+        pluginName: plugin.name,
+        novels: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (signal?.aborted) return;
+    collected.push(result);
+    onResult?.(result);
+  });
 
-  await Promise.all(tasks);
-  return collected;
+  try {
+    await Promise.all(tasks);
+    return collected;
+  } finally {
+    signal?.removeEventListener("abort", cancelQueuedSearches);
+  }
 }

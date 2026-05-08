@@ -3,8 +3,8 @@ import { persist } from "zustand/middleware";
 import type { GlobalSearchResult } from "../lib/plugins/global-search";
 import { taskScheduler } from "../lib/tasks/scheduler";
 
-export const DEFAULT_GLOBAL_SEARCH_CONCURRENCY = 3;
-export const DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS = 30;
+export const DEFAULT_SOURCE_WORK_CONCURRENCY = 3;
+export const DEFAULT_SOURCE_REQUEST_TIMEOUT_SECONDS = 30;
 export const DEFAULT_CHAPTER_DOWNLOAD_COOLDOWN_SECONDS = 1;
 
 function normalizeStringArray(
@@ -17,24 +17,18 @@ function normalizeStringArray(
 
 function normalizeConcurrency(value: unknown): number {
   const numeric =
-    typeof value === "number" ? value : DEFAULT_GLOBAL_SEARCH_CONCURRENCY;
-  if (!Number.isFinite(numeric)) return DEFAULT_GLOBAL_SEARCH_CONCURRENCY;
+    typeof value === "number" ? value : DEFAULT_SOURCE_WORK_CONCURRENCY;
+  if (!Number.isFinite(numeric)) return DEFAULT_SOURCE_WORK_CONCURRENCY;
   return Math.max(1, Math.min(10, Math.round(numeric)));
-}
-
-function applySourceTaskConcurrency(value: unknown): number {
-  const concurrency = normalizeConcurrency(value);
-  taskScheduler.setSourceForegroundConcurrency(concurrency);
-  return concurrency;
 }
 
 function normalizeTimeoutSeconds(value: unknown): number {
   const numeric =
     typeof value === "number"
       ? value
-      : DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS;
+      : DEFAULT_SOURCE_REQUEST_TIMEOUT_SECONDS;
   if (!Number.isFinite(numeric)) {
-    return DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS;
+    return DEFAULT_SOURCE_REQUEST_TIMEOUT_SECONDS;
   }
   return Math.max(5, Math.min(120, Math.round(numeric)));
 }
@@ -74,8 +68,8 @@ interface BrowseState {
    */
   pendingRepoUrl: string | null;
   pluginLanguageFilter: string[];
-  globalSearchConcurrency: number;
-  globalSearchTimeoutSeconds: number;
+  sourceWorkConcurrency: number;
+  sourceRequestTimeoutSeconds: number;
   chapterDownloadCooldownSeconds: number;
   pinnedPluginIds: string[];
   lastUsedPluginId: string | null;
@@ -83,8 +77,8 @@ interface BrowseState {
   setPendingRepoUrl: (url: string | null) => void;
   clearPendingRepoUrl: () => void;
   setPluginLanguageFilter: (languages: string[]) => void;
-  setGlobalSearchConcurrency: (concurrency: number) => void;
-  setGlobalSearchTimeoutSeconds: (seconds: number) => void;
+  setSourceWorkConcurrency: (concurrency: number) => void;
+  setSourceRequestTimeoutSeconds: (seconds: number) => void;
   setChapterDownloadCooldownSeconds: (seconds: number) => void;
   togglePinnedPlugin: (pluginId: string) => void;
   setLastUsedPluginId: (pluginId: string | null) => void;
@@ -102,8 +96,8 @@ export const useBrowseStore = create<BrowseState>()(
     (set) => ({
       pendingRepoUrl: null,
       pluginLanguageFilter: [],
-      globalSearchConcurrency: DEFAULT_GLOBAL_SEARCH_CONCURRENCY,
-      globalSearchTimeoutSeconds: DEFAULT_GLOBAL_SEARCH_TIMEOUT_SECONDS,
+      sourceWorkConcurrency: DEFAULT_SOURCE_WORK_CONCURRENCY,
+      sourceRequestTimeoutSeconds: DEFAULT_SOURCE_REQUEST_TIMEOUT_SECONDS,
       chapterDownloadCooldownSeconds:
         DEFAULT_CHAPTER_DOWNLOAD_COOLDOWN_SECONDS,
       pinnedPluginIds: [],
@@ -118,16 +112,17 @@ export const useBrowseStore = create<BrowseState>()(
             [],
           ),
         }),
-      setGlobalSearchConcurrency: (globalSearchConcurrency) => {
-        const concurrency = applySourceTaskConcurrency(globalSearchConcurrency);
+      setSourceWorkConcurrency: (sourceWorkConcurrency) => {
+        const concurrency = normalizeConcurrency(sourceWorkConcurrency);
+        taskScheduler.setSourceForegroundConcurrency(concurrency);
         set({
-          globalSearchConcurrency: concurrency,
+          sourceWorkConcurrency: concurrency,
         });
       },
-      setGlobalSearchTimeoutSeconds: (globalSearchTimeoutSeconds) =>
+      setSourceRequestTimeoutSeconds: (sourceRequestTimeoutSeconds) =>
         set({
-          globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
-            globalSearchTimeoutSeconds,
+          sourceRequestTimeoutSeconds: normalizeTimeoutSeconds(
+            sourceRequestTimeoutSeconds,
           ),
         }),
       setChapterDownloadCooldownSeconds: (chapterDownloadCooldownSeconds) =>
@@ -177,19 +172,25 @@ export const useBrowseStore = create<BrowseState>()(
         if (persistedState === null || typeof persistedState !== "object") {
           return currentState;
         }
-        const persisted = persistedState as Partial<BrowseState>;
-        const globalSearchConcurrency = applySourceTaskConcurrency(
-          persisted.globalSearchConcurrency,
+        const persisted = persistedState as Partial<BrowseState> & {
+          globalSearchConcurrency?: number;
+          globalSearchTimeoutSeconds?: number;
+        };
+        const sourceWorkConcurrency = normalizeConcurrency(
+          persisted.sourceWorkConcurrency ??
+            persisted.globalSearchConcurrency,
         );
+        taskScheduler.setSourceForegroundConcurrency(sourceWorkConcurrency);
         return {
           ...currentState,
           pluginLanguageFilter: normalizeStringArray(
             persisted.pluginLanguageFilter,
             currentState.pluginLanguageFilter,
           ),
-          globalSearchConcurrency,
-          globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
-            persisted.globalSearchTimeoutSeconds,
+          sourceWorkConcurrency,
+          sourceRequestTimeoutSeconds: normalizeTimeoutSeconds(
+            persisted.sourceRequestTimeoutSeconds ??
+              persisted.globalSearchTimeoutSeconds,
           ),
           chapterDownloadCooldownSeconds:
             normalizeChapterDownloadCooldownSeconds(
@@ -210,11 +211,11 @@ export const useBrowseStore = create<BrowseState>()(
           state.pluginLanguageFilter,
           [],
         ),
-        globalSearchConcurrency: normalizeConcurrency(
-          state.globalSearchConcurrency,
+        sourceWorkConcurrency: normalizeConcurrency(
+          state.sourceWorkConcurrency,
         ),
-        globalSearchTimeoutSeconds: normalizeTimeoutSeconds(
-          state.globalSearchTimeoutSeconds,
+        sourceRequestTimeoutSeconds: normalizeTimeoutSeconds(
+          state.sourceRequestTimeoutSeconds,
         ),
         chapterDownloadCooldownSeconds:
           normalizeChapterDownloadCooldownSeconds(
@@ -226,3 +227,13 @@ export const useBrowseStore = create<BrowseState>()(
     },
   ),
 );
+
+export function getSourceRequestTimeoutSeconds(): number {
+  return normalizeTimeoutSeconds(
+    useBrowseStore.getState().sourceRequestTimeoutSeconds,
+  );
+}
+
+export function getSourceRequestTimeoutMs(): number {
+  return getSourceRequestTimeoutSeconds() * 1000;
+}

@@ -1,4 +1,45 @@
-import { cancelAndroidScraperBackground } from "../android-scraper";
+/**
+ * Source task dispatch design
+ *
+ * Keep logical source queues separate from physical scraper executors.
+ *
+ * Logical source queues protect sites from noisy access patterns:
+ * - Keep one queue per source id.
+ * - Gate each source with pause, cooldown, backoff, and an active lease.
+ * - Default to one active task per source, even when a higher priority task
+ *   is waiting. Priority may change ordering, but it must not bypass source
+ *   rate limits unless a future task explicitly opts into that policy.
+ *
+ * Physical scraper executors own WebViews:
+ * - `immediate` owns the foreground/site-browser WebView and is reserved for
+ *   UI-responsive work such as opening a site or manual challenge clearing.
+ * - `pool:0..N-1` own hidden worker WebViews. N is the user-configured
+ *   concurrent source work setting.
+ * - All executor WebViews must use the same browser profile so cookies,
+ *   storage, and authenticated sessions are shared without copying cookies.
+ *
+ * Dispatcher loop:
+ * 1. Drain main app work.
+ * 2. Drain the immediate executor with UI-responsive eligible work only.
+ * 3. For each free pool executor, select one eligible candidate from each
+ *    source queue, then choose by priority, executor affinity, fairness, and
+ *    creation time.
+ * 4. Mark a task running only after assigning an executor. Pass that executor
+ *    id through TaskRunContext so plugin fetch/extract calls use the same
+ *    WebView for the task lifetime.
+ * 5. Release the executor and source lease only after the task and its native
+ *    scraper work have actually settled. Cancellation must stop or settle the
+ *    native scraper request before the WebView is reused.
+ *
+ * Route affinity is an optimization, not a queue type. A source that benefits
+ * from repeated access through the same WebView may request a short sticky
+ * executor lease via a route key, but executors should return to the shared
+ * pool when that lease expires.
+ */
+import {
+  runWithScraperExecutor,
+  type ScraperExecutorId,
+} from "./scraper-queue";
 
 export type TaskLane = "main" | "source";
 
@@ -106,6 +147,7 @@ export interface TaskEvent {
 }
 
 export interface TaskRunContext {
+  executor?: ScraperExecutorId;
   signal: AbortSignal;
   taskId: string;
   setDetail: (detail: string) => void;
@@ -146,6 +188,7 @@ export interface TaskCancelOptions {
 }
 
 interface TaskEntry {
+  activeReleased: boolean;
   controller: AbortController;
   dedupeKey?: string;
   exclusive: boolean;
@@ -153,7 +196,7 @@ interface TaskEntry {
   record: TaskRecord;
   reject: (error: unknown) => void;
   resolve: (value: unknown) => void;
-  sourceSlot?: "background" | "foreground" | "priorityBoost";
+  sourceExecutorId?: ScraperExecutorId;
   spec: TaskSpec<unknown>;
 }
 
@@ -177,16 +220,16 @@ function priorityRank(priority: TaskPriority): number {
   }
 }
 
-function isInteractivePriority(priority: TaskPriority): boolean {
-  return priority === "interactive";
-}
-
-function isPriorityBoostPriority(priority: TaskPriority): boolean {
-  return priority === "interactive" || priority === "user";
-}
-
 function isBackgroundPriority(priority: TaskPriority): boolean {
   return priority === "background";
+}
+
+function isImmediateSourceKind(kind: TaskKind): boolean {
+  return kind === "source.openSite";
+}
+
+function poolExecutorId(index: number): ScraperExecutorId {
+  return `pool:${index}`;
 }
 
 function makeTaskId(): string {
@@ -226,10 +269,10 @@ export class TaskScheduler {
   private readonly terminalTaskRetentionMs: number;
   private sourceQueuesPaused: boolean;
   private activeBackgroundCount = 0;
-  private activeExclusiveSourceTaskId: string | null = null;
-  private activeForegroundBaseCount = 0;
-  private activeForegroundBoostCount = 0;
+  private activeImmediateTaskId: string | null = null;
   private activeMainTaskId: string | null = null;
+  private readonly activePoolTaskIdsByExecutor = new Map<ScraperExecutorId, string>();
+  private readonly sourceLastServedAt = new Map<string, number>();
   private snapshot: TaskSnapshot = {
     pausedSourceIds: [],
     records: [],
@@ -272,8 +315,10 @@ export class TaskScheduler {
   ): void {
     console.debug(`[task-scheduler] ${message}`, {
       activeBackgroundCount: this.activeBackgroundCount,
-      activeForegroundBaseCount: this.activeForegroundBaseCount,
-      activeForegroundBoostCount: this.activeForegroundBoostCount,
+      activeImmediateTaskId: this.activeImmediateTaskId,
+      activePoolTaskIdsByExecutor: Object.fromEntries(
+        this.activePoolTaskIdsByExecutor,
+      ),
       activeMainTaskId: this.activeMainTaskId,
       exclusive: entry?.exclusive,
       kind: entry?.record.kind,
@@ -343,6 +388,7 @@ export class TaskScheduler {
       controller,
       dedupeKey: spec.dedupeKey,
       exclusive: spec.exclusive ?? false,
+      activeReleased: true,
       promise,
       reject,
       resolve,
@@ -394,7 +440,7 @@ export class TaskScheduler {
 
     if (entry.record.status === "running") {
       entry.controller.abort();
-      this.finishRunningAsCancelled(entry);
+      this.cancelRunning(entry);
       return true;
     }
 
@@ -554,8 +600,8 @@ export class TaskScheduler {
 
   private drain(): void {
     this.drainMain();
-    this.drainSourceForeground();
-    this.drainSourceBackground();
+    this.drainImmediateExecutor();
+    this.drainSourcePool();
   }
 
   private drainMain(): void {
@@ -576,83 +622,67 @@ export class TaskScheduler {
     this.start(entry);
   }
 
-  private drainSourceForeground(): void {
-    while (this.activeForegroundBaseCount < this.sourceForegroundConcurrency) {
-      const queuedExclusive = this.hasQueuedExclusiveForegroundSourceTask();
+  private drainImmediateExecutor(): void {
+    if (this.activeImmediateTaskId) return;
+    const next = this.pickSourceTask(
+      (entry) => isImmediateSourceKind(entry.record.kind),
+      { allowPaused: true, allowActiveSource: true },
+    );
+    if (!next) return;
+    this.startSource(next, "immediate");
+  }
+
+  private drainSourcePool(): void {
+    for (const executorId of this.freePoolExecutorIds()) {
       const next = this.pickSourceTask((entry) => {
-        if (isBackgroundPriority(entry.record.priority)) return false;
-        if (this.activeExclusiveSourceTaskId) return false;
-        if (entry.exclusive) {
-          return (
-            this.activeForegroundBaseCount === 0 &&
-            this.activeForegroundBoostCount === 0
-          );
+        if (isImmediateSourceKind(entry.record.kind)) return false;
+        if (
+          isBackgroundPriority(entry.record.priority) &&
+          this.activeBackgroundCount >= this.sourceBackgroundConcurrency
+        ) {
+          return false;
         }
-        if (queuedExclusive) return false;
         return true;
       });
-      if (!next) break;
-      this.startSource(next, "foreground");
-    }
-
-    while (true) {
-      const next = this.pickSourceTask((entry) => {
-        if (this.activeExclusiveSourceTaskId) return false;
-        return isPriorityBoostPriority(entry.record.priority);
-      });
       if (!next) return;
-      this.startSource(next, "priorityBoost");
+      this.startSource(next, executorId);
     }
   }
 
-  private drainSourceBackground(): void {
-    if (this.sourceQueuesPaused) return;
-
-    if (
-      this.activeForegroundBaseCount > 0 ||
-      this.activeForegroundBoostCount > 0 ||
-      this.hasQueuedForegroundSourceTask()
-    ) {
-      return;
+  private freePoolExecutorIds(): ScraperExecutorId[] {
+    const ids: ScraperExecutorId[] = [];
+    for (let index = 0; index < this.sourceForegroundConcurrency; index += 1) {
+      const executorId = poolExecutorId(index);
+      if (!this.activePoolTaskIdsByExecutor.has(executorId)) ids.push(executorId);
     }
-
-    while (this.activeBackgroundCount < this.sourceBackgroundConcurrency) {
-      const next = this.pickSourceTask(
-        (entry) => isBackgroundPriority(entry.record.priority),
-      );
-      if (!next) return;
-      this.startSource(next, "background");
-    }
+    return ids;
   }
 
-  private startSource(
-    entry: TaskEntry,
-    slot: "background" | "foreground" | "priorityBoost",
-  ): void {
-    if (this.shouldPreemptLowerPrioritySourceWork(entry)) {
-      cancelAndroidScraperBackground(
-        "scraper: interrupted by higher-priority source task",
-      );
-    }
+  private startSource(entry: TaskEntry, executorId: ScraperExecutorId): void {
     this.removeFromSourceQueue(entry);
     const sourceId = entry.record.source!.id;
     const activeIds = this.activeSourceTaskIdsById.get(sourceId) ?? new Set();
     activeIds.add(entry.record.id);
     this.activeSourceTaskIdsById.set(sourceId, activeIds);
-    entry.sourceSlot = slot;
-    if (slot === "background") {
-      this.activeBackgroundCount += 1;
-    } else if (slot === "priorityBoost") {
-      this.activeForegroundBoostCount += 1;
+    entry.sourceExecutorId = executorId;
+    entry.activeReleased = false;
+    if (executorId === "immediate") {
+      this.activeImmediateTaskId = entry.record.id;
     } else {
-      this.activeForegroundBaseCount += 1;
+      this.activePoolTaskIdsByExecutor.set(executorId, entry.record.id);
     }
-    if (entry.exclusive) this.activeExclusiveSourceTaskId = entry.record.id;
+    if (isBackgroundPriority(entry.record.priority)) {
+      this.activeBackgroundCount += 1;
+    }
     this.start(entry);
   }
 
   private pickSourceTask(
     predicate: (entry: TaskEntry) => boolean,
+    options: {
+      allowPaused?: boolean;
+      allowActiveSource?: boolean;
+    } = {},
   ): TaskEntry | null {
     const candidates: TaskEntry[] = [];
     for (const queue of this.sourceQueues.values()) {
@@ -662,8 +692,8 @@ export class TaskScheduler {
         if (!entry || entry.record.status !== "queued" || !entry.record.source) {
           continue;
         }
-        if (!this.canStartSourceTask(entry)) continue;
-        if (this.isSourceTaskPaused(entry)) continue;
+        if (!this.canStartSourceTask(entry, options)) continue;
+        if (!options.allowPaused && this.isSourceTaskPaused(entry)) continue;
         const cooldownDelay = this.sourceCooldownDelay(entry);
         if (cooldownDelay > 0) {
           this.scheduleSourceCooldownDrain(
@@ -685,7 +715,6 @@ export class TaskScheduler {
   }
 
   private isSourceTaskPaused(entry: TaskEntry): boolean {
-    if (isInteractivePriority(entry.record.priority)) return false;
     const sourceId = entry.record.source?.id;
     return (
       this.sourceQueuesPaused ||
@@ -693,50 +722,29 @@ export class TaskScheduler {
     );
   }
 
-  private canStartSourceTask(entry: TaskEntry): boolean {
+  private canStartSourceTask(
+    entry: TaskEntry,
+    options: { allowActiveSource?: boolean } = {},
+  ): boolean {
+    if (options.allowActiveSource) return true;
     const sourceId = entry.record.source?.id;
     if (!sourceId) return true;
     const activeIds = this.activeSourceTaskIdsById.get(sourceId);
-    if (!activeIds || activeIds.size === 0) return true;
-    if (!isPriorityBoostPriority(entry.record.priority)) return false;
-
-    for (const activeId of activeIds) {
-      const activeEntry = this.entries.get(activeId);
-      if (!activeEntry || activeEntry.record.status !== "running") continue;
-      if (
-        priorityRank(entry.record.priority) >=
-        priorityRank(activeEntry.record.priority)
-      ) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  private shouldPreemptLowerPrioritySourceWork(entry: TaskEntry): boolean {
-    if (!isPriorityBoostPriority(entry.record.priority)) return false;
-
-    let hasLowerPriorityWork = false;
-    for (const activeEntry of this.entries.values()) {
-      if (
-        activeEntry.record.lane !== "source" ||
-        activeEntry.record.status !== "running"
-      ) {
-        continue;
-      }
-
-      const activeRank = priorityRank(activeEntry.record.priority);
-      const nextRank = priorityRank(entry.record.priority);
-      if (activeRank <= nextRank) return false;
-      hasLowerPriorityWork = true;
-    }
-
-    return hasLowerPriorityWork;
+    return !activeIds || activeIds.size === 0;
   }
 
   private compareTaskOrder(a: TaskEntry, b: TaskEntry): number {
     const priority = priorityRank(a.record.priority) - priorityRank(b.record.priority);
     if (priority !== 0) return priority;
+    const aSourceLastServed = a.record.source
+      ? this.sourceLastServedAt.get(a.record.source.id) ?? 0
+      : 0;
+    const bSourceLastServed = b.record.source
+      ? this.sourceLastServedAt.get(b.record.source.id) ?? 0
+      : 0;
+    if (aSourceLastServed !== bSourceLastServed) {
+      return aSourceLastServed - bSourceLastServed;
+    }
     return a.record.createdAt - b.record.createdAt;
   }
 
@@ -788,31 +796,6 @@ export class TaskScheduler {
     this.sourceCooldownTimers.set(key, timer);
   }
 
-  private hasQueuedForegroundSourceTask(): boolean {
-    for (const queue of this.sourceQueues.values()) {
-      for (const id of queue) {
-        const entry = this.entries.get(id);
-        if (!entry || entry.record.status !== "queued") continue;
-        if (this.isSourceTaskPaused(entry)) continue;
-        if (!isBackgroundPriority(entry.record.priority)) return true;
-      }
-    }
-    return false;
-  }
-
-  private hasQueuedExclusiveForegroundSourceTask(): boolean {
-    for (const queue of this.sourceQueues.values()) {
-      for (const id of queue) {
-        const entry = this.entries.get(id);
-        if (!entry || entry.record.status !== "queued") continue;
-        if (this.isSourceTaskPaused(entry)) continue;
-        if (isBackgroundPriority(entry.record.priority)) continue;
-        if (entry.exclusive) return true;
-      }
-    }
-    return false;
-  }
-
   private start(entry: TaskEntry): void {
     this.setStatus(entry, "running", {
       canCancel: true,
@@ -822,6 +805,7 @@ export class TaskScheduler {
     this.debug("started", entry);
 
     const context: TaskRunContext = {
+      executor: entry.sourceExecutorId,
       signal: entry.controller.signal,
       taskId: entry.record.id,
       setDetail: (detail) => {
@@ -835,10 +819,10 @@ export class TaskScheduler {
     };
 
     Promise.resolve()
-      .then(() => entry.spec.run(context))
+      .then(() => this.runWithScraperExecutorContext(entry, context))
       .then((value) => {
         if (entry.controller.signal.aborted) {
-          this.finishRunningAsCancelled(entry);
+          this.finishCancelledRunningAfterSettlement(entry);
           return;
         }
         this.finishRunning(entry, "succeeded", {
@@ -850,6 +834,10 @@ export class TaskScheduler {
       })
       .catch((error) => {
         const cancelled = entry.controller.signal.aborted || isAbortError(error);
+        if (cancelled && entry.record.status === "cancelled") {
+          this.finishCancelledRunningAfterSettlement(entry);
+          return;
+        }
         this.finishRunning(entry, cancelled ? "cancelled" : "failed", {
           canCancel: false,
           canRetry: cancelled,
@@ -860,6 +848,27 @@ export class TaskScheduler {
           entry.reject(error);
         }
       });
+  }
+
+  private runWithScraperExecutorContext(
+    entry: TaskEntry,
+    context: TaskRunContext,
+  ): Promise<unknown> {
+    if (entry.record.lane !== "source" || !entry.record.source) {
+      return entry.spec.run(context);
+    }
+
+    const executorId = entry.sourceExecutorId;
+    if (!executorId) {
+      return Promise.reject(new Error("Source task is missing a scraper executor."));
+    }
+
+    return runWithScraperExecutor(
+      entry.record.source.id,
+      entry.record.id,
+      executorId,
+      () => entry.spec.run(context),
+    );
   }
 
   private finishRunning(
@@ -876,15 +885,26 @@ export class TaskScheduler {
     return true;
   }
 
-  private finishRunningAsCancelled(entry: TaskEntry): void {
-    const finished = this.finishRunning(entry, "cancelled", {
+  private cancelRunning(entry: TaskEntry): void {
+    this.setStatus(entry, "cancelled", {
       canCancel: false,
       canRetry: true,
       finishedAt: Date.now(),
     });
-    if (finished) {
-      entry.reject(new DOMException("Task was cancelled.", "AbortError"));
+    entry.reject(new DOMException("Task was cancelled.", "AbortError"));
+    if (entry.record.lane === "main") {
+      this.releaseActive(entry);
+      this.trimHistory();
+      this.drain();
     }
+  }
+
+  private finishCancelledRunningAfterSettlement(entry: TaskEntry): void {
+    if (entry.activeReleased) return;
+    this.debug("cancelled task settled", entry);
+    this.releaseActive(entry);
+    this.trimHistory();
+    this.drain();
   }
 
   private releaseActive(entry: TaskEntry): void {
@@ -898,27 +918,25 @@ export class TaskScheduler {
         if (activeIds?.size === 0) {
           this.activeSourceTaskIdsById.delete(sourceId);
         }
+        this.sourceLastServedAt.set(sourceId, Date.now());
       }
-      if (entry.sourceSlot === "background") {
+      if (entry.sourceExecutorId === "immediate") {
+        if (this.activeImmediateTaskId === entry.record.id) {
+          this.activeImmediateTaskId = null;
+        }
+      } else if (entry.sourceExecutorId) {
+        if (this.activePoolTaskIdsByExecutor.get(entry.sourceExecutorId) === entry.record.id) {
+          this.activePoolTaskIdsByExecutor.delete(entry.sourceExecutorId);
+        }
+      }
+      if (isBackgroundPriority(entry.record.priority)) {
         this.activeBackgroundCount = Math.max(
           0,
           this.activeBackgroundCount - 1,
         );
-      } else if (entry.sourceSlot === "priorityBoost") {
-        this.activeForegroundBoostCount = Math.max(
-          0,
-          this.activeForegroundBoostCount - 1,
-        );
-      } else if (entry.sourceSlot === "foreground") {
-        this.activeForegroundBaseCount = Math.max(
-          0,
-          this.activeForegroundBaseCount - 1,
-        );
       }
-      entry.sourceSlot = undefined;
-      if (this.activeExclusiveSourceTaskId === entry.record.id) {
-        this.activeExclusiveSourceTaskId = null;
-      }
+      entry.sourceExecutorId = undefined;
+      entry.activeReleased = true;
       this.setSourceCooldown(entry);
     }
 
@@ -928,6 +946,7 @@ export class TaskScheduler {
     ) {
       this.activeDedupeByKey.delete(entry.dedupeKey);
     }
+    this.scheduleTerminalCleanup(entry);
   }
 
   private setStatus(
@@ -950,6 +969,7 @@ export class TaskScheduler {
     if (entry.record.status !== "succeeded" && entry.record.status !== "cancelled") {
       return;
     }
+    if (!entry.activeReleased) return;
 
     const existingTimer = this.cleanupTimers.get(entry.record.id);
     if (existingTimer) clearTimeout(existingTimer);

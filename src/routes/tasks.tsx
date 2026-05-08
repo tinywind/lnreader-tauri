@@ -139,13 +139,13 @@ function hasBlockingSourceTask(
     (candidate) =>
       candidate.id !== task.id &&
       candidate.lane === "source" &&
-      candidate.priority !== "background" &&
+      candidate.source?.id === task.source?.id &&
       isActiveTask(candidate),
   );
 }
 
 function isSourceQueuePaused(task: TaskRecord, snapshot: TaskSnapshot): boolean {
-  if (task.priority === "interactive") return false;
+  if (task.kind === "source.openSite") return false;
   return Boolean(
     task.source &&
       isActiveTask(task) &&

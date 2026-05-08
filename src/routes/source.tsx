@@ -259,11 +259,15 @@ export function SourcePage() {
         title,
         subject: { path: `${mode}:${page}` },
         dedupeKey: `source.list:${plugin.id}:${mode}:${trimmedSearch}:${JSON.stringify(activeFilters)}:${page}`,
-        run: async () => {
+        run: async (context) => {
+          const runtimePlugin = pluginManager.getPluginForExecutor(
+            plugin.id,
+            context.executor ?? "immediate",
+          );
           if (isSearchMode) {
-            return plugin.searchNovels(trimmedSearch, page);
+            return runtimePlugin.searchNovels(trimmedSearch, page);
           }
-          return plugin.popularNovels(page, {
+          return runtimePlugin.popularNovels(page, {
             showLatestNovels: mode === "latest",
             filters: activeFilters as never,
           });
@@ -299,7 +303,14 @@ export function SourcePage() {
         title: t("tasks.task.openNovel", { name: item.name }),
         subject: { novelName: item.name, path: item.path },
         dedupeKey: `source.openNovel:${plugin.id}:${item.path}`,
-        run: () => importNovelFromSource(plugin, item),
+        run: (context) =>
+          importNovelFromSource(
+            pluginManager.getPluginForExecutor(
+              plugin.id,
+              context.executor ?? "immediate",
+            ),
+            item,
+          ),
       }).promise;
     },
     onSuccess: (novelId) => {
