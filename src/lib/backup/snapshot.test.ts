@@ -102,6 +102,7 @@ const RAW_CHAPTER = {
   unread: 1,
   progress: 0,
   isDownloaded: 1,
+  contentType: "html",
   content: "<p>hi</p>",
   releaseTime: null,
   readAt: null,
@@ -151,6 +152,7 @@ describe("gatherBackupSnapshot", () => {
     expect(manifest.chapters[0]?.bookmark).toBe(false);
     expect(manifest.chapters[0]?.unread).toBe(true);
     expect(manifest.chapters[0]?.isDownloaded).toBe(true);
+    expect(manifest.chapters[0]?.contentType).toBe("html");
     expect(manifest.categories[0]?.isSystem).toBe(true);
   });
 

@@ -167,7 +167,7 @@ jobs:
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 3
+          retention-days: 30
 
       - name: Upload x86_64 signed release APK
         uses: actions/upload-artifact@v7
@@ -177,7 +177,7 @@ jobs:
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 3
+          retention-days: 30
 
       - name: Upload signed release APK checksums
         uses: actions/upload-artifact@v7
@@ -187,7 +187,7 @@ jobs:
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 3
+          retention-days: 30
 
       - name: Upload signed APKs to GitHub Release
         if: github.ref_type == 'tag'

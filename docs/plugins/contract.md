@@ -76,6 +76,7 @@ export interface NovelItem {
 export interface ChapterItem {
   name: string;
   path: string;
+  contentType?: "html" | "text" | "pdf";
   chapterNumber?: number;
   releaseTime?: string;
   page?: string;
@@ -107,7 +108,13 @@ export interface SourcePage {
 ```
 
 The host assigns local database ids. Plugin `path` values are opaque and must be
-passed back to the same plugin.
+passed back to the same plugin. `contentType` is stored per chapter and defaults
+to `"html"` for older plugins. Use `"html"` when `parseChapter` returns a
+reader-ready HTML fragment, `"text"` when it returns plain text that the host
+must escape and wrap, and `"pdf"` when the chapter represents a PDF resource.
+For HTML chapters, the host resolves `<img src>` values against
+`resolveUrl(chapter.path, false)` or the chapter path and stores downloaded
+media in the local chapter cache before saving the rewritten HTML.
 
 ## Filters
 

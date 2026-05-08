@@ -8,13 +8,15 @@ but it is a separate app with its own data, backup, and source system.
 
 ## Screenshots
 
-![Library with public-domain books and reading progress](docs/screenshots/library.png)
+<p align="center">
+  <img src="docs/screenshots/library-xl-dark.png" alt="Dark library list with reading progress and unread counts" width="100%">
+</p>
 
-![Standard Ebooks source search results](docs/screenshots/browse.png)
-
-![Reader view on a narrow window](docs/screenshots/reader.png)
-
-![Novel detail with metadata and chapter progress](docs/screenshots/novel-detail.png)
+<p align="center">
+  <img src="docs/screenshots/browse-search-sm.png" alt="Installed source search results" width="34%">
+  <img src="docs/screenshots/reader-xs.png" alt="Reader view on a narrow window" width="25%">
+  <img src="docs/screenshots/reader-settings-xs.png" alt="Reader settings panel over the reading view" width="25%">
+</p>
 
 ## What You Can Do
 
@@ -41,13 +43,18 @@ Current limits:
 
 ## Download
 
-Start with the [latest GitHub release](https://github.com/tinywind/norea/releases/latest).
+For regular installs, use the
+[latest GitHub release](https://github.com/tinywind/norea/releases/latest).
+Release assets are the stable public downloads.
 
-If a release is not available yet, open the latest successful tester build for
-your platform: [Windows](https://github.com/tinywind/norea/actions/workflows/windows.yml),
-[Linux](https://github.com/tinywind/norea/actions/workflows/linux.yml), or
-[Android](https://github.com/tinywind/norea/actions/workflows/android.yml).
-Then download the matching artifact:
+For a newer tester build from the current `main` branch, use GitHub Actions:
+
+1. Open the latest successful workflow run for your platform:
+   [Windows](https://github.com/tinywind/norea/actions/workflows/windows.yml?query=branch%3Amain+is%3Asuccess),
+   [Linux](https://github.com/tinywind/norea/actions/workflows/linux.yml?query=branch%3Amain+is%3Asuccess), or
+   [Android](https://github.com/tinywind/norea/actions/workflows/android.yml?query=branch%3Amain+is%3Asuccess).
+2. Open the run and scroll to Artifacts.
+3. Download the matching artifact:
 
 | Platform | What to download |
 | --- | --- |
@@ -58,8 +65,8 @@ Then download the matching artifact:
 | Android phone or tablet | `norea-arm64-signed-release-apk` |
 | Android emulator or WSA | `norea-x86_64-signed-release-apk` |
 
-Workflow artifacts are short-lived tester downloads. If a link is expired, use a
-newer successful run or the latest release.
+Workflow artifacts are tester downloads and are kept for 30 days. If an
+artifact is expired, use a newer successful run or the latest release.
 
 ## First Run
 

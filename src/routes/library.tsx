@@ -1,4 +1,10 @@
-import { useCallback, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -43,8 +49,18 @@ import {
 import {
   getNovelById,
   listLibraryNovels,
+  findLocalNovelByPath,
+  upsertLocalNovel,
   type LibraryNovel,
+  type LocalNovelImportResult,
 } from "../db/queries/novel";
+import {
+  analyzeLocalImportFile,
+  convertLocalImportFile,
+  LocalImportError,
+  type LocalImportAnalysis,
+  type LocalImportFormat,
+} from "../lib/local-import";
 import {
   enqueueChapterDownloadBatch,
   getChapterDownloadStatus,
@@ -66,6 +82,7 @@ import {
 import "../styles/library.css";
 
 const SEARCH_DEBOUNCE_MS = 200;
+const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
 
 interface LibraryPageProps {
   active?: boolean;
@@ -100,6 +117,34 @@ interface AssignCategoryInput {
 type TranslateFn = ReturnType<typeof useTranslation>["t"];
 
 type LibraryBatchDownloadMode = "all" | "unread" | "next10" | "next30";
+
+type LocalImportReviewStatus =
+  | "ready"
+  | "duplicate"
+  | "unsupported"
+  | "error"
+  | "importing"
+  | "imported";
+
+interface LocalImportReviewItem {
+  analysis?: LocalImportAnalysis;
+  duplicateKind?: "library" | "selection";
+  error?: string;
+  existingNovelId?: number;
+  file: File;
+  format?: LocalImportFormat;
+  id: string;
+  importedChapterCount?: number;
+  importedNovelId?: number;
+  status: LocalImportReviewStatus;
+}
+
+interface LocalImportItemResult {
+  error?: string;
+  itemId: string;
+  result?: LocalNovelImportResult;
+  status: "error" | "imported";
+}
 
 interface LibraryBatchDownloadOptionConfig {
   descriptionKey: TranslationKey;
@@ -258,6 +303,12 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
   const [categoryName, setCategoryName] = useState("");
   const [categoryDeleteTarget, setCategoryDeleteTarget] =
     useState<LibraryCategory | null>(null);
+  const localImportInputRef = useRef<HTMLInputElement>(null);
+  const [localImportOpen, setLocalImportOpen] = useState(false);
+  const [localImportItems, setLocalImportItems] = useState<
+    LocalImportReviewItem[]
+  >([]);
+  const [localImportAnalyzing, setLocalImportAnalyzing] = useState(false);
 
   const invalidateLibraryCategories = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["category"] });
@@ -324,6 +375,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
             pluginId: novel.pluginId,
             chapterPath: chapter.path,
             chapterName: chapter.name,
+            contentType: chapter.contentType,
             novelId: novel.id,
             novelName: novel.name,
             title: t("tasks.task.downloadChapter", { name: chapter.name }),
@@ -498,6 +550,121 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
           })
         : null;
 
+  const localImportMutation = useMutation({
+    mutationFn: async (
+      items: readonly LocalImportReviewItem[],
+    ): Promise<LocalImportItemResult[]> => {
+      const results: LocalImportItemResult[] = [];
+
+      for (const item of items) {
+        try {
+          const result = await importLocalFileToLibrary(item.file);
+          results.push({ itemId: item.id, result, status: "imported" });
+        } catch (error) {
+          results.push({
+            error: getLocalImportErrorMessage(error),
+            itemId: item.id,
+            status: "error",
+          });
+        }
+      }
+
+      return results;
+    },
+    onMutate: (items) => {
+      const importingIds = new Set(items.map((item) => item.id));
+      setLocalImportItems((current) =>
+        current.map((item) =>
+          importingIds.has(item.id) ? { ...item, status: "importing" } : item,
+        ),
+      );
+    },
+    onSuccess: (results) => {
+      const resultById = new Map(
+        results.map((result) => [result.itemId, result]),
+      );
+      setLocalImportItems((current) =>
+        current.map((item) => {
+          const result = resultById.get(item.id);
+          if (!result) return item;
+
+          if (result.status === "imported" && result.result) {
+            return {
+              ...item,
+              error: undefined,
+              importedChapterCount: result.result.chapterCount,
+              importedNovelId: result.result.novelId,
+              status: "imported",
+            };
+          }
+
+          return {
+            ...item,
+            error: result.error ?? t("library.localImport.error"),
+            status: "error",
+          };
+        }),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["category"] });
+      void queryClient.invalidateQueries({ queryKey: ["novel"] });
+
+      const imported = results.filter(
+        (
+          result,
+        ): result is LocalImportItemResult & {
+          result: LocalNovelImportResult;
+          status: "imported";
+        } => result.status === "imported" && !!result.result,
+      );
+      if (results.length === 1 && imported.length === 1) {
+        setLocalImportOpen(false);
+        void navigate({
+          to: "/novel",
+          search: { id: imported[0].result.novelId },
+        });
+      }
+    },
+  });
+
+  const openLocalImportInput = useCallback(() => {
+    localImportMutation.reset();
+    localImportInputRef.current?.click();
+  }, [localImportMutation]);
+
+  const closeLocalImportReview = useCallback(() => {
+    if (localImportMutation.isPending) return;
+    localImportMutation.reset();
+    setLocalImportOpen(false);
+    setLocalImportItems([]);
+  }, [localImportMutation]);
+
+  const handleLocalImportFilesSelected = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      if (files.length === 0) return;
+
+      localImportMutation.reset();
+      setLocalImportOpen(true);
+      setLocalImportAnalyzing(true);
+      setLocalImportItems([]);
+
+      const analyzedItems = await Promise.all(
+        files.map((file, index) => analyzeLocalImportReviewItem(file, index)),
+      );
+      setLocalImportItems(markSelectedLocalImportDuplicates(analyzedItems));
+      setLocalImportAnalyzing(false);
+    },
+    [localImportMutation],
+  );
+
+  const readyLocalImportItems = localImportItems.filter(
+    (item) => item.status === "ready",
+  );
+  const localImportSummary = localImportAnalyzing
+    ? t("library.localImport.analyzing")
+    : getLocalImportSummary(localImportItems, t);
+
   return (
     <>
       <PageFrame className="lnr-library-page" size="full">
@@ -583,6 +750,15 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                   onChange={setDisplayMode}
                   t={t}
                 />
+                <IconButton
+                  className="lnr-library-icon-button lnr-library-local-import-button"
+                  label={t("library.localImport.open")}
+                  onClick={openLocalImportInput}
+                  size="sm"
+                  title={t("library.localImport.open")}
+                >
+                  <ImportFileIcon />
+                </IconButton>
                 <IconButton
                   className="lnr-library-icon-button lnr-library-refresh-button"
                   disabled={
@@ -698,6 +874,11 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                   color="blue"
                   title={t("library.empty.title")}
                   message={t("library.empty.message")}
+                  action={{
+                    icon: <ImportFileIcon />,
+                    label: t("library.localImport.open"),
+                    onClick: openLocalImportInput,
+                  }}
                 />
               )}
             </div>
@@ -715,6 +896,15 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
         </div>
       </PageFrame>
 
+      <input
+        ref={localImportInputRef}
+        accept={LOCAL_IMPORT_ACCEPT}
+        className="lnr-library-file-input"
+        multiple
+        onChange={handleLocalImportFilesSelected}
+        type="file"
+      />
+
       <CategoriesDrawer
         allCount={allCategoryCount}
         categories={manualCategories}
@@ -729,6 +919,75 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
         onSelect={setSelectedCategoryId}
         uncategorizedCount={uncategorizedCategoryCount}
       />
+
+      <Modal
+        opened={active && localImportOpen}
+        onClose={closeLocalImportReview}
+        size="lg"
+        title={t("library.localImport.title")}
+      >
+        <Stack gap="sm">
+          {localImportAnalyzing ? (
+            <Group gap="xs">
+              <Loader size="sm" />
+              <Text c="dimmed" size="sm">
+                {t("library.localImport.analyzing")}
+              </Text>
+            </Group>
+          ) : null}
+
+          {localImportItems.length > 0 ? (
+            <div className="lnr-library-local-import-list">
+              {localImportItems.map((item) => (
+                <LocalImportReviewRow
+                  item={item}
+                  key={item.id}
+                  locale={locale}
+                  t={t}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          {localImportMutation.error ? (
+            <Text c="red" size="sm">
+              {getLocalImportErrorMessage(localImportMutation.error)}
+            </Text>
+          ) : null}
+
+          <Group justify="space-between" wrap="wrap">
+            <Text c="dimmed" size="sm">
+              {localImportSummary}
+            </Text>
+            <Group gap="xs">
+              <TextButton
+                disabled={localImportMutation.isPending}
+                onClick={closeLocalImportReview}
+                type="button"
+                variant="subtle"
+              >
+                {t("common.cancel")}
+              </TextButton>
+              <TextButton
+                disabled={
+                  localImportAnalyzing ||
+                  readyLocalImportItems.length === 0 ||
+                  localImportMutation.isPending
+                }
+                loading={localImportMutation.isPending}
+                onClick={() =>
+                  localImportMutation.mutate(readyLocalImportItems)
+                }
+                type="button"
+              >
+                {t("library.localImport.importReady", {
+                  count: readyLocalImportItems.length,
+                })}
+              </TextButton>
+            </Group>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={active && categoryEditor !== null}
@@ -1153,6 +1412,43 @@ function SelectionCategoryPicker({
   );
 }
 
+interface LocalImportReviewRowProps {
+  item: LocalImportReviewItem;
+  locale: ReturnType<typeof useTranslation>["locale"];
+  t: TranslateFn;
+}
+
+function LocalImportReviewRow({
+  item,
+  locale,
+  t,
+}: LocalImportReviewRowProps) {
+  const title = item.analysis?.title ?? item.file.name;
+  const detail = getLocalImportStatusDetail(item, t);
+  const meta = [
+    item.file.name,
+    item.format
+      ? item.format.toUpperCase()
+      : t("library.localImport.formatUnknown"),
+    formatLocalImportFileSize(item.file.size, locale),
+  ].join(" - ");
+
+  return (
+    <div className="lnr-library-local-import-row" data-status={item.status}>
+      <div className="lnr-library-local-import-file">
+        <span className="lnr-library-local-import-title">{title}</span>
+        <span className="lnr-library-local-import-meta">{meta}</span>
+        {detail ? (
+          <span className="lnr-library-local-import-detail">{detail}</span>
+        ) : null}
+      </div>
+      <span className="lnr-library-local-import-status">
+        {getLocalImportStatusLabel(item.status, t)}
+      </span>
+    </div>
+  );
+}
+
 interface LibraryCommandSearchProps {
   onChange: (value: string) => void;
   value: string;
@@ -1315,6 +1611,17 @@ function FolderPlusIcon() {
   );
 }
 
+function ImportFileIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M14 3v5h5" />
+      <path d="M6 3h8l5 5v13H6z" />
+      <path d="M12 11v6" />
+      <path d="M9 14l3 3 3-3" />
+    </svg>
+  );
+}
+
 function SearchIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -1386,6 +1693,182 @@ function ViewModeIcon({ icon }: { icon: "cover" | "grid" | "list" | "rows" }) {
         </svg>
       );
   }
+}
+
+async function analyzeLocalImportReviewItem(
+  file: File,
+  index: number,
+): Promise<LocalImportReviewItem> {
+  const id = `${file.name}:${file.size}:${file.lastModified}:${index}`;
+
+  try {
+    const analysis = await analyzeLocalImportFile(file);
+    const existingNovel = await findLocalNovelByPath(analysis.pathKey);
+
+    return {
+      analysis,
+      duplicateKind: existingNovel ? "library" : undefined,
+      existingNovelId: existingNovel?.id,
+      file,
+      format: analysis.format,
+      id,
+      status: existingNovel ? "duplicate" : "ready",
+    };
+  } catch (error) {
+    return {
+      error: getLocalImportErrorMessage(error),
+      file,
+      id,
+      status: isUnsupportedLocalImportError(error) ? "unsupported" : "error",
+    };
+  }
+}
+
+function markSelectedLocalImportDuplicates(
+  items: readonly LocalImportReviewItem[],
+): LocalImportReviewItem[] {
+  const seenPathKeys = new Set<string>();
+
+  return items.map((item) => {
+    if (item.status !== "ready" || !item.analysis) return item;
+    if (seenPathKeys.has(item.analysis.pathKey)) {
+      return {
+        ...item,
+        duplicateKind: "selection",
+        status: "duplicate",
+      };
+    }
+
+    seenPathKeys.add(item.analysis.pathKey);
+    return item;
+  });
+}
+
+async function importLocalFileToLibrary(
+  file: File,
+): Promise<LocalNovelImportResult> {
+  const conversion = await convertLocalImportFile(file);
+
+  return upsertLocalNovel({
+    artist: conversion.novel.artist ?? null,
+    author: conversion.novel.author ?? null,
+    chapters: conversion.chapters.map((chapter, index) => ({
+      chapterNumber:
+        chapter.chapterNumber == null ? null : String(chapter.chapterNumber),
+      content: chapter.content,
+      contentBytes: chapter.contentBytes,
+      contentType: chapter.contentType,
+      name: chapter.name,
+      page: chapter.page,
+      path: chapter.path,
+      position: index + 1,
+      releaseTime: chapter.releaseTime ?? null,
+    })),
+    cover: conversion.novel.cover ?? null,
+    genres: conversion.novel.genres ?? null,
+    name: conversion.novel.name,
+    path: conversion.novel.path,
+    status: conversion.novel.status ?? null,
+    summary: conversion.novel.summary ?? null,
+  });
+}
+
+function getLocalImportErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isUnsupportedLocalImportError(error: unknown): boolean {
+  return (
+    error instanceof LocalImportError &&
+    error.message.startsWith("Unsupported local import format:")
+  );
+}
+
+function getLocalImportStatusLabel(
+  status: LocalImportReviewStatus,
+  t: TranslateFn,
+): string {
+  switch (status) {
+    case "ready":
+      return t("library.localImport.status.ready");
+    case "duplicate":
+      return t("library.localImport.status.duplicate");
+    case "unsupported":
+      return t("library.localImport.status.unsupported");
+    case "error":
+      return t("library.localImport.status.error");
+    case "importing":
+      return t("library.localImport.status.importing");
+    case "imported":
+      return t("library.localImport.status.imported");
+  }
+}
+
+function getLocalImportStatusDetail(
+  item: LocalImportReviewItem,
+  t: TranslateFn,
+): string | null {
+  if (item.status === "duplicate") {
+    return item.duplicateKind === "selection"
+      ? t("library.localImport.duplicateSelected")
+      : t("library.localImport.duplicateLibrary");
+  }
+
+  if (item.status === "unsupported" || item.status === "error") {
+    return item.error ?? t("library.localImport.error");
+  }
+
+  if (item.status === "imported") {
+    return t("library.localImport.importedDetail", {
+      count: item.importedChapterCount ?? 0,
+    });
+  }
+
+  return null;
+}
+
+function getLocalImportSummary(
+  items: readonly LocalImportReviewItem[],
+  t: TranslateFn,
+): string {
+  if (items.length === 0) return t("library.localImport.empty");
+
+  const ready = items.filter((item) => item.status === "ready").length;
+  const imported = items.filter((item) => item.status === "imported").length;
+  const blocked = items.filter(
+    (item) =>
+      item.status === "duplicate" ||
+      item.status === "unsupported" ||
+      item.status === "error",
+  ).length;
+
+  return t("library.localImport.summary", {
+    blocked,
+    imported,
+    ready,
+    total: items.length,
+  });
+}
+
+function formatLocalImportFileSize(
+  bytes: number,
+  locale: ReturnType<typeof useTranslation>["locale"],
+): string {
+  if (bytes < 1024) {
+    return `${new Intl.NumberFormat(locale).format(bytes)} B`;
+  }
+
+  const units = ["KB", "MB", "GB"] as const;
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${new Intl.NumberFormat(locale, {
+    maximumFractionDigits: value >= 10 ? 0 : 1,
+  }).format(value)} ${units[unitIndex]}`;
 }
 
 interface LibraryTag {

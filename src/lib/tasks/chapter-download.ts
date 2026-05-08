@@ -3,7 +3,18 @@ import {
   saveChapterContent,
 } from "../../db/queries/chapter";
 import { useBrowseStore } from "../../store/browse";
+import {
+  chapterContentToHtml,
+  normalizeChapterContentType,
+  type ChapterContentType,
+} from "../chapter-content";
+import {
+  cacheHtmlChapterMedia,
+  clearChapterMedia,
+  pruneChapterMedia,
+} from "../chapter-media";
 import { pluginManager } from "../plugins/manager";
+import type { Plugin } from "../plugins/types";
 import { isTauriRuntime } from "../tauri-runtime";
 import {
   taskScheduler,
@@ -21,6 +32,7 @@ export interface ChapterDownloadJob {
   pluginName?: string;
   chapterPath: string;
   chapterName?: string;
+  contentType?: ChapterContentType;
   novelId?: number;
   novelName?: string;
   priority?: TaskPriority;
@@ -89,6 +101,31 @@ function chapterDownloadCooldownMs(): number {
   return useBrowseStore.getState().chapterDownloadCooldownSeconds * 1_000;
 }
 
+function absolutePluginUrl(plugin: Plugin, path: string): string | null {
+  const candidates: string[] = [];
+  if (plugin.resolveUrl) {
+    try {
+      candidates.push(plugin.resolveUrl(path, false));
+    } catch {
+      // Fall back to the opaque path and source site below.
+    }
+  }
+  candidates.push(path);
+
+  for (const candidate of candidates) {
+    try {
+      return new URL(candidate).href;
+    } catch {
+      try {
+        return new URL(candidate, plugin.site).href;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
+}
+
 function makeChapterDownloadBatchId(): string {
   return `chapter-download-batch-${Date.now().toString(36)}-${Math.random()
     .toString(36)
@@ -144,6 +181,9 @@ function normalizePersistedChapterDownloadJob(
     pluginName: readStringField(record, "pluginName"),
     chapterPath,
     chapterName: readStringField(record, "chapterName"),
+    contentType: normalizeChapterContentType(
+      readStringField(record, "contentType"),
+    ),
     novelId: readPositiveIntegerField(record, "novelId"),
     novelName: readStringField(record, "novelName"),
     priority: "background",
@@ -275,6 +315,7 @@ function eventFromTask(task: TaskRecord): ChapterDownloadEvent | null {
       pluginName: task.source?.name,
       chapterPath,
       chapterName: task.subject?.chapterName,
+      contentType: normalizeChapterContentType(task.subject?.contentType),
       novelId: task.subject?.novelId,
       novelName: task.subject?.novelName,
       title: task.title,
@@ -295,6 +336,7 @@ export function enqueueChapterDownload(
     subject: {
       chapterId: job.id,
       chapterName: job.chapterName,
+      contentType: job.contentType,
       novelId: job.novelId,
       novelName: job.novelName,
       path: job.chapterPath,
@@ -306,7 +348,8 @@ export function enqueueChapterDownload(
     sourceCooldownKey: chapterDownloadCooldownKey(job.pluginId),
     sourceCooldownMs: chapterDownloadCooldownMs(),
     run: async ({ executor, setProgress, signal }) => {
-      setProgress({ current: 0, total: 1 });
+      let progressTotal = 1;
+      setProgress({ current: 0, total: progressTotal });
       try {
         if (isTauriRuntime()) {
           await pluginManager.loadInstalledFromDb();
@@ -315,16 +358,45 @@ export function enqueueChapterDownload(
           job.pluginId,
           executor ?? "immediate",
         );
-        const html = await plugin.parseChapter(job.chapterPath);
+        const chapter = await getChapterById(job.id);
+        const contentType = normalizeChapterContentType(
+          job.contentType ?? chapter?.contentType,
+        );
+        const rawContent = await plugin.parseChapter(job.chapterPath);
         if (signal.aborted) {
           throw new DOMException("Task was cancelled.", "AbortError");
         }
-        if (html.trim() === "") {
+        if (rawContent.trim() === "") {
           throw new Error("Downloaded chapter content is empty.");
         }
-        await saveChapterContent(job.id, html);
+        let html = chapterContentToHtml(rawContent, contentType);
+        let mediaCacheKey: string | null = null;
+        if (contentType === "html") {
+          const baseUrl = absolutePluginUrl(plugin, job.chapterPath);
+          if (baseUrl) {
+            const media = await cacheHtmlChapterMedia({
+              baseUrl,
+              chapterId: job.id,
+              contextUrl: baseUrl,
+              html,
+              onProgress: ({ current, total }) => {
+                progressTotal = total + 1;
+                setProgress({ current, total: progressTotal });
+              },
+              signal,
+            });
+            html = media.html;
+            mediaCacheKey = media.cacheKey;
+          }
+        }
+        await saveChapterContent(job.id, html, contentType);
+        if (mediaCacheKey) {
+          await pruneChapterMedia(job.id, mediaCacheKey);
+        } else {
+          await clearChapterMedia(job.id);
+        }
         settleChapterDownloadBatchJob(job.batchId, job.id, "succeeded");
-        setProgress({ current: 1, total: 1 });
+        setProgress({ current: progressTotal, total: progressTotal });
       } catch (error) {
         settleChapterDownloadBatchJob(
           job.batchId,

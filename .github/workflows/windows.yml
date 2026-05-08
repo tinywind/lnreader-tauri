@@ -139,7 +139,7 @@ jobs:
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 3
+          retention-days: 30
 
       - name: Upload Windows NSIS installer
         uses: actions/upload-artifact@v7
@@ -149,7 +149,7 @@ jobs:
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 3
+          retention-days: 30
 
       - name: Upload Windows bundle checksums
         uses: actions/upload-artifact@v7
@@ -159,7 +159,7 @@ jobs:
           if-no-files-found: error
           archive: false
           compression-level: 0
-          retention-days: 3
+          retention-days: 30
 
       - name: Upload Windows bundles to GitHub Release
         if: github.ref_type == 'tag'

@@ -27,9 +27,16 @@ export async function clearDownloadedChapterContent(): Promise<MaintenanceResult
        content_bytes = 0,
        is_downloaded = 0,
        updated_at = unixepoch()
-     WHERE content IS NOT NULL
-       OR content_bytes > 0
-       OR is_downloaded = 1`,
+     WHERE (
+         content IS NOT NULL
+         OR content_bytes > 0
+         OR is_downloaded = 1
+       )
+       AND EXISTS (
+         SELECT 1 FROM novel n
+         WHERE n.id = chapter.novel_id
+           AND n.is_local = 0
+       )`,
   );
   return { rowsAffected: result.rowsAffected };
 }

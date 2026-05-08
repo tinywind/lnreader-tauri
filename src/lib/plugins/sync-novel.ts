@@ -1,5 +1,6 @@
 import { getDb } from "../../db/client";
 import { upsertChapter } from "../../db/queries/chapter";
+import { normalizeChapterContentType } from "../chapter-content";
 import { markUpdatesIndexDirty } from "../updates/update-index-events";
 import type { NovelItem, Plugin } from "./types";
 
@@ -107,6 +108,7 @@ export async function syncNovelFromSource(
           : null,
       page: chapter.page ?? "1",
       releaseTime: chapter.releaseTime ?? null,
+      contentType: normalizeChapterContentType(chapter.contentType),
     });
     if (changed) changedChapters += 1;
   }

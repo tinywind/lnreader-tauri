@@ -1,4 +1,9 @@
-﻿import { getDb } from "../client";
+﻿import {
+  DEFAULT_CHAPTER_CONTENT_TYPE,
+  normalizeChapterContentType,
+  type ChapterContentType,
+} from "../../lib/chapter-content";
+import { getDb } from "../client";
 
 export interface ChapterRow {
   id: number;
@@ -13,6 +18,7 @@ export interface ChapterRow {
   progress: number;
   isDownloaded: boolean;
   content: string | null;
+  contentType: ChapterContentType;
   contentBytes: number;
   releaseTime: string | null;
   readAt: number | null;
@@ -35,6 +41,7 @@ const CHAPTER_LIST_SELECT_FIELDS = `
   unread,
   progress,
   is_downloaded  AS isDownloaded,
+  content_type   AS contentType,
   content_bytes   AS contentBytes,
   release_time   AS releaseTime,
   read_at        AS readAt,
@@ -86,6 +93,7 @@ export interface InsertChapterInput {
   chapterNumber?: string | null;
   page?: string;
   releaseTime?: string | null;
+  contentType?: ChapterContentType;
 }
 
 export async function insertChapter(
@@ -94,8 +102,8 @@ export async function insertChapter(
   const db = await getDb();
   await db.execute(
     `INSERT OR IGNORE INTO chapter
-       (novel_id, path, name, position, chapter_number, page, release_time, created_at, found_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch(), unixepoch())`,
+       (novel_id, path, name, position, chapter_number, page, release_time, content_type, created_at, found_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, unixepoch(), unixepoch())`,
     [
       input.novelId,
       input.path,
@@ -104,6 +112,7 @@ export async function insertChapter(
       input.chapterNumber ?? null,
       input.page ?? "1",
       input.releaseTime ?? null,
+      normalizeChapterContentType(input.contentType),
     ],
   );
 }
@@ -112,21 +121,23 @@ export async function upsertChapter(input: InsertChapterInput): Promise<boolean>
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO chapter
-       (novel_id, path, name, position, chapter_number, page, release_time, created_at, found_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, unixepoch(), unixepoch())
+       (novel_id, path, name, position, chapter_number, page, release_time, content_type, created_at, found_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, unixepoch(), unixepoch())
      ON CONFLICT(novel_id, path) DO UPDATE SET
        name           = excluded.name,
        position       = excluded.position,
        chapter_number = excluded.chapter_number,
        page           = excluded.page,
        release_time   = excluded.release_time,
+       content_type   = excluded.content_type,
        updated_at     = unixepoch()
       WHERE
         name IS NOT excluded.name
         OR position IS NOT excluded.position
         OR chapter_number IS NOT excluded.chapter_number
         OR page IS NOT excluded.page
-        OR release_time IS NOT excluded.release_time`,
+        OR release_time IS NOT excluded.release_time
+        OR content_type IS NOT excluded.content_type`,
     [
       input.novelId,
       input.path,
@@ -135,6 +146,7 @@ export async function upsertChapter(input: InsertChapterInput): Promise<boolean>
       input.chapterNumber ?? null,
       input.page ?? "1",
       input.releaseTime ?? null,
+      normalizeChapterContentType(input.contentType),
     ],
   );
   return result.rowsAffected > 0;
@@ -232,17 +244,24 @@ export async function setChapterBookmark(
 export async function saveChapterContent(
   chapterId: number,
   html: string,
+  contentType: ChapterContentType = DEFAULT_CHAPTER_CONTENT_TYPE,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
     `UPDATE chapter
      SET
        content        = $2,
-       content_bytes  = $3,
+       content_type   = $3,
+       content_bytes  = $4,
        is_downloaded  = 1,
        updated_at     = unixepoch()
      WHERE id = $1`,
-    [chapterId, html, getUtf8ByteLength(html)],
+    [
+      chapterId,
+      html,
+      normalizeChapterContentType(contentType),
+      getUtf8ByteLength(html),
+    ],
   );
 }
 
@@ -268,7 +287,12 @@ export async function clearChapterContent(
        content_bytes  = 0,
        is_downloaded  = 0,
        updated_at     = unixepoch()
-     WHERE id = $1`,
+     WHERE id = $1
+       AND novel_id IN (
+         SELECT id
+         FROM novel
+         WHERE is_local = 0
+       )`,
     [chapterId],
   );
 }
@@ -283,6 +307,7 @@ export interface LibraryUpdateEntry {
   novelId: number;
   pluginId: string;
   chapterName: string;
+  contentType: ChapterContentType;
   position: number;
   foundAt: number;
   isDownloaded: boolean;
@@ -290,7 +315,9 @@ export interface LibraryUpdateEntry {
   novelCover: string | null;
 }
 
-interface RawLibraryUpdate extends Omit<LibraryUpdateEntry, "isDownloaded"> {
+interface RawLibraryUpdate
+  extends Omit<LibraryUpdateEntry, "contentType" | "isDownloaded"> {
+  contentType: string;
   isDownloaded: number;
 }
 
@@ -348,6 +375,7 @@ export async function listLibraryUpdates(
        c.novel_id        AS novelId,
        n.plugin_id       AS pluginId,
        c.name            AS chapterName,
+       c.content_type    AS contentType,
        c.position,
        c.found_at        AS foundAt,
        c.is_downloaded   AS isDownloaded,
@@ -365,6 +393,7 @@ export async function listLibraryUpdates(
   );
   return rows.map((row) => ({
     ...row,
+    contentType: normalizeChapterContentType(row.contentType),
     isDownloaded: !!row.isDownloaded,
   }));
 }

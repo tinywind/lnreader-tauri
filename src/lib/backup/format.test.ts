@@ -43,6 +43,7 @@ const VALID_MANIFEST: BackupManifest = {
       unread: true,
       progress: 0,
       isDownloaded: false,
+      contentType: "html",
       content: null,
       releaseTime: null,
       readAt: null,
@@ -110,6 +111,7 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     delete legacy.installedPlugins;
     delete legacy.settings;
     delete chapters[0]!.createdAt;
+    delete chapters[0]!.contentType;
     delete chapters[0]!.foundAt;
 
     const parsed = parseBackupManifest(JSON.stringify(legacy));
@@ -118,6 +120,7 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     expect(parsed.chapters[0]?.createdAt).toBe(
       VALID_MANIFEST.chapters[0]?.updatedAt,
     );
+    expect(parsed.chapters[0]?.contentType).toBe("html");
     expect(parsed.chapters[0]?.foundAt).toBe(
       VALID_MANIFEST.chapters[0]?.updatedAt,
     );

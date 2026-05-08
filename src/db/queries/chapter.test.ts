@@ -67,7 +67,7 @@ describe("getChapterById", () => {
 });
 
 describe("insertChapter", () => {
-  it("uses INSERT OR IGNORE with the 7 expected params in order", async () => {
+  it("uses INSERT OR IGNORE with the expected params in order", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
     await insertChapter({
       novelId: 1,
@@ -91,6 +91,7 @@ describe("insertChapter", () => {
       "1",
       "1",
       "2025-12-31",
+      "html",
     ]);
   });
 
@@ -103,7 +104,16 @@ describe("insertChapter", () => {
       position: 0,
     });
     const [, params] = mockExecute.mock.calls[0]!;
-    expect(params).toEqual([2, "/c/x", "Untitled", 0, null, "1", null]);
+    expect(params).toEqual([
+      2,
+      "/c/x",
+      "Untitled",
+      0,
+      null,
+      "1",
+      null,
+      "html",
+    ]);
   });
 });
 
@@ -124,6 +134,7 @@ describe("upsertChapter", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("ON CONFLICT(novel_id, path) DO UPDATE");
     expect(sql).toContain("name           = excluded.name");
+    expect(sql).toContain("content_type   = excluded.content_type");
     expect(sql).toContain("created_at");
     expect(sql).toContain("found_at");
     expect(sql).not.toContain("found_at       = excluded.found_at");
@@ -140,6 +151,7 @@ describe("upsertChapter", () => {
       "1",
       "2",
       "2026-05-01",
+      "html",
     ]);
     expect(changed).toBe(true);
   });
@@ -242,10 +254,11 @@ describe("saveChapterContent", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("UPDATE chapter");
     expect(sql).toContain("content");
-    expect(sql).toContain("content_bytes  = $3");
+    expect(sql).toContain("content_type   = $3");
+    expect(sql).toContain("content_bytes  = $4");
     expect(sql).toContain("is_downloaded  = 1");
     expect(sql).toContain("updated_at     = unixepoch()");
-    expect(params).toEqual([7, "<p>hello</p>", 12]);
+    expect(params).toEqual([7, "<p>hello</p>", "html", 12]);
   });
 });
 
@@ -274,6 +287,8 @@ describe("clearChapterContent", () => {
     expect(sql).toContain("content        = NULL");
     expect(sql).toContain("content_bytes  = 0");
     expect(sql).toContain("is_downloaded  = 0");
+    expect(sql).toContain("FROM novel");
+    expect(sql).toContain("is_local = 0");
     expect(params).toEqual([7]);
   });
 });
@@ -315,6 +330,7 @@ describe("listLibraryUpdates", () => {
     expect(sql).toContain("n.in_library = 1");
     expect(sql).toContain("c.unread = 1");
     expect(sql).toContain("c.path");
+    expect(sql).toContain("c.content_type    AS contentType");
     expect(sql).toContain("c.found_at        AS foundAt");
     expect(sql).toContain("ORDER BY foundAt DESC");
     expect(sql).not.toContain("OFFSET");
@@ -329,6 +345,7 @@ describe("listLibraryUpdates", () => {
         novelId: 1,
         pluginId: "source-a",
         chapterName: "Ch1",
+        contentType: "text",
         position: 1,
         foundAt: 1_700_000_000,
         isDownloaded: 1,
@@ -339,6 +356,7 @@ describe("listLibraryUpdates", () => {
 
     const rows = await listLibraryUpdates();
     expect(rows[0]?.isDownloaded).toBe(true);
+    expect(rows[0]?.contentType).toBe("text");
   });
 
   it("clamps limit to a minimum of 1", async () => {
@@ -370,6 +388,7 @@ describe("listLibraryUpdates", () => {
         novelId: 1,
         pluginId: "source-a",
         chapterName: `Ch${index + 1}`,
+        contentType: "html",
         position: index + 1,
         foundAt: 1_700_000_000 - index,
         isDownloaded: 0,

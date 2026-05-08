@@ -1,5 +1,9 @@
 import { getDb } from "../../db/client";
 import {
+  DEFAULT_CHAPTER_CONTENT_TYPE,
+  normalizeChapterContentType,
+} from "../chapter-content";
+import {
   BACKUP_FORMAT_VERSION,
   type BackupCategory,
   type BackupChapter,
@@ -50,6 +54,7 @@ interface RawChapterRow {
   unread: number;
   progress: number;
   isDownloaded: number;
+  contentType: string;
   content: string | null;
   releaseTime: string | null;
   readAt: number | null;
@@ -123,6 +128,7 @@ const SELECT_CHAPTERS = `
     unread,
     progress,
     is_downloaded  AS isDownloaded,
+    content_type   AS contentType,
     content,
     release_time   AS releaseTime,
     read_at        AS readAt,
@@ -178,8 +184,8 @@ const INSERT_CHAPTER = `
   INSERT INTO chapter (
     id, novel_id, path, name, chapter_number, position, page,
     bookmark, unread, progress, is_downloaded, content, content_bytes,
-    release_time, read_at, created_at, found_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+    content_type, release_time, read_at, created_at, found_at, updated_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 `;
 
 const INSERT_CATEGORY = `
@@ -284,6 +290,7 @@ function toChapter(row: RawChapterRow): BackupChapter {
     unread: !!row.unread,
     progress: row.progress,
     isDownloaded: !!row.isDownloaded,
+    contentType: normalizeChapterContentType(row.contentType),
     content: row.content,
     releaseTime: row.releaseTime,
     readAt: row.readAt,
@@ -459,6 +466,9 @@ export async function applyBackupSnapshot(
         chapter.isDownloaded,
         chapter.content,
         getUtf8ByteLength(chapter.content),
+        normalizeChapterContentType(
+          chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+        ),
         chapter.releaseTime,
         chapter.readAt,
         chapter.createdAt,

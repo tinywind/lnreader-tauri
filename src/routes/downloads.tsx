@@ -30,6 +30,10 @@ import {
   type DownloadCacheNovel,
 } from "../db/queries/download-cache";
 import {
+  clearAllChapterMedia,
+  clearChapterMedia,
+} from "../lib/chapter-media";
+import {
   formatRelativeTimeForLocale,
   useTranslation,
   type AppLocale,
@@ -211,7 +215,11 @@ function DownloadCacheChapters({
     queryFn: () => listDownloadCacheChapters(novelId),
   });
   const deleteChapter = useMutation({
-    mutationFn: deleteDownloadCacheChapter,
+    mutationFn: async (chapterId: number) => {
+      const result = await deleteDownloadCacheChapter(chapterId);
+      await clearChapterMedia(chapterId);
+      return result;
+    },
     onSuccess: () => invalidateDownloadCache(queryClient),
   });
 
@@ -279,7 +287,14 @@ function DownloadCacheNovelCard({
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
   const deleteNovel = useMutation({
-    mutationFn: deleteDownloadCacheNovel,
+    mutationFn: async (novelId: number) => {
+      const chapters = await listDownloadCacheChapters(novelId);
+      const result = await deleteDownloadCacheNovel(novelId);
+      await Promise.all(
+        chapters.map((chapter) => clearChapterMedia(chapter.id)),
+      );
+      return result;
+    },
     onSuccess: () => invalidateDownloadCache(queryClient),
   });
   const size = formatBytes(novel.totalBytes, locale);
@@ -408,7 +423,11 @@ export function DownloadsPage() {
     queryFn: listDownloadCacheNovels,
   });
   const deleteAll = useMutation({
-    mutationFn: deleteAllDownloadCache,
+    mutationFn: async () => {
+      const result = await deleteAllDownloadCache();
+      await clearAllChapterMedia();
+      return result;
+    },
     onSuccess: () => invalidateDownloadCache(queryClient),
   });
   const rows = query.data ?? [];

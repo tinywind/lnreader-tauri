@@ -64,6 +64,7 @@ export async function listDownloadCacheNovels(): Promise<DownloadCacheNovel[]> {
      FROM novel n
      JOIN chapter c ON c.novel_id = n.id
      WHERE c.is_downloaded = 1
+       AND n.is_local = 0
      GROUP BY n.id
      ORDER BY lastDownloadedAt DESC, n.name COLLATE NOCASE ASC`,
   );
@@ -80,19 +81,21 @@ export async function listDownloadCacheChapters(
   const db = await getDb();
   const rows = await db.select<RawDownloadCacheChapter[]>(
     `SELECT
-       id,
-       novel_id AS novelId,
-       name,
-       position,
-       unread,
-       progress,
-       read_at AS readAt,
-       updated_at AS downloadedAt,
-       content_bytes AS contentBytes
-     FROM chapter
-     WHERE novel_id = $1
-       AND is_downloaded = 1
-     ORDER BY position ASC, id ASC`,
+       c.id,
+       c.novel_id AS novelId,
+       c.name,
+       c.position,
+       c.unread,
+       c.progress,
+       c.read_at AS readAt,
+       c.updated_at AS downloadedAt,
+       c.content_bytes AS contentBytes
+     FROM chapter c
+     JOIN novel n ON n.id = c.novel_id
+     WHERE c.novel_id = $1
+       AND c.is_downloaded = 1
+       AND n.is_local = 0
+     ORDER BY c.position ASC, c.id ASC`,
     [novelId],
   );
 
@@ -114,7 +117,12 @@ export async function deleteDownloadCacheChapter(
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE id = $1
-       AND is_downloaded = 1`,
+       AND is_downloaded = 1
+       AND EXISTS (
+         SELECT 1 FROM novel n
+         WHERE n.id = chapter.novel_id
+           AND n.is_local = 0
+       )`,
     [chapterId],
   );
   return { rowsAffected: result.rowsAffected };
@@ -132,7 +140,12 @@ export async function deleteDownloadCacheNovel(
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE novel_id = $1
-       AND is_downloaded = 1`,
+       AND is_downloaded = 1
+       AND EXISTS (
+         SELECT 1 FROM novel n
+         WHERE n.id = chapter.novel_id
+           AND n.is_local = 0
+       )`,
     [novelId],
   );
   return { rowsAffected: result.rowsAffected };
@@ -147,7 +160,12 @@ export async function deleteAllDownloadCache(): Promise<DownloadCacheResult> {
        content_bytes = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
-     WHERE is_downloaded = 1`,
+     WHERE is_downloaded = 1
+       AND EXISTS (
+         SELECT 1 FROM novel n
+         WHERE n.id = chapter.novel_id
+           AND n.is_local = 0
+       )`,
   );
   return { rowsAffected: result.rowsAffected };
 }

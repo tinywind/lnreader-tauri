@@ -7,6 +7,7 @@
 
 import type { Filters, FilterToValues } from "./filterTypes";
 import type { PluginInputSchema } from "./inputs";
+import type { ChapterContentType } from "../chapter-content";
 
 export enum NovelStatus {
   Unknown = "Unknown",
@@ -30,6 +31,8 @@ export interface NovelItem {
 export interface ChapterItem {
   name: string;
   path: string;
+  /** Defaults to HTML for legacy plugins. */
+  contentType?: ChapterContentType;
   chapterNumber?: number;
   /** ISO-8601 preferred; UI does best-effort parse. */
   releaseTime?: string;
@@ -93,6 +96,7 @@ export interface Plugin extends PluginItem {
   ) => Promise<NovelItem[]>;
   parseNovel: (novelPath: string) => Promise<SourceNovel>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
+  /** Return content matching the chapter row's `contentType`. */
   parseChapter: (chapterPath: string) => Promise<string>;
   searchNovels: (
     searchTerm: string,

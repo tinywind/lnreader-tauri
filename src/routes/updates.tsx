@@ -696,6 +696,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
       pluginId: entry.pluginId,
       chapterPath: entry.chapterPath,
       chapterName: entry.chapterName,
+      contentType: entry.contentType,
       novelId: entry.novelId,
       novelName: entry.novelName,
       priority: "user",
