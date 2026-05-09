@@ -3,6 +3,10 @@
   --lnr-page-block: 0.875rem;
 }
 
+.lnr-novel-file-input {
+  display: none;
+}
+
 .lnr-novel-workspace {
   --lnr-novel-hero-height: 16.25rem;
   display: flex;
@@ -256,6 +260,11 @@
   max-height: min(72vh, 47.5rem);
   overflow-y: auto;
   position: relative;
+}
+
+.lnr-novel-local-error {
+  display: block;
+  margin-top: 0.5rem;
 }
 
 .lnr-novel-chapter-list-spacer {

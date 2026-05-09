@@ -1,5 +1,7 @@
 import {
+  type ChangeEvent,
   type CSSProperties,
+  type FormEvent,
   type ReactNode,
   useEffect,
   useMemo,
@@ -10,12 +12,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Group,
+  Loader,
+  Modal,
   Popover,
+  Stack,
   Text,
+  Textarea,
+  TextInput,
   Title,
   Tooltip,
 } from "@mantine/core";
 import {
+  ChevronDownGlyph,
+  ChevronUpGlyph,
   DetailsGlyph,
   DownloadGlyph,
   DownloadedGlyph,
@@ -23,6 +32,7 @@ import {
   LibraryAddedGlyph,
   PlayFromStartGlyph,
   PlayGlyph,
+  PlusGlyph,
 } from "../components/ActionGlyphs";
 import {
   ConsoleChip,
@@ -35,6 +45,7 @@ import {
 import { PageFrame, StateView } from "../components/AppFrame";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
+import { TextButton } from "../components/TextButton";
 import {
   clearChapterContent,
   listChaptersByNovel,
@@ -42,9 +53,15 @@ import {
 } from "../db/queries/chapter";
 import {
   getNovelById,
+  reorderLocalNovelChapters,
   setNovelInLibrary,
+  updateLocalNovelMetadata,
+  upsertLocalNovelChapters,
+  type LocalNovelImportChapterInput,
+  type LocalNovelMetadataInput,
   type NovelDetailRecord,
 } from "../db/queries/novel";
+import { convertLocalImportFile } from "../lib/local-import";
 import { clearChapterMedia } from "../lib/chapter-media";
 import {
   enqueueChapterDownload,
@@ -70,7 +87,17 @@ const FINISHED_PROGRESS = 100;
 const CHAPTER_ROW_HEIGHT = 54;
 const CHAPTER_LIST_OVERSCAN = 8;
 const CHAPTER_LIST_VISIBLE_ROWS = 14;
+const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
 const EMPTY_CHAPTERS: ChapterListRow[] = [];
+const EMPTY_LOCAL_NOVEL_FORM: LocalNovelMetadataInput = {
+  name: "",
+  cover: "",
+  summary: "",
+  author: "",
+  artist: "",
+  status: "",
+  genres: "",
+};
 const NOVEL_TITLE_FONT_SIZES = [
   "1.55rem",
   "1.42rem",
@@ -117,6 +144,47 @@ function splitGenres(genres: string | null): string[] {
     .split(/[|,]/)
     .map((genre) => genre.trim())
     .filter(Boolean);
+}
+
+function localMetadataFromNovel(
+  novel: NovelDetailRecord,
+): LocalNovelMetadataInput {
+  return {
+    name: novel.name,
+    cover: novel.cover ?? "",
+    summary: novel.summary ?? "",
+    author: novel.author ?? "",
+    artist: novel.artist ?? "",
+    status: novel.status ?? "",
+    genres: novel.genres ?? "",
+  };
+}
+
+async function convertLocalChapterFiles(
+  files: readonly File[],
+  startPosition: number,
+): Promise<LocalNovelImportChapterInput[]> {
+  const chapters: LocalNovelImportChapterInput[] = [];
+
+  for (const file of files) {
+    const conversion = await convertLocalImportFile(file);
+    for (const chapter of conversion.chapters) {
+      chapters.push({
+        chapterNumber:
+          chapter.chapterNumber == null ? null : String(chapter.chapterNumber),
+        content: chapter.content,
+        contentBytes: chapter.contentBytes,
+        contentType: chapter.contentType,
+        name: chapter.name,
+        page: chapter.page,
+        path: chapter.path,
+        position: startPosition + chapters.length + 1,
+        releaseTime: chapter.releaseTime ?? null,
+      });
+    }
+  }
+
+  return chapters;
 }
 
 function isActiveDownloadStatus(
@@ -301,25 +369,35 @@ function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
 interface ChapterListItemProps {
   chapter: ChapterListRow;
   canDeleteDownload: boolean;
+  canMoveDown: boolean;
+  canMoveUp: boolean;
   isCurrent: boolean;
   status: ChapterDownloadStatus | undefined;
   deleteBusy: boolean;
   opening: boolean;
+  reorderBusy: boolean;
   onOpen: () => void;
   onDownload: () => void;
   onDeleteDownload: () => void;
+  onMoveDown: () => void;
+  onMoveUp: () => void;
 }
 
 function ChapterListItem({
   chapter,
   canDeleteDownload,
+  canMoveDown,
+  canMoveUp,
   isCurrent,
   status,
   deleteBusy,
   opening,
+  reorderBusy,
   onOpen,
   onDownload,
   onDeleteDownload,
+  onMoveDown,
+  onMoveUp,
 }: ChapterListItemProps) {
   const { t } = useTranslation();
   const isQueued = status?.kind === "queued";
@@ -441,6 +519,34 @@ function ChapterListItem({
       </div>
 
       <div className="lnr-novel-chapter-actions">
+        {canMoveUp || canMoveDown ? (
+          <>
+            <IconButton
+              className="lnr-novel-icon-button"
+              disabled={!canMoveUp || reorderBusy}
+              label={t("novel.local.moveChapterUp")}
+              size="lg"
+              onClick={(event) => {
+                event.stopPropagation();
+                onMoveUp();
+              }}
+            >
+              <ChevronUpGlyph />
+            </IconButton>
+            <IconButton
+              className="lnr-novel-icon-button"
+              disabled={!canMoveDown || reorderBusy}
+              label={t("novel.local.moveChapterDown")}
+              size="lg"
+              onClick={(event) => {
+                event.stopPropagation();
+                onMoveDown();
+              }}
+            >
+              <ChevronDownGlyph />
+            </IconButton>
+          </>
+        ) : null}
         {showDownloadButton ? (
           <IconButton
             className="lnr-novel-icon-button"
@@ -479,26 +585,32 @@ function ChapterListItem({
 interface VirtualChapterListProps {
   chapters: ChapterListRow[];
   canDeleteDownloads: boolean;
+  canReorderChapters: boolean;
   deleteBusyChapterId: number | undefined;
   deletePending: boolean;
   lastReadChapterId: number | undefined;
   openingChapterId: number | null;
+  reorderPending: boolean;
   statuses: ReadonlyMap<number, ChapterDownloadStatus>;
   onDeleteDownload: (chapterId: number) => void;
   onDownload: (chapter: ChapterListRow) => void;
+  onMoveChapter: (chapterId: number, direction: -1 | 1) => void;
   onOpen: (chapter: ChapterListRow) => void;
 }
 
 function VirtualChapterList({
   chapters,
   canDeleteDownloads,
+  canReorderChapters,
   deleteBusyChapterId,
   deletePending,
   lastReadChapterId,
   openingChapterId,
+  reorderPending,
   statuses,
   onDeleteDownload,
   onDownload,
+  onMoveChapter,
   onOpen,
 }: VirtualChapterListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -525,7 +637,6 @@ function VirtualChapterList({
   const offsetY = startIndex * chapterRowHeight;
   const listHeight = Math.min(chapters.length, CHAPTER_LIST_VISIBLE_ROWS) *
     chapterRowHeight;
-
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
@@ -574,20 +685,32 @@ function VirtualChapterList({
           className="lnr-novel-chapter-list-window"
           style={{ transform: `translateY(${offsetY}px)` }}
         >
-          {visibleChapters.map((chapter) => (
-            <ChapterListItem
-              key={chapter.id}
-              chapter={chapter}
-              canDeleteDownload={canDeleteDownloads}
-              isCurrent={chapter.id === lastReadChapterId}
-              status={statuses.get(chapter.id)}
-              deleteBusy={deletePending && deleteBusyChapterId === chapter.id}
-              opening={openingChapterId === chapter.id}
-              onOpen={() => onOpen(chapter)}
-              onDownload={() => onDownload(chapter)}
-              onDeleteDownload={() => onDeleteDownload(chapter.id)}
-            />
-          ))}
+          {visibleChapters.map((chapter, index) => {
+            const displayIndex = startIndex + index;
+            return (
+              <ChapterListItem
+                key={chapter.id}
+                chapter={chapter}
+                canDeleteDownload={canDeleteDownloads}
+                canMoveDown={
+                  canReorderChapters && displayIndex < chapters.length - 1
+                }
+                canMoveUp={canReorderChapters && displayIndex > 0}
+                isCurrent={chapter.id === lastReadChapterId}
+                status={statuses.get(chapter.id)}
+                deleteBusy={
+                  deletePending && deleteBusyChapterId === chapter.id
+                }
+                opening={openingChapterId === chapter.id}
+                reorderBusy={reorderPending}
+                onOpen={() => onOpen(chapter)}
+                onDownload={() => onDownload(chapter)}
+                onDeleteDownload={() => onDeleteDownload(chapter.id)}
+                onMoveDown={() => onMoveChapter(chapter.id, 1)}
+                onMoveUp={() => onMoveChapter(chapter.id, -1)}
+              />
+            );
+          })}
         </div>
       </div>
     </div>
@@ -835,9 +958,12 @@ interface NovelWorkspaceProps {
   chapters: ChapterListRow[];
   downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>;
   lastReadChapterId: number | undefined;
+  localChapterAdding: boolean;
   novel: NovelDetailRecord;
   onBack: () => void;
+  onAddLocalChapters: () => void;
   onBatchDownload: (chapters: ChapterListRow[]) => void;
+  onEditLocalMetadata: () => void;
   onOpenSource: () => void;
   onRead: (chapter: ChapterListRow) => void;
   onToggleLibrary: () => void;
@@ -849,9 +975,12 @@ function NovelWorkspace({
   chapters,
   downloadStatuses,
   lastReadChapterId,
+  localChapterAdding,
   novel,
   onBack,
+  onAddLocalChapters,
   onBatchDownload,
+  onEditLocalMetadata,
   onOpenSource,
   onRead,
   onToggleLibrary,
@@ -967,16 +1096,36 @@ function NovelWorkspace({
               </Text>
             ) : null}
             <Text className="lnr-novel-meta">
-              {t("novel.source", { name: novel.pluginId })}
+              {t("novel.source", {
+                name: novel.isLocal ? t("common.local") : novel.pluginId,
+              })}
             </Text>
           </Group>
         </div>
         <div className="lnr-novel-title-actions">
-          <NovelBatchDownloadMenu
-            disabled={!hasBatchDownloadTargets}
-            onDownload={onBatchDownload}
-            options={batchDownloadOptions}
-          />
+          {novel.isLocal ? (
+            <>
+              <NovelActionButton
+                disabled={localChapterAdding}
+                label={t("novel.local.addChapters")}
+                onClick={onAddLocalChapters}
+              >
+                {localChapterAdding ? <Loader size={14} /> : <PlusGlyph />}
+              </NovelActionButton>
+              <NovelActionButton
+                label={t("novel.local.editMetadata")}
+                onClick={onEditLocalMetadata}
+              >
+                <DetailsGlyph />
+              </NovelActionButton>
+            </>
+          ) : (
+            <NovelBatchDownloadMenu
+              disabled={!hasBatchDownloadTargets}
+              onDownload={onBatchDownload}
+              options={batchDownloadOptions}
+            />
+          )}
           <NovelActionButton
             active={novel.inLibrary}
             disabled={toggleBusy}
@@ -987,13 +1136,15 @@ function NovelWorkspace({
           >
             {novel.inLibrary ? <LibraryAddedGlyph /> : <LibraryAddGlyph />}
           </NovelActionButton>
-          <NovelActionButton
-            disabled={!sourceUrl}
-            label={t("novel.openSource")}
-            onClick={onOpenSource}
-          >
-            <DetailsGlyph />
-          </NovelActionButton>
+          {novel.isLocal ? null : (
+            <NovelActionButton
+              disabled={!sourceUrl}
+              label={t("novel.openSource")}
+              onClick={onOpenSource}
+            >
+              <DetailsGlyph />
+            </NovelActionButton>
+          )}
         </div>
       </div>
 
@@ -1079,6 +1230,13 @@ export function NovelDetailPage() {
   const lastReadChapterId = useReaderStore(
     (state) => state.lastReadChapterByNovel[id],
   );
+  const localChapterInputRef = useRef<HTMLInputElement>(null);
+  const [localChapterError, setLocalChapterError] = useState<string | null>(
+    null,
+  );
+  const [localMetadataOpen, setLocalMetadataOpen] = useState(false);
+  const [localMetadataForm, setLocalMetadataForm] =
+    useState<LocalNovelMetadataInput>(EMPTY_LOCAL_NOVEL_FORM);
 
   const novelQuery = useQuery({
     queryKey: novelKey(id),
@@ -1113,6 +1271,52 @@ export function NovelDetailPage() {
       void queryClient.invalidateQueries({
         queryKey: chaptersKey(id),
       });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+    },
+  });
+
+  const addLocalChapters = useMutation({
+    mutationFn: async (files: readonly File[]) => {
+      const startPosition =
+        chaptersQuery.data?.reduce(
+          (maxPosition, chapter) => Math.max(maxPosition, chapter.position),
+          0,
+        ) ?? 0;
+      const chapters = await convertLocalChapterFiles(
+        files,
+        startPosition,
+      );
+      if (chapters.length === 0) return null;
+      return upsertLocalNovelChapters(id, chapters);
+    },
+    onSuccess: () => {
+      setLocalChapterError(null);
+      void queryClient.invalidateQueries({ queryKey: chaptersKey(id) });
+      void queryClient.invalidateQueries({ queryKey: novelKey(id) });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+    },
+    onError: (error) => {
+      setLocalChapterError(
+        error instanceof Error ? error.message : String(error),
+      );
+    },
+  });
+
+  const reorderLocalChapters = useMutation({
+    mutationFn: (chapterIds: number[]) =>
+      reorderLocalNovelChapters(id, chapterIds),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: chaptersKey(id) });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+    },
+  });
+
+  const updateLocalMetadata = useMutation({
+    mutationFn: (input: LocalNovelMetadataInput) =>
+      updateLocalNovelMetadata(id, input),
+    onSuccess: () => {
+      setLocalMetadataOpen(false);
+      void queryClient.invalidateQueries({ queryKey: novelKey(id) });
       void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
     },
   });
@@ -1160,6 +1364,12 @@ export function NovelDetailPage() {
     },
     [rows],
   );
+
+  useEffect(() => {
+    const novel = novelQuery.data;
+    if (!novel?.isLocal) return;
+    setLocalMetadataForm(localMetadataFromNovel(novel));
+  }, [novelQuery.data]);
 
   useEffect(() => {
     if (rows.length === 0) return;
@@ -1279,6 +1489,69 @@ export function NovelDetailPage() {
     }).promise.catch(() => undefined);
   }
 
+  function openLocalChapterInput(): void {
+    addLocalChapters.reset();
+    setLocalChapterError(null);
+    localChapterInputRef.current?.click();
+  }
+
+  function handleLocalChapterFilesSelected(
+    event: ChangeEvent<HTMLInputElement>,
+  ): void {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    if (files.length === 0) return;
+
+    const novel = novelQuery.data;
+    if (!novel?.isLocal) return;
+    addLocalChapters.mutate(files);
+  }
+
+  function openLocalMetadataEditor(): void {
+    const novel = novelQuery.data;
+    if (!novel?.isLocal) return;
+    updateLocalMetadata.reset();
+    setLocalMetadataForm(localMetadataFromNovel(novel));
+    setLocalMetadataOpen(true);
+  }
+
+  function closeLocalMetadataEditor(): void {
+    if (updateLocalMetadata.isPending) return;
+    updateLocalMetadata.reset();
+    setLocalMetadataOpen(false);
+  }
+
+  function handleLocalMetadataSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const novel = novelQuery.data;
+    if (!novel?.isLocal || localMetadataForm.name.trim() === "") return;
+    updateLocalMetadata.mutate(localMetadataForm);
+  }
+
+  function moveLocalChapter(chapterId: number, direction: -1 | 1): void {
+    const novel = novelQuery.data;
+    if (!novel?.isLocal || reorderLocalChapters.isPending) return;
+
+    const displayOrder = [...chapters];
+    const currentIndex = displayOrder.findIndex(
+      (chapter) => chapter.id === chapterId,
+    );
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= displayOrder.length) {
+      return;
+    }
+
+    const [chapter] = displayOrder.splice(currentIndex, 1);
+    if (!chapter) return;
+    displayOrder.splice(nextIndex, 0, chapter);
+
+    const readingOrder =
+      defaultChapterSort === "desc"
+        ? [...displayOrder].reverse()
+        : displayOrder;
+    reorderLocalChapters.mutate(readingOrder.map((chapter) => chapter.id));
+  }
+
   if (id <= 0) {
     return (
       <PageFrame>
@@ -1335,64 +1608,217 @@ export function NovelDetailPage() {
   const sourceUrl = resolveNovelSourceUrl(novel);
 
   return (
-    <PageFrame className="lnr-novel-page" size="wide">
-      <NovelWorkspace
-        novel={novel}
-        chapters={chapters}
-        downloadStatuses={statuses}
-        lastReadChapterId={lastReadChapterId}
-        onBack={goBack}
-        onBatchDownload={downloadChapters}
-        onRead={openChapter}
-        onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
-        onToggleLibrary={() => toggle.mutate()}
-        sourceUrl={sourceUrl}
-        toggleBusy={toggle.isPending}
-      />
-
-      <ConsolePanel className="lnr-novel-chapters-panel">
-        <ConsoleSectionHeader
-          eyebrow={t("novel.chapterIndex")}
-          title={t("novel.chapters")}
-          count={t("novel.chapterCount", {
-            total: chapters.length,
-            cached: chapterStats.downloaded,
-            unread: chapterStats.unread,
-          })}
+    <>
+      <PageFrame className="lnr-novel-page" size="wide">
+        <NovelWorkspace
+          novel={novel}
+          chapters={chapters}
+          downloadStatuses={statuses}
+          lastReadChapterId={lastReadChapterId}
+          localChapterAdding={addLocalChapters.isPending}
+          onBack={goBack}
+          onAddLocalChapters={openLocalChapterInput}
+          onBatchDownload={downloadChapters}
+          onEditLocalMetadata={openLocalMetadataEditor}
+          onRead={openChapter}
+          onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
+          onToggleLibrary={() => toggle.mutate()}
+          sourceUrl={sourceUrl}
+          toggleBusy={toggle.isPending}
         />
 
-        {chaptersQuery.isLoading ? (
-          <StateView
-            color="blue"
-            title={t("novel.loadingChapters")}
-            message={t("novel.loadingChaptersMessage")}
+        <ConsolePanel className="lnr-novel-chapters-panel">
+          <ConsoleSectionHeader
+            eyebrow={t("novel.chapterIndex")}
+            title={t("novel.chapters")}
+            count={t("novel.chapterCount", {
+              total: chapters.length,
+              cached: chapterStats.downloaded,
+              unread: chapterStats.unread,
+            })}
           />
-        ) : chapters.length === 0 ? (
-          <StateView
-            color="blue"
-            title={t("novel.noChapters")}
-            message={t("novel.noChaptersMessage")}
-          />
-        ) : (
-          <VirtualChapterList
-            chapters={chapters}
-            canDeleteDownloads={!novel.isLocal}
-            deleteBusyChapterId={clearDownload.variables}
-            deletePending={clearDownload.isPending}
-            lastReadChapterId={lastReadChapterId}
-            openingChapterId={openingChapterId}
-            statuses={statuses}
-            onOpen={(chapter) => {
-              void openChapter(chapter);
-            }}
-            onDownload={downloadChapter}
-            onDeleteDownload={(chapterId) => {
-              if (novel.isLocal) return;
-              clearDownload.mutate(chapterId);
-            }}
-          />
-        )}
-      </ConsolePanel>
-    </PageFrame>
+
+          {localChapterError ? (
+            <Text c="red" className="lnr-novel-local-error" size="sm">
+              {localChapterError}
+            </Text>
+          ) : null}
+
+          {chaptersQuery.isLoading ? (
+            <StateView
+              color="blue"
+              title={t("novel.loadingChapters")}
+              message={t("novel.loadingChaptersMessage")}
+            />
+          ) : chapters.length === 0 ? (
+            <StateView
+              color="blue"
+              title={t("novel.noChapters")}
+              message={t("novel.noChaptersMessage")}
+              action={
+                novel.isLocal
+                  ? {
+                      icon: addLocalChapters.isPending ? (
+                        <Loader size={14} />
+                      ) : (
+                        <PlusGlyph />
+                      ),
+                      label: t("novel.local.addChapters"),
+                      onClick: openLocalChapterInput,
+                    }
+                  : undefined
+              }
+            />
+          ) : (
+            <VirtualChapterList
+              chapters={chapters}
+              canDeleteDownloads={!novel.isLocal}
+              canReorderChapters={novel.isLocal}
+              deleteBusyChapterId={clearDownload.variables}
+              deletePending={clearDownload.isPending}
+              lastReadChapterId={lastReadChapterId}
+              openingChapterId={openingChapterId}
+              reorderPending={reorderLocalChapters.isPending}
+              statuses={statuses}
+              onOpen={(chapter) => {
+                void openChapter(chapter);
+              }}
+              onDownload={downloadChapter}
+              onMoveChapter={moveLocalChapter}
+              onDeleteDownload={(chapterId) => {
+                if (novel.isLocal) return;
+                clearDownload.mutate(chapterId);
+              }}
+            />
+          )}
+        </ConsolePanel>
+      </PageFrame>
+
+      <input
+        ref={localChapterInputRef}
+        accept={LOCAL_IMPORT_ACCEPT}
+        className="lnr-novel-file-input"
+        multiple
+        onChange={handleLocalChapterFilesSelected}
+        type="file"
+      />
+
+      <Modal
+        opened={novel.isLocal && localMetadataOpen}
+        onClose={closeLocalMetadataEditor}
+        size="lg"
+        title={t("novel.local.editMetadata")}
+      >
+        <form onSubmit={handleLocalMetadataSubmit}>
+          <Stack gap="sm">
+            <TextInput
+              autoFocus
+              label={t("library.localNovel.name")}
+              onChange={(event) =>
+                setLocalMetadataForm((current) => ({
+                  ...current,
+                  name: event.currentTarget.value,
+                }))
+              }
+              required
+              value={localMetadataForm.name}
+            />
+            <Group grow>
+              <TextInput
+                label={t("library.localNovel.author")}
+                onChange={(event) =>
+                  setLocalMetadataForm((current) => ({
+                    ...current,
+                    author: event.currentTarget.value,
+                  }))
+                }
+                value={localMetadataForm.author ?? ""}
+              />
+              <TextInput
+                label={t("library.localNovel.artist")}
+                onChange={(event) =>
+                  setLocalMetadataForm((current) => ({
+                    ...current,
+                    artist: event.currentTarget.value,
+                  }))
+                }
+                value={localMetadataForm.artist ?? ""}
+              />
+            </Group>
+            <Group grow>
+              <TextInput
+                label={t("library.localNovel.status")}
+                onChange={(event) =>
+                  setLocalMetadataForm((current) => ({
+                    ...current,
+                    status: event.currentTarget.value,
+                  }))
+                }
+                value={localMetadataForm.status ?? ""}
+              />
+              <TextInput
+                label={t("library.localNovel.genres")}
+                onChange={(event) =>
+                  setLocalMetadataForm((current) => ({
+                    ...current,
+                    genres: event.currentTarget.value,
+                  }))
+                }
+                value={localMetadataForm.genres ?? ""}
+              />
+            </Group>
+            <TextInput
+              label={t("library.localNovel.cover")}
+              onChange={(event) =>
+                setLocalMetadataForm((current) => ({
+                  ...current,
+                  cover: event.currentTarget.value,
+                }))
+              }
+              value={localMetadataForm.cover ?? ""}
+            />
+            <Textarea
+              autosize
+              label={t("library.localNovel.summary")}
+              minRows={4}
+              onChange={(event) =>
+                setLocalMetadataForm((current) => ({
+                  ...current,
+                  summary: event.currentTarget.value,
+                }))
+              }
+              value={localMetadataForm.summary ?? ""}
+            />
+            {updateLocalMetadata.error ? (
+              <Text c="red" size="sm">
+                {updateLocalMetadata.error instanceof Error
+                  ? updateLocalMetadata.error.message
+                  : String(updateLocalMetadata.error)}
+              </Text>
+            ) : null}
+            <Group justify="flex-end">
+              <TextButton
+                disabled={updateLocalMetadata.isPending}
+                onClick={closeLocalMetadataEditor}
+                type="button"
+                variant="subtle"
+              >
+                {t("common.cancel")}
+              </TextButton>
+              <TextButton
+                disabled={
+                  localMetadataForm.name.trim() === "" ||
+                  updateLocalMetadata.isPending
+                }
+                loading={updateLocalMetadata.isPending}
+                type="submit"
+              >
+                {t("common.save")}
+              </TextButton>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
+    </>
   );
 }

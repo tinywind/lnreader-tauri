@@ -351,8 +351,9 @@ storage.clearAll();
 4. `uninstallPlugin(id)` removes the in-memory plugin and deletes the persisted
    SQLite row.
 
-`pluginId === "local"` is reserved for novels imported from local files. It is
-not backed by a JavaScript plugin.
+`pluginId === "local"` is reserved for local-file novels, including novels
+imported directly from files and user-created local novel homes that receive
+chapter files later. It is not backed by a JavaScript plugin.
 
 ## Compatibility Checklist
 

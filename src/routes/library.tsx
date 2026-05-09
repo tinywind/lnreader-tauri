@@ -15,6 +15,7 @@ import {
   ScrollArea,
   Stack,
   Text,
+  Textarea,
   TextInput,
   Tooltip,
   UnstyledButton,
@@ -22,6 +23,7 @@ import {
 import { useDebouncedValue } from "@mantine/hooks";
 import { PageFrame, StateView } from "../components/AppFrame";
 import {
+  PlusGlyph,
   DownloadGlyph,
   DownloadedGlyph,
   RefreshGlyph,
@@ -47,11 +49,13 @@ import {
   type ChapterListRow,
 } from "../db/queries/chapter";
 import {
+  createLocalNovel,
   getNovelById,
   listLibraryNovels,
   findLocalNovelByPath,
   upsertLocalNovel,
   type LibraryNovel,
+  type LocalNovelMetadataInput,
   type LocalNovelImportResult,
 } from "../db/queries/novel";
 import {
@@ -83,6 +87,15 @@ import "../styles/library.css";
 
 const SEARCH_DEBOUNCE_MS = 200;
 const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
+const EMPTY_LOCAL_NOVEL_FORM: LocalNovelMetadataInput = {
+  name: "",
+  cover: "",
+  summary: "",
+  author: "",
+  artist: "",
+  status: "",
+  genres: "",
+};
 
 interface LibraryPageProps {
   active?: boolean;
@@ -309,6 +322,10 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     LocalImportReviewItem[]
   >([]);
   const [localImportAnalyzing, setLocalImportAnalyzing] = useState(false);
+  const [localNovelEditorOpen, setLocalNovelEditorOpen] = useState(false);
+  const [localNovelForm, setLocalNovelForm] = useState<LocalNovelMetadataInput>(
+    EMPTY_LOCAL_NOVEL_FORM,
+  );
 
   const invalidateLibraryCategories = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["category"] });
@@ -626,6 +643,21 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     },
   });
 
+  const createLocalNovelMutation = useMutation({
+    mutationFn: (input: LocalNovelMetadataInput) =>
+      createLocalNovel({
+        ...input,
+        path: createManualLocalNovelPath(),
+      }),
+    onSuccess: (novelId) => {
+      setLocalNovelEditorOpen(false);
+      setLocalNovelForm(EMPTY_LOCAL_NOVEL_FORM);
+      void queryClient.invalidateQueries({ queryKey: ["category"] });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+      void navigate({ to: "/novel", search: { id: novelId } });
+    },
+  });
+
   const openLocalImportInput = useCallback(() => {
     localImportMutation.reset();
     localImportInputRef.current?.click();
@@ -637,6 +669,28 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     setLocalImportOpen(false);
     setLocalImportItems([]);
   }, [localImportMutation]);
+
+  const openLocalNovelEditor = useCallback(() => {
+    createLocalNovelMutation.reset();
+    setLocalNovelForm(EMPTY_LOCAL_NOVEL_FORM);
+    setLocalNovelEditorOpen(true);
+  }, [createLocalNovelMutation]);
+
+  const closeLocalNovelEditor = useCallback(() => {
+    if (createLocalNovelMutation.isPending) return;
+    createLocalNovelMutation.reset();
+    setLocalNovelEditorOpen(false);
+    setLocalNovelForm(EMPTY_LOCAL_NOVEL_FORM);
+  }, [createLocalNovelMutation]);
+
+  const handleLocalNovelSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (localNovelForm.name.trim() === "") return;
+      createLocalNovelMutation.mutate(localNovelForm);
+    },
+    [createLocalNovelMutation, localNovelForm],
+  );
 
   const handleLocalImportFilesSelected = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -758,6 +812,15 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                   title={t("library.localImport.open")}
                 >
                   <ImportFileIcon />
+                </IconButton>
+                <IconButton
+                  className="lnr-library-icon-button"
+                  label={t("library.localNovel.create")}
+                  onClick={openLocalNovelEditor}
+                  size="sm"
+                  title={t("library.localNovel.create")}
+                >
+                  <PlusGlyph />
                 </IconButton>
                 <IconButton
                   className="lnr-library-icon-button lnr-library-refresh-button"
@@ -987,6 +1050,121 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
             </Group>
           </Group>
         </Stack>
+      </Modal>
+
+      <Modal
+        opened={active && localNovelEditorOpen}
+        onClose={closeLocalNovelEditor}
+        size="lg"
+        title={t("library.localNovel.title")}
+      >
+        <form onSubmit={handleLocalNovelSubmit}>
+          <Stack gap="sm">
+            <TextInput
+              autoFocus
+              label={t("library.localNovel.name")}
+              onChange={(event) =>
+                setLocalNovelForm((current) => ({
+                  ...current,
+                  name: event.currentTarget.value,
+                }))
+              }
+              required
+              value={localNovelForm.name}
+            />
+            <Group grow>
+              <TextInput
+                label={t("library.localNovel.author")}
+                onChange={(event) =>
+                  setLocalNovelForm((current) => ({
+                    ...current,
+                    author: event.currentTarget.value,
+                  }))
+                }
+                value={localNovelForm.author ?? ""}
+              />
+              <TextInput
+                label={t("library.localNovel.artist")}
+                onChange={(event) =>
+                  setLocalNovelForm((current) => ({
+                    ...current,
+                    artist: event.currentTarget.value,
+                  }))
+                }
+                value={localNovelForm.artist ?? ""}
+              />
+            </Group>
+            <Group grow>
+              <TextInput
+                label={t("library.localNovel.status")}
+                onChange={(event) =>
+                  setLocalNovelForm((current) => ({
+                    ...current,
+                    status: event.currentTarget.value,
+                  }))
+                }
+                value={localNovelForm.status ?? ""}
+              />
+              <TextInput
+                label={t("library.localNovel.genres")}
+                onChange={(event) =>
+                  setLocalNovelForm((current) => ({
+                    ...current,
+                    genres: event.currentTarget.value,
+                  }))
+                }
+                value={localNovelForm.genres ?? ""}
+              />
+            </Group>
+            <TextInput
+              label={t("library.localNovel.cover")}
+              onChange={(event) =>
+                setLocalNovelForm((current) => ({
+                  ...current,
+                  cover: event.currentTarget.value,
+                }))
+              }
+              value={localNovelForm.cover ?? ""}
+            />
+            <Textarea
+              autosize
+              label={t("library.localNovel.summary")}
+              minRows={4}
+              onChange={(event) =>
+                setLocalNovelForm((current) => ({
+                  ...current,
+                  summary: event.currentTarget.value,
+                }))
+              }
+              value={localNovelForm.summary ?? ""}
+            />
+            {createLocalNovelMutation.error ? (
+              <Text c="red" size="sm">
+                {getLocalImportErrorMessage(createLocalNovelMutation.error)}
+              </Text>
+            ) : null}
+            <Group justify="flex-end">
+              <TextButton
+                disabled={createLocalNovelMutation.isPending}
+                onClick={closeLocalNovelEditor}
+                type="button"
+                variant="subtle"
+              >
+                {t("common.cancel")}
+              </TextButton>
+              <TextButton
+                disabled={
+                  localNovelForm.name.trim() === "" ||
+                  createLocalNovelMutation.isPending
+                }
+                loading={createLocalNovelMutation.isPending}
+                type="submit"
+              >
+                {t("library.localNovel.create")}
+              </TextButton>
+            </Group>
+          </Stack>
+        </form>
       </Modal>
 
       <Modal
@@ -1771,6 +1949,14 @@ async function importLocalFileToLibrary(
     status: conversion.novel.status ?? null,
     summary: conversion.novel.summary ?? null,
   });
+}
+
+function createManualLocalNovelPath(): string {
+  const id =
+    globalThis.crypto && "randomUUID" in globalThis.crypto
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `local:manual:${id}`;
 }
 
 function getLocalImportErrorMessage(error: unknown): string {

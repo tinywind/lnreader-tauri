@@ -8,13 +8,17 @@ import { getDb } from "../client";
 import { UNCATEGORIZED_CATEGORY_ID } from "./category";
 import {
   countNovels,
+  createLocalNovel,
   findLocalNovelByPath,
   getNovelById,
   insertNovel,
   listLibraryNovelRefreshTargets,
   listLibraryNovels,
+  reorderLocalNovelChapters,
   setNovelInLibrary,
+  updateLocalNovelMetadata,
   upsertLocalNovel,
+  upsertLocalNovelChapters,
 } from "./novel";
 
 const mockedGetDb = vi.mocked(getDb);
@@ -381,6 +385,195 @@ describe("findLocalNovelByPath", () => {
     db.select.mockResolvedValueOnce([]);
 
     await expect(findLocalNovelByPath("/missing.epub")).resolves.toBeNull();
+  });
+});
+
+describe("createLocalNovel", () => {
+  it("creates a local library novel without chapters", async () => {
+    const db = stubDb();
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
+    db.select.mockResolvedValueOnce([{ id: 77 }]);
+
+    const novelId = await createLocalNovel({
+      path: "local:manual:abc",
+      name: "Manual Book",
+      cover: "",
+      summary: "Summary",
+      author: "Writer",
+      artist: "",
+      status: "Ongoing",
+      genres: "Fantasy",
+    });
+
+    const [sql, params] = db.execute.mock.calls[0]!;
+    expect(sql).toContain("INSERT INTO novel");
+    expect(sql).toContain("ON CONFLICT(plugin_id, path) DO UPDATE");
+    expect(sql).toContain("is_local");
+    expect(params).toEqual([
+      "local",
+      "local:manual:abc",
+      "Manual Book",
+      null,
+      "Summary",
+      "Writer",
+      null,
+      "Ongoing",
+      "Fantasy",
+    ]);
+
+    const [, selectParams] = db.select.mock.calls[0]!;
+    expect(selectParams).toEqual(["local", "local:manual:abc"]);
+    expect(novelId).toBe(77);
+  });
+
+  it("requires a title", async () => {
+    stubDb();
+
+    await expect(
+      createLocalNovel({ path: "local:manual:abc", name: " " }),
+    ).rejects.toThrow("local novel: name is required");
+  });
+});
+
+describe("updateLocalNovelMetadata", () => {
+  it("updates only local novel metadata fields", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([{ id: 12 }]);
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
+
+    await updateLocalNovelMetadata(12, {
+      name: "Manual Book",
+      cover: "file:///cover.jpg",
+      summary: "",
+      author: "Writer",
+      artist: "Artist",
+      status: "",
+      genres: "Fantasy",
+    });
+
+    const [selectSql, selectParams] = db.select.mock.calls[0]!;
+    expect(selectSql).toContain("plugin_id = $2");
+    expect(selectSql).toContain("is_local = 1");
+    expect(selectParams).toEqual([12, "local"]);
+
+    const [sql, params] = db.execute.mock.calls[0]!;
+    expect(sql).toContain("UPDATE novel");
+    expect(sql).toContain("plugin_id = $9");
+    expect(sql).toContain("is_local = 1");
+    expect(params).toEqual([
+      12,
+      "Manual Book",
+      "file:///cover.jpg",
+      null,
+      "Writer",
+      "Artist",
+      null,
+      "Fantasy",
+      "local",
+    ]);
+  });
+
+  it("rejects missing or non-local targets", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([]);
+
+    await expect(
+      updateLocalNovelMetadata(12, {
+        name: "Manual Book",
+      }),
+    ).rejects.toThrow("local novel: target novel is not local");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("upsertLocalNovelChapters", () => {
+  it("adds downloaded chapters to an existing local novel", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce(undefined);
+    db.select.mockResolvedValueOnce([{ id: 42 }]);
+
+    const result = await upsertLocalNovelChapters(42, [
+      {
+        path: "local:txt:hash/chapter-0001",
+        name: "Chapter 1",
+        position: 2,
+        contentType: "text",
+        content: "Chapter body",
+        contentBytes: 12,
+      },
+    ]);
+
+    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
+
+    const [checkSql, checkParams] = db.select.mock.calls[0]!;
+    expect(checkSql).toContain("plugin_id = $2");
+    expect(checkSql).toContain("is_local = 1");
+    expect(checkParams).toEqual([42, "local"]);
+
+    const [chapterSql, chapterParams] = db.execute.mock.calls[1]!;
+    expect(chapterSql).toContain("INSERT INTO chapter");
+    expect(chapterSql).toContain("content_type");
+    expect(chapterSql).toContain("is_downloaded");
+    expect(chapterParams).toEqual([
+      42,
+      "local:txt:hash/chapter-0001",
+      "Chapter 1",
+      2,
+      null,
+      "1",
+      null,
+      "text",
+      "Chapter body",
+      12,
+    ]);
+
+    expect(db.execute.mock.calls[3]?.[0]).toBe("COMMIT");
+    expect(result).toEqual({
+      changed: true,
+      changedChapters: 1,
+      novelId: 42,
+      chapterCount: 1,
+    });
+  });
+});
+
+describe("reorderLocalNovelChapters", () => {
+  it("renumbers local chapter positions in the requested order", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce(undefined);
+    db.select
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+
+    await reorderLocalNovelChapters(42, [9, 8]);
+
+    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
+    expect(db.execute.mock.calls[1]?.[1]).toEqual([9, 42, 1]);
+    expect(db.execute.mock.calls[2]?.[1]).toEqual([8, 42, 2]);
+    expect(db.execute.mock.calls[4]?.[0]).toBe("COMMIT");
+  });
+
+  it("rejects reorder lists that do not match existing chapters", async () => {
+    const db = stubDb();
+    db.execute.mockResolvedValue({ rowsAffected: 1 });
+    db.select
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+
+    await expect(reorderLocalNovelChapters(42, [9, 9])).rejects.toThrow(
+      "local novel: reorder ids must match existing chapters",
+    );
+    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
+    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
   });
 });
 
