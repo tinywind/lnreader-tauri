@@ -5,7 +5,7 @@ use std::{
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 const UPDATE_DOWNLOAD_DIR: &str = "Norea Updates";
 
@@ -87,8 +87,8 @@ pub async fn download_and_open_update(
     };
 
     mark_executable_if_needed(&installer_path)?;
-    app.shell()
-        .open(installer_path.to_string_lossy().to_string(), None)
+    app.opener()
+        .open_path(installer_path.to_string_lossy().to_string(), None::<&str>)
         .map_err(|err| format!("installer open failed: {err}"))?;
 
     Ok(installer_path.to_string_lossy().to_string())

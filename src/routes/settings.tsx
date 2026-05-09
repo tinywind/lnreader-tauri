@@ -17,7 +17,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useQueryClient } from "@tanstack/react-query";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { PageFrame } from "../components/AppFrame";
 import { BrowseSettingsPanel } from "../components/BrowseSettingsPanel";
 import { ConsoleChip } from "../components/ConsolePrimitives";
@@ -210,7 +210,6 @@ async function rehydrateImportedSettings(): Promise<void> {
     useAppearanceStore.persist.rehydrate(),
     useBrowseStore.persist.rehydrate(),
     useLibraryStore.persist.rehydrate(),
-    useLoggingStore.persist.rehydrate(),
     useNotificationStore.persist.rehydrate(),
     useReaderStore.persist.rehydrate(),
     useUserAgentStore.persist.rehydrate(),
@@ -1247,7 +1246,7 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
   }
 
   function openLatestRelease(): void {
-    void openExternal(LATEST_RELEASE_URL).catch((error: unknown) => {
+    void openUrl(LATEST_RELEASE_URL).catch((error: unknown) => {
       showSettingsToast(
         "red",
         t("settings.about.githubReleases"),

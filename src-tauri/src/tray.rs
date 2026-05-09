@@ -23,6 +23,7 @@ const MAX_MENU_TEXT_CHARS: usize = 96;
 
 #[derive(Debug, Deserialize)]
 pub struct TrayTaskProgressItem {
+    #[cfg(target_os = "windows")]
     label: String,
 }
 
