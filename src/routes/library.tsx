@@ -53,12 +53,18 @@ import {
   getNovelById,
   listLibraryNovels,
   findLocalNovelByPath,
+  setNovelInLibrary,
   upsertLocalNovel,
   upsertLocalNovelMetadata,
   type LibraryNovel,
   type LocalNovelMetadataInput,
   type LocalNovelImportResult,
 } from "../db/queries/novel";
+import {
+  deleteDownloadCacheNovel,
+  listDownloadCacheChapters,
+} from "../db/queries/download-cache";
+import { clearChapterMedia } from "../lib/chapter-media";
 import {
   analyzeLocalImportFile,
   convertLocalImportFile,
@@ -416,6 +422,41 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     },
   });
 
+  const deleteSelectedDownloadsMutation = useMutation({
+    mutationFn: async (novelIds: readonly number[]) => {
+      let deletedChapters = 0;
+
+      for (const novelId of novelIds) {
+        const chapters = await listDownloadCacheChapters(novelId);
+        const result = await deleteDownloadCacheNovel(novelId);
+        deletedChapters += result.rowsAffected;
+        await Promise.all(
+          chapters.map((chapter) => clearChapterMedia(chapter.id)),
+        );
+      }
+
+      return deletedChapters;
+    },
+    onSuccess: () => {
+      setSelectedIds(new Set());
+      invalidateLibraryCategories();
+      void queryClient.invalidateQueries({ queryKey: ["download-cache"] });
+    },
+  });
+
+  const removeSelectedFromLibraryMutation = useMutation({
+    mutationFn: async (novelIds: readonly number[]) => {
+      for (const novelId of novelIds) {
+        await setNovelInLibrary(novelId, false);
+      }
+    },
+    onSuccess: () => {
+      setSelectedIds(new Set());
+      invalidateLibraryCategories();
+      void queryClient.invalidateQueries({ queryKey: ["download-cache"] });
+    },
+  });
+
   const metadataRefreshMutation = useMutation({
     mutationFn: () =>
       refreshLibraryMetadata({
@@ -517,6 +558,12 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     unreadOnlyMode;
 
   const rows = novels.data ?? [];
+  const selectedNovelIds = Array.from(selectedIds);
+  const selectedDownloadedChapterCount = rows.reduce(
+    (total, novel) =>
+      selectedIds.has(novel.id) ? total + novel.chaptersDownloaded : total,
+    0,
+  );
   const manualCategories = categories.data ?? [];
   const allCategoryCount = categoryCounts.data?.total ?? 0;
   const uncategorizedCategoryCount = categoryCounts.data?.uncategorized ?? 0;
@@ -881,11 +928,79 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                     onAssign={(categoryId) =>
                       assignCategoryMutation.mutate({
                         categoryId,
-                        novelIds: Array.from(selectedIds),
+                        novelIds: selectedNovelIds,
                       })
                     }
                     t={t}
                   />
+                  <IconButton
+                    className="lnr-library-selection-icon"
+                    disabled={
+                      selectedDownloadedChapterCount === 0 ||
+                      deleteSelectedDownloadsMutation.isPending ||
+                      removeSelectedFromLibraryMutation.isPending
+                    }
+                    label={
+                      selectedDownloadedChapterCount > 0
+                        ? t("library.deleteSelectedDownloads")
+                        : t("library.deleteSelectedDownloadsUnavailable")
+                    }
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          t("library.deleteSelectedDownloadsConfirm", {
+                            chapters: selectedDownloadedChapterCount,
+                            count: selectedIds.size,
+                          }),
+                        )
+                      ) {
+                        return;
+                      }
+                      deleteSelectedDownloadsMutation.mutate(selectedNovelIds);
+                    }}
+                    size="sm"
+                    title={
+                      selectedDownloadedChapterCount > 0
+                        ? t("library.deleteSelectedDownloads")
+                        : t("library.deleteSelectedDownloadsUnavailable")
+                    }
+                    tone="danger"
+                  >
+                    {deleteSelectedDownloadsMutation.isPending ? (
+                      <Loader size={14} />
+                    ) : (
+                      <DownloadedGlyph />
+                    )}
+                  </IconButton>
+                  <IconButton
+                    className="lnr-library-selection-icon"
+                    disabled={
+                      removeSelectedFromLibraryMutation.isPending ||
+                      deleteSelectedDownloadsMutation.isPending
+                    }
+                    label={t("library.removeSelectedFromLibrary")}
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          t("library.removeSelectedFromLibraryConfirm", {
+                            count: selectedIds.size,
+                          }),
+                        )
+                      ) {
+                        return;
+                      }
+                      removeSelectedFromLibraryMutation.mutate(selectedNovelIds);
+                    }}
+                    size="sm"
+                    title={t("library.removeSelectedFromLibrary")}
+                    tone="danger"
+                  >
+                    {removeSelectedFromLibraryMutation.isPending ? (
+                      <Loader size={14} />
+                    ) : (
+                      <TrashIcon />
+                    )}
+                  </IconButton>
                   <UnstyledButton onClick={clearSelection}>
                     {t("common.done")}
                   </UnstyledButton>
