@@ -26,8 +26,32 @@ export function chapterContentToHtml(
   contentType: ChapterContentType,
 ): string {
   if (contentType === "text") {
-    return `<pre>${escapeHtml(content)}</pre>`;
+    const paragraphs = content
+      .replace(/\r\n?/g, "\n")
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean)
+      .map(
+        (paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`,
+      )
+      .join("");
+    return `<section class="reader-text-content">${paragraphs}</section>`;
   }
 
   return content;
+}
+
+export function renderChapterContentAsHtml(
+  content: string,
+  contentType: ChapterContentType,
+): string {
+  if (contentType !== "text") return content;
+  const trimmed = content.trimStart().toLowerCase();
+  if (
+    trimmed.startsWith('<section class="reader-text-content"') ||
+    trimmed.startsWith("<pre")
+  ) {
+    return content;
+  }
+  return chapterContentToHtml(content, contentType);
 }

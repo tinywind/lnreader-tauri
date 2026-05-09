@@ -1,4 +1,46 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const localStorageHarness = vi.hoisted(() => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage",
+  );
+  const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "window",
+  );
+  const values = new Map<string, string>();
+  const storage = {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    key(index: number) {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value);
+    },
+  } as Storage;
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { localStorage: storage },
+  });
+  return { originalDescriptor, originalWindowDescriptor, values };
+});
+
 import {
   READER_APPEARANCE_DEFAULTS,
   READER_GENERAL_DEFAULTS,
@@ -8,7 +50,29 @@ import {
 } from "./reader";
 
 beforeEach(() => {
+  localStorageHarness.values.clear();
   useReaderStore.getState().resetReaderSettings();
+});
+
+afterAll(() => {
+  if (localStorageHarness.originalDescriptor) {
+    Object.defineProperty(
+      globalThis,
+      "localStorage",
+      localStorageHarness.originalDescriptor,
+    );
+  } else {
+    delete (globalThis as { localStorage?: Storage }).localStorage;
+  }
+  if (localStorageHarness.originalWindowDescriptor) {
+    Object.defineProperty(
+      globalThis,
+      "window",
+      localStorageHarness.originalWindowDescriptor,
+    );
+  } else {
+    delete (globalThis as { window?: Window }).window;
+  }
 });
 
 describe("useReaderStore", () => {

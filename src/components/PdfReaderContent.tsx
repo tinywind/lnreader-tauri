@@ -5,7 +5,9 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type MouseEvent,
   type Ref,
+  type WheelEvent,
 } from "react";
 import { Box } from "@mantine/core";
 import {
@@ -16,13 +18,16 @@ import {
 } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { useTranslation } from "../i18n";
-import { useReaderStore } from "../store/reader";
+import {
+  useReaderStore,
+  type ReaderTapZone,
+  type ReaderTapZoneMap,
+} from "../store/reader";
 import type { ReaderContentHandle } from "./ReaderContent";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfReaderContentProps {
-  bottomOverlayOffset?: number | string;
   dataUrl: string;
   initialProgress?: number;
   onBoundaryPage?: (direction: 1 | -1) => void;
@@ -34,6 +39,10 @@ interface PdfReaderContentProps {
 
 const MAX_CANVAS_SCALE = 3;
 const MIN_CANVAS_WIDTH = 240;
+const WHEEL_PAGE_COOLDOWN_MS = 220;
+const WHEEL_PAGE_DELTA_THRESHOLD = 20;
+const WHEEL_DELTA_LINE = 1;
+const WHEEL_DELTA_PAGE = 2;
 
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
@@ -85,20 +94,41 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
     : decodePercentPayload(payload);
 }
 
-function PreviousPageIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M15 6l-6 6 6 6" />
-    </svg>
-  );
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return !!target.closest("button,a,input,select,textarea,[role='button']");
 }
 
-function NextPageIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M9 6l6 6-6 6" />
-    </svg>
-  );
+function getNormalizedWheelDelta(event: WheelEvent<HTMLElement>): number {
+  const primaryDelta =
+    Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+      ? event.deltaY
+      : event.deltaX;
+  if (event.deltaMode === WHEEL_DELTA_LINE) return primaryDelta * 16;
+  if (event.deltaMode === WHEEL_DELTA_PAGE) {
+    return primaryDelta * window.innerHeight;
+  }
+  return primaryDelta;
+}
+
+function getTapZoneAction(
+  rect: DOMRect,
+  clientX: number,
+  clientY: number,
+  tapZones: ReaderTapZoneMap,
+) {
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const column =
+    x < rect.width / 3 ? "Left" : x > (rect.width * 2) / 3 ? "Right" : "Center";
+  const row =
+    y < rect.height / 3
+      ? "top"
+      : y > (rect.height * 2) / 3
+        ? "bottom"
+        : "middle";
+  const zone = `${row}${column}` as ReaderTapZone;
+  return zone === "middleCenter" ? "menu" : tapZones[zone];
 }
 
 function PdfReaderContentInner(
@@ -106,7 +136,6 @@ function PdfReaderContentInner(
   ref: Ref<ReaderContentHandle>,
 ) {
   const {
-    bottomOverlayOffset,
     dataUrl,
     initialProgress = 0,
     onBoundaryPage,
@@ -116,6 +145,7 @@ function PdfReaderContentInner(
     viewportHeight: requestedViewportHeight,
   } = props;
   const { t } = useTranslation();
+  const general = useReaderStore((state) => state.general);
   const appearance = useReaderStore((state) => state.appearance);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
@@ -124,6 +154,10 @@ function PdfReaderContentInner(
   const pageNumberRef = useRef(1);
   const pageCountRef = useRef(0);
   const initialProgressRef = useRef(clampProgress(initialProgress));
+  const wheelDeltaRef = useRef(0);
+  const wheelCooldownTimerRef = useRef<number | null>(null);
+  const wheelPagingLockedRef = useRef(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const onBoundaryPageRef = useRef(onBoundaryPage);
   const onPageIndexChangeRef = useRef(onPageIndexChange);
   const onProgressChangeRef = useRef(onProgressChange);
@@ -136,7 +170,6 @@ function PdfReaderContentInner(
   const [error, setError] = useState<string | null>(null);
   const viewportHeight =
     requestedViewportHeight ?? "calc(var(--lnr-app-content-height) - 3.75rem)";
-  const overlayBottom = bottomOverlayOffset ?? "0.5rem";
 
   useEffect(() => {
     initialProgressRef.current = clampProgress(initialProgress);
@@ -173,6 +206,7 @@ function PdfReaderContentInner(
     (direction: 1 | -1) => {
       const currentPage = pageNumberRef.current;
       const currentPageCount = pageCountRef.current;
+      if (currentPageCount <= 0) return;
       const targetPage = currentPage + direction;
       if (targetPage < 1 || targetPage > currentPageCount) {
         onBoundaryPageRef.current?.(direction);
@@ -279,6 +313,7 @@ function PdfReaderContentInner(
   useEffect(() => {
     if (!document || pageCount <= 0) return;
     onPageIndexChangeRef.current?.(pageNumber);
+    onProgressChangeRef.current?.((pageNumber / pageCount) * 100);
   }, [document, pageCount, pageNumber]);
 
   useEffect(() => {
@@ -334,14 +369,99 @@ function PdfReaderContentInner(
     };
   }, [document, pageCount, pageNumber, renderWidth]);
 
+  useEffect(
+    () => () => {
+      if (wheelCooldownTimerRef.current !== null) {
+        window.clearTimeout(wheelCooldownTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (isInteractiveTarget(event.target)) return;
+    const node = viewportRef.current;
+    if (!node) return;
+    const action = getTapZoneAction(
+      node.getBoundingClientRect(),
+      event.clientX,
+      event.clientY,
+      general.tapZones,
+    );
+    const resolvedAction =
+      general.tapToScroll || action === "menu" ? action : "none";
+
+    switch (resolvedAction) {
+      case "previous":
+        scrollByPage(-1);
+        break;
+      case "next":
+        scrollByPage(1);
+        break;
+      case "menu":
+        onToggleChrome?.();
+        break;
+      case "none":
+        break;
+    }
+  };
+
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || isInteractiveTarget(event.target)) return;
+
+    const delta = getNormalizedWheelDelta(event);
+    if (Math.abs(delta) < 1) return;
+
+    event.preventDefault();
+    if (wheelPagingLockedRef.current) return;
+
+    wheelDeltaRef.current += delta;
+    if (Math.abs(wheelDeltaRef.current) < WHEEL_PAGE_DELTA_THRESHOLD) return;
+
+    const direction: 1 | -1 = wheelDeltaRef.current > 0 ? 1 : -1;
+    wheelDeltaRef.current = 0;
+    wheelPagingLockedRef.current = true;
+    scrollByPage(direction);
+
+    if (wheelCooldownTimerRef.current !== null) {
+      window.clearTimeout(wheelCooldownTimerRef.current);
+    }
+    wheelCooldownTimerRef.current = window.setTimeout(() => {
+      wheelPagingLockedRef.current = false;
+      wheelCooldownTimerRef.current = null;
+    }, WHEEL_PAGE_COOLDOWN_MS);
+  };
+
   return (
     <Box
       ref={viewportRef}
       className="lnr-pdf-reader-viewport"
-      onClick={() => onToggleChrome?.()}
+      onClick={handleClick}
+      onTouchStart={(event) => {
+        const touch = event.changedTouches[0];
+        if (touch) {
+          touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+        }
+      }}
+      onTouchEnd={(event) => {
+        if (!general.swipeGestures || !touchStartRef.current) {
+          touchStartRef.current = null;
+          return;
+        }
+        const touch = event.changedTouches[0];
+        if (!touch) return;
+        const dx = touch.clientX - touchStartRef.current.x;
+        const dy = touch.clientY - touchStartRef.current.y;
+        touchStartRef.current = null;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+          scrollByPage(dx < 0 ? 1 : -1);
+        }
+      }}
+      onWheel={handleWheel}
       style={{
         background: appearance.backgroundColor,
         color: appearance.textColor,
+        cursor: "pointer",
         height: viewportHeight,
       }}
     >
@@ -360,35 +480,6 @@ function PdfReaderContentInner(
           className="lnr-pdf-reader-canvas"
           data-rendering={rendering}
         />
-      </div>
-      <div className="lnr-pdf-reader-controls" style={{ bottom: overlayBottom }}>
-        <button
-          aria-label={t("common.previous")}
-          className="lnr-pdf-reader-control"
-          disabled={pageNumber <= 1 || loading}
-          onClick={(event) => {
-            event.stopPropagation();
-            scrollByPage(-1);
-          }}
-          type="button"
-        >
-          <PreviousPageIcon />
-        </button>
-        <span className="lnr-pdf-reader-page-status">
-          {pageCount > 0 ? `${pageNumber} / ${pageCount}` : ""}
-        </span>
-        <button
-          aria-label={t("reader.next")}
-          className="lnr-pdf-reader-control"
-          disabled={pageCount <= 0 || pageNumber >= pageCount || loading}
-          onClick={(event) => {
-            event.stopPropagation();
-            scrollByPage(1);
-          }}
-          type="button"
-        >
-          <NextPageIcon />
-        </button>
       </div>
     </Box>
   );

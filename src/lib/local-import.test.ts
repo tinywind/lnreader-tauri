@@ -60,7 +60,7 @@ describe("analyzeLocalImportFile", () => {
 });
 
 describe("convertLocalImportFile", () => {
-  it("converts txt files to escaped pre content", async () => {
+  it("converts txt files to reader-ready html content", async () => {
     const result = await convertLocalImportFile(
       file([`Line <one> & "two" 'three'`], "Plain.txt", "text/plain"),
     );
@@ -70,7 +70,7 @@ describe("convertLocalImportFile", () => {
     expect(result.chapters[0]).toMatchObject({
       name: "Plain",
       contentType: "text",
-      content: `<pre>Line &lt;one&gt; &amp; &quot;two&quot; &#39;three&#39;</pre>`,
+      content: `<section class="reader-text-content"><p>Line &lt;one&gt; &amp; &quot;two&quot; &#39;three&#39;</p></section>`,
     });
   });
 

@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { load } from "cheerio";
 import {
   chapterContentToHtml,
@@ -272,12 +273,16 @@ function hexFromBytes(bytes: ArrayBuffer): string {
     .join("");
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) {
     throw new LocalImportError("SHA-256 hashing is not available.");
   }
-  return hexFromBytes(await subtle.digest("SHA-256", bytes));
+  const source = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  );
+  return hexFromBytes(await subtle.digest("SHA-256", source));
 }
 
 function pathKeyForHash(format: LocalImportFormat, contentHash: string): string {
@@ -298,13 +303,13 @@ function duplicateMetadata(
   };
 }
 
-async function readFileBytes(file: File): Promise<Uint8Array> {
+async function readFileBytes(file: File): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(await file.arrayBuffer());
 }
 
 async function analyzeLocalImportBytes(
   file: File,
-  bytes: Uint8Array,
+  bytes: Uint8Array<ArrayBuffer>,
 ): Promise<LocalImportAnalysis> {
   const format = formatFromFile(file);
   assertFileWithinLimit(file, format);
@@ -443,7 +448,6 @@ function singleChapterConversion(
 }
 
 async function invokeZipList(bytes: Uint8Array): Promise<ZipEntryInfo[]> {
-  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ZipEntryInfo[]>("plugin_zip_list", {
     bytes: bytesToArray(bytes),
   });
@@ -454,7 +458,6 @@ async function invokeZipReadFile(
   path: string,
   maxBytes: number,
 ): Promise<Uint8Array> {
-  const { invoke } = await import("@tauri-apps/api/core");
   const output = await invoke<number[]>("plugin_zip_read_file", {
     bytes: bytesToArray(bytes),
     options: {

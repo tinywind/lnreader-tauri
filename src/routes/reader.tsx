@@ -23,6 +23,7 @@ import {
 } from "../db/queries/chapter";
 import { getNovelById } from "../db/queries/novel";
 import { resolveLocalChapterMedia } from "../lib/chapter-media";
+import { renderChapterContentAsHtml } from "../lib/chapter-content";
 import { enqueueChapterDownload } from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { readerRoute } from "../router";
@@ -391,6 +392,7 @@ export function ReaderPage() {
   const openedChapterRef = useRef<number | null>(null);
   const openRequestRef = useRef(0);
   const chromeHideTimerRef = useRef<number | null>(null);
+  const readerWriteQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [fullPageChromeVisible, setFullPageChromeVisible] = useState(false);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
 
@@ -462,6 +464,14 @@ export function ReaderPage() {
     return clearFullPageChromeTimer;
   }, [chapterId, clearFullPageChromeTimer, fullPageReader]);
 
+  const enqueueReaderWrite = useCallback(<T,>(write: () => Promise<T>) => {
+    const run = readerWriteQueueRef.current
+      .catch(() => undefined)
+      .then(write);
+    readerWriteQueueRef.current = run.catch(() => undefined);
+    return run;
+  }, []);
+
   const chapterQuery = useQuery({
     queryKey: chapterDetailKey(chapterId),
     queryFn: async () => {
@@ -483,9 +493,11 @@ export function ReaderPage() {
 
   const progressMutation = useMutation({
     mutationFn: (progress: number) =>
-      updateChapterProgress(chapterId, progress, {
-        recordHistory: !incognitoMode,
-      }),
+      enqueueReaderWrite(() =>
+        updateChapterProgress(chapterId, progress, {
+          recordHistory: !incognitoMode,
+        }),
+      ),
     onMutate: (progress) => {
       const applyProgress = <T extends ChapterListRow>(chapter: T): T => ({
         ...chapter,
@@ -658,12 +670,18 @@ export function ReaderPage() {
     openedChapterRef.current = chapter.id;
     setLastReadChapter(chapter.novelId, chapter.id);
     if (!incognitoMode) {
-      void markChapterOpened(chapter.id).then(() => {
+      void enqueueReaderWrite(() => markChapterOpened(chapter.id)).then(() => {
         void queryClient.invalidateQueries({ queryKey: ["chapter", "history"] });
         void queryClient.invalidateQueries({ queryKey: ["novel"] });
       });
     }
-  }, [chapterQuery.data, incognitoMode, queryClient, setLastReadChapter]);
+  }, [
+    chapterQuery.data,
+    enqueueReaderWrite,
+    incognitoMode,
+    queryClient,
+    setLastReadChapter,
+  ]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -736,7 +754,10 @@ export function ReaderPage() {
     chapterIndex >= 0 && chapterIndex < chapters.length - 1
       ? chapters[chapterIndex + 1]
       : undefined;
-  const content = chapter?.content ?? SAMPLE_CHAPTER_HTML;
+  const content =
+    chapter?.content == null
+      ? SAMPLE_CHAPTER_HTML
+      : renderChapterContentAsHtml(chapter.content, chapter.contentType);
   const isPdfChapter = chapter?.contentType === "pdf";
   const progress = chapter?.progress ?? 0;
   const chapterNovelId = chapter?.novelId;
@@ -823,7 +844,6 @@ export function ReaderPage() {
       <PdfReaderContent
         key={chapter?.id ?? "sample"}
         ref={contentRef}
-        bottomOverlayOffset={readerOverlayBottom}
         dataUrl={content}
         initialProgress={progress}
         onToggleChrome={
