@@ -17,6 +17,7 @@ import { pluginManager } from "../plugins/manager";
 import type { Plugin } from "../plugins/types";
 import { isTauriRuntime } from "../tauri-runtime";
 import {
+  sourceBaseDomainKey,
   taskScheduler,
   type TaskEvent,
   type TaskHandle,
@@ -93,8 +94,8 @@ function chapterDownloadDedupeKey(chapterId: number): string {
   return `chapter.download:${chapterId}`;
 }
 
-function chapterDownloadCooldownKey(pluginId: string): string {
-  return `chapter.download:${pluginId}`;
+function chapterDownloadCooldownKey(sourceKey: string): string {
+  return `chapter.download:${sourceKey}`;
 }
 
 function chapterDownloadCooldownMs(): number {
@@ -333,12 +334,15 @@ export function enqueueChapterDownload(
   job: ChapterDownloadJob,
 ): TaskHandle<void> {
   const sourceName = job.pluginName ?? job.pluginId;
+  const sourcePlugin = pluginManager.getPlugin(job.pluginId);
+  const sourceSite = sourcePlugin?.site;
+  const sourceCooldownKey = sourceBaseDomainKey(sourceSite) ?? job.pluginId;
   persistChapterDownloadJob(job);
   const handle = taskScheduler.enqueueSource<void>({
     kind: "chapter.download",
     priority: job.priority ?? "background",
     title: job.title,
-    source: { id: job.pluginId, name: sourceName },
+    source: { id: job.pluginId, name: sourceName, site: sourceSite },
     subject: {
       chapterId: job.id,
       chapterName: job.chapterName,
@@ -351,7 +355,7 @@ export function enqueueChapterDownload(
       batchTitle: job.batchTitle,
     },
     dedupeKey: chapterDownloadDedupeKey(job.id),
-    sourceCooldownKey: chapterDownloadCooldownKey(job.pluginId),
+    sourceCooldownKey: chapterDownloadCooldownKey(sourceCooldownKey),
     sourceCooldownMs: chapterDownloadCooldownMs(),
     run: async ({ executor, setProgress, signal }) => {
       let progressTotal = 1;

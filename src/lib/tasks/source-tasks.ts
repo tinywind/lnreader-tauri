@@ -10,7 +10,7 @@ import {
 } from "./scheduler";
 
 interface SourceTaskOptions<T> {
-  plugin: Pick<Plugin, "id" | "name">;
+  plugin: Pick<Plugin, "id" | "name" | "site">;
   kind: SourceTaskKind;
   title: string;
   priority?: Exclude<TaskPriority, "background">;
@@ -38,7 +38,7 @@ export function enqueueSourceTask<T>({
     kind,
     priority,
     title,
-    source: { id: plugin.id, name: plugin.name },
+    source: { id: plugin.id, name: plugin.name, site: plugin.site },
     subject: { ...subject, pluginId: plugin.id },
     dedupeKey,
     exclusive,

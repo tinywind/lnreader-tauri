@@ -81,6 +81,73 @@ describe("TaskScheduler", () => {
     await Promise.all(tasks.map((task) => task.promise));
   });
 
+  it("serializes different sources that share a base domain", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 2,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+    const finishers = new Map<string, () => void>();
+
+    const sharedA = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Shared A",
+      priority: "normal",
+      source: { id: "shared-a", name: "Shared A", site: "https://m.shared.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`shared-a:${context.executor}:start`);
+          finishers.set("shared-a", resolve);
+        }),
+    });
+    const sharedB = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Shared B",
+      priority: "normal",
+      source: {
+        id: "shared-b",
+        name: "Shared B",
+        site: "https://www.shared.test/path",
+      },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`shared-b:${context.executor}:start`);
+          finishers.set("shared-b", resolve);
+        }),
+    });
+    const other = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Other",
+      priority: "normal",
+      source: { id: "other", name: "Other", site: "https://other.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`other:${context.executor}:start`);
+          finishers.set("other", resolve);
+        }),
+    });
+
+    await settle();
+    expect(order).toEqual([
+      "shared-a:pool:0:start",
+      "other:pool:1:start",
+    ]);
+
+    finishers.get("shared-a")?.();
+    await sharedA.promise;
+    await settle();
+
+    expect(order).toEqual([
+      "shared-a:pool:0:start",
+      "other:pool:1:start",
+      "shared-b:pool:0:start",
+    ]);
+
+    finishers.get("shared-b")?.();
+    finishers.get("other")?.();
+    await Promise.all([sharedB.promise, other.promise]);
+  });
+
   it("keeps one active task per source even when later work has higher priority", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,

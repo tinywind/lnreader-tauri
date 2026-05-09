@@ -37,6 +37,7 @@ vi.mock("../tauri-runtime", () => ({
   isTauriRuntime: vi.fn(() => false),
 }));
 vi.mock("./scheduler", () => ({
+  sourceBaseDomainKey: vi.fn((site?: string) => (site ? "source.test" : null)),
   taskScheduler: {
     enqueueSource: schedulerMocks.enqueueSource,
     getSnapshot: vi.fn(() => ({ records: [] })),

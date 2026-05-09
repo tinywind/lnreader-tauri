@@ -6,6 +6,8 @@
  * Logical source queues protect sites from noisy access patterns:
  * - Keep one queue per source id.
  * - Gate each source with pause, cooldown, backoff, and an active lease.
+ * - Dispatch source queues through a base-domain lane so sources sharing a
+ *   site do not spread across multiple hidden WebViews.
  * - Default to one active task per source, even when a higher priority task
  *   is waiting. Priority may change ordering, but it must not bypass source
  *   rate limits unless a future task explicitly opts into that policy.
@@ -22,7 +24,7 @@
  * 1. Drain main app work.
  * 2. Drain the immediate executor with UI-responsive eligible work only.
  * 3. For each free pool executor, select one eligible candidate from each
- *    source queue, then choose by priority, executor affinity, fairness, and
+ *    source queue, then choose by priority, domain affinity, fairness, and
  *    creation time.
  * 4. Mark a task running only after assigning an executor. Pass that executor
  *    id through TaskRunContext so plugin fetch/extract calls use the same
@@ -92,6 +94,7 @@ export type TaskKind = MainLaneTaskKind | SourceTaskKind | ChapterTaskKind;
 export interface TaskSource {
   id: string;
   name: string;
+  site?: string;
 }
 
 export interface TaskSubject {
@@ -234,6 +237,66 @@ function poolExecutorId(index: number): ScraperExecutorId {
   return `pool:${index}`;
 }
 
+const commonSecondLevelDomainLabels = new Set([
+  "ac",
+  "co",
+  "com",
+  "edu",
+  "go",
+  "gov",
+  "net",
+  "ne",
+  "or",
+  "org",
+  "re",
+]);
+
+function poolExecutorIndex(executorId: ScraperExecutorId): number | null {
+  const match = /^pool:(\d+)$/.exec(executorId);
+  return match ? Number(match[1]) : null;
+}
+
+export function sourceBaseDomainKey(site: string | undefined): string | null {
+  const trimmed = site?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  let hostname: string;
+  try {
+    const normalizedUrl = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+    hostname = new URL(normalizedUrl).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return null;
+  }
+
+  const withoutWww = hostname.startsWith("www.") ? hostname.slice(4) : hostname;
+  if (!withoutWww || withoutWww === "localhost" || withoutWww.includes(":")) {
+    return withoutWww || null;
+  }
+
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(withoutWww)) {
+    return withoutWww;
+  }
+
+  const labels = withoutWww.split(".").filter(Boolean);
+  if (labels.length <= 2) {
+    return withoutWww;
+  }
+
+  const topLevel = labels[labels.length - 1]!;
+  const secondLevel = labels[labels.length - 2]!;
+  if (
+    topLevel.length === 2 &&
+    commonSecondLevelDomainLabels.has(secondLevel) &&
+    labels.length >= 3
+  ) {
+    return labels.slice(-3).join(".");
+  }
+
+  return labels.slice(-2).join(".");
+}
+
 function makeTaskId(): string {
   return `task-${Date.now().toString(36)}-${Math.random()
     .toString(36)
@@ -252,6 +315,7 @@ function isAbortError(error: unknown): boolean {
 
 export class TaskScheduler {
   private readonly activeDedupeByKey = new Map<string, string>();
+  private readonly activeSourceTaskIdsByDomain = new Map<string, Set<string>>();
   private readonly activeSourceTaskIdsById = new Map<string, Set<string>>();
   private readonly entries = new Map<string, TaskEntry>();
   private readonly eventListeners = new Set<(event: TaskEvent) => void>();
@@ -274,6 +338,7 @@ export class TaskScheduler {
   private activeImmediateTaskId: string | null = null;
   private activeMainTaskId: string | null = null;
   private readonly activePoolTaskIdsByExecutor = new Map<ScraperExecutorId, string>();
+  private readonly sourceExecutorByDomain = new Map<string, ScraperExecutorId>();
   private readonly sourceLastServedAt = new Map<string, number>();
   private snapshot: TaskSnapshot = {
     pausedSourceIds: [],
@@ -568,6 +633,7 @@ export class TaskScheduler {
       : DEFAULT_SOURCE_FOREGROUND_CONCURRENCY;
     if (nextConcurrency === this.sourceForegroundConcurrency) return;
     this.sourceForegroundConcurrency = nextConcurrency;
+    this.dropDisabledDomainExecutors();
     this.debug("source foreground concurrency changed", undefined, {
       sourceForegroundConcurrency: nextConcurrency,
     });
@@ -638,6 +704,7 @@ export class TaskScheduler {
     for (const executorId of this.freePoolExecutorIds()) {
       const next = this.pickSourceTask((entry) => {
         if (isImmediateSourceKind(entry.record.kind)) return false;
+        if (!this.canUseExecutorForSourceDomain(entry, executorId)) return false;
         if (
           isBackgroundPriority(entry.record.priority) &&
           this.activeBackgroundCount >= this.sourceBackgroundConcurrency
@@ -646,7 +713,7 @@ export class TaskScheduler {
         }
         return true;
       });
-      if (!next) return;
+      if (!next) continue;
       this.startSource(next, executorId);
     }
   }
@@ -660,12 +727,70 @@ export class TaskScheduler {
     return ids;
   }
 
+  private isEnabledPoolExecutor(executorId: ScraperExecutorId): boolean {
+    const index = poolExecutorIndex(executorId);
+    return index !== null && index < this.sourceForegroundConcurrency;
+  }
+
+  private assignedDomainExecutor(
+    domainKey: string,
+  ): ScraperExecutorId | undefined {
+    const executorId = this.sourceExecutorByDomain.get(domainKey);
+    if (!executorId) return undefined;
+    if (this.isEnabledPoolExecutor(executorId)) return executorId;
+    this.sourceExecutorByDomain.delete(domainKey);
+    return undefined;
+  }
+
+  private dropDisabledDomainExecutors(): void {
+    for (const [domainKey, executorId] of this.sourceExecutorByDomain) {
+      if (!this.isEnabledPoolExecutor(executorId)) {
+        this.sourceExecutorByDomain.delete(domainKey);
+      }
+    }
+  }
+
+  private canUseExecutorForSourceDomain(
+    entry: TaskEntry,
+    executorId: ScraperExecutorId,
+  ): boolean {
+    const domainKey = this.sourceDomainKey(entry);
+    if (!domainKey) return true;
+    const assignedExecutor = this.assignedDomainExecutor(domainKey);
+    return !assignedExecutor || assignedExecutor === executorId;
+  }
+
+  private hasQueuedSourceDomain(domainKey: string): boolean {
+    for (const queue of this.sourceQueues.values()) {
+      for (const id of queue) {
+        const entry = this.entries.get(id);
+        if (
+          entry?.record.status === "queued" &&
+          this.sourceDomainKey(entry) === domainKey
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   private startSource(entry: TaskEntry, executorId: ScraperExecutorId): void {
     this.removeFromSourceQueue(entry);
     const sourceId = entry.record.source!.id;
     const activeIds = this.activeSourceTaskIdsById.get(sourceId) ?? new Set();
     activeIds.add(entry.record.id);
     this.activeSourceTaskIdsById.set(sourceId, activeIds);
+    const domainKey = this.sourceDomainKey(entry);
+    if (domainKey) {
+      const domainActiveIds =
+        this.activeSourceTaskIdsByDomain.get(domainKey) ?? new Set();
+      domainActiveIds.add(entry.record.id);
+      this.activeSourceTaskIdsByDomain.set(domainKey, domainActiveIds);
+      if (executorId !== "immediate" && !this.assignedDomainExecutor(domainKey)) {
+        this.sourceExecutorByDomain.set(domainKey, executorId);
+      }
+    }
     entry.sourceExecutorId = executorId;
     entry.activeReleased = false;
     if (executorId === "immediate") {
@@ -724,6 +849,14 @@ export class TaskScheduler {
     );
   }
 
+  private sourceDomainKey(entry: TaskEntry): string | null {
+    return sourceBaseDomainKey(entry.record.source?.site);
+  }
+
+  private sourceFairnessKey(entry: TaskEntry): string | null {
+    return this.sourceDomainKey(entry) ?? entry.record.source?.id ?? null;
+  }
+
   private canStartSourceTask(
     entry: TaskEntry,
     options: { allowActiveSource?: boolean } = {},
@@ -732,17 +865,23 @@ export class TaskScheduler {
     const sourceId = entry.record.source?.id;
     if (!sourceId) return true;
     const activeIds = this.activeSourceTaskIdsById.get(sourceId);
-    return !activeIds || activeIds.size === 0;
+    if (activeIds && activeIds.size > 0) return false;
+    const domainKey = this.sourceDomainKey(entry);
+    if (!domainKey) return true;
+    const activeDomainIds = this.activeSourceTaskIdsByDomain.get(domainKey);
+    return !activeDomainIds || activeDomainIds.size === 0;
   }
 
   private compareTaskOrder(a: TaskEntry, b: TaskEntry): number {
     const priority = priorityRank(a.record.priority) - priorityRank(b.record.priority);
     if (priority !== 0) return priority;
-    const aSourceLastServed = a.record.source
-      ? this.sourceLastServedAt.get(a.record.source.id) ?? 0
+    const aFairnessKey = this.sourceFairnessKey(a);
+    const bFairnessKey = this.sourceFairnessKey(b);
+    const aSourceLastServed = aFairnessKey
+      ? this.sourceLastServedAt.get(aFairnessKey) ?? 0
       : 0;
-    const bSourceLastServed = b.record.source
-      ? this.sourceLastServedAt.get(b.record.source.id) ?? 0
+    const bSourceLastServed = bFairnessKey
+      ? this.sourceLastServedAt.get(bFairnessKey) ?? 0
       : 0;
     if (aSourceLastServed !== bSourceLastServed) {
       return aSourceLastServed - bSourceLastServed;
@@ -920,7 +1059,22 @@ export class TaskScheduler {
         if (activeIds?.size === 0) {
           this.activeSourceTaskIdsById.delete(sourceId);
         }
-        this.sourceLastServedAt.set(sourceId, Date.now());
+      }
+      const domainKey = this.sourceDomainKey(entry);
+      if (domainKey) {
+        const activeDomainIds = this.activeSourceTaskIdsByDomain.get(domainKey);
+        activeDomainIds?.delete(entry.record.id);
+        const hasActiveDomain = (activeDomainIds?.size ?? 0) > 0;
+        if (!hasActiveDomain) {
+          this.activeSourceTaskIdsByDomain.delete(domainKey);
+          if (!this.hasQueuedSourceDomain(domainKey)) {
+            this.sourceExecutorByDomain.delete(domainKey);
+          }
+        }
+      }
+      const fairnessKey = this.sourceFairnessKey(entry);
+      if (fairnessKey) {
+        this.sourceLastServedAt.set(fairnessKey, Date.now());
       }
       if (entry.sourceExecutorId === "immediate") {
         if (this.activeImmediateTaskId === entry.record.id) {
