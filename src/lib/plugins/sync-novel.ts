@@ -97,7 +97,7 @@ export async function syncNovelFromSource(
   let changedChapters = 0;
   for (let index = 0; index < detail.chapters.length; index += 1) {
     const chapter = detail.chapters[index]!;
-    const changed = await upsertChapter({
+    const chapterMutation = await upsertChapter({
       novelId,
       path: chapter.path,
       name: chapter.name,
@@ -110,7 +110,7 @@ export async function syncNovelFromSource(
       releaseTime: chapter.releaseTime ?? null,
       contentType: normalizeChapterContentType(chapter.contentType),
     });
-    if (changed) changedChapters += 1;
+    if (chapterMutation.rowsAffected > 0) changedChapters += 1;
   }
 
   const changed = novelResult.rowsAffected > 0 || changedChapters > 0;

@@ -6,9 +6,9 @@ vi.mock("../client", () => ({
 
 import { getDb } from "../client";
 import {
-  addRepository,
   listRepositories,
   removeRepository,
+  upsertRepository,
 } from "./repository";
 
 const mockedGetDb = vi.mocked(getDb);
@@ -45,11 +45,11 @@ describe("listRepositories", () => {
   });
 });
 
-describe("addRepository", () => {
+describe("upsertRepository", () => {
   it("upserts the singleton repository with $1 url + $2 name", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
 
-    await addRepository({
+    await upsertRepository({
       url: "https://example.test/p.json",
       name: "Demo",
     });
@@ -64,7 +64,7 @@ describe("addRepository", () => {
   it("defaults name to null when not provided", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
 
-    await addRepository({ url: "https://example.test/p.json" });
+    await upsertRepository({ url: "https://example.test/p.json" });
 
     const [, params] = mockExecute.mock.calls[0]!;
     expect(params).toEqual(["https://example.test/p.json", null]);
@@ -73,7 +73,7 @@ describe("addRepository", () => {
   it("drops cached indexes when the repository is saved", async () => {
     mockExecute.mockResolvedValue(undefined);
 
-    await addRepository({ url: "https://example.test/p.json" });
+    await upsertRepository({ url: "https://example.test/p.json" });
 
     const [sql] = mockExecute.mock.calls[1]!;
     expect(sql).toContain("DELETE FROM repository_index_cache");

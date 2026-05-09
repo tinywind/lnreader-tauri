@@ -21,7 +21,9 @@ export interface UpdateCheckFailure {
   novelId: number;
   novelName: string;
   pluginId: string;
-  reason: string;
+  reason:
+    | { kind: "plugin-missing"; pluginId: string }
+    | { kind: "error"; message: string };
 }
 
 export interface UpdateCheckResult {
@@ -106,7 +108,7 @@ async function runLibraryUpdateCheck(
         novelId: novel.id,
         novelName: novel.name,
         pluginId: novel.pluginId,
-        reason: `Plugin "${novel.pluginId}" is not installed.`,
+        reason: { kind: "plugin-missing", pluginId: novel.pluginId },
       });
       processedNovels += 1;
       reportProgress(novel.name);
@@ -144,7 +146,7 @@ async function runLibraryUpdateCheck(
               novelId: novel.id,
               novelName: novel.name,
               pluginId: novel.pluginId,
-              reason: describeError(error),
+              reason: { kind: "error", message: describeError(error) },
             });
           })
           .finally(() => {
@@ -157,7 +159,7 @@ async function runLibraryUpdateCheck(
         novelId: novel.id,
         novelName: novel.name,
         pluginId: novel.pluginId,
-        reason: describeError(error),
+        reason: { kind: "error", message: describeError(error) },
       });
       processedNovels += 1;
       reportProgress(novel.name);

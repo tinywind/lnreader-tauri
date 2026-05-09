@@ -43,9 +43,9 @@ import {
   type AppLocale,
 } from "../i18n";
 import {
-  addRepository,
   listRepositories,
   removeRepository,
+  upsertRepository,
   type PluginRepository,
 } from "../db/queries/repository";
 import { isTauriRuntime } from "../lib/tauri-runtime";
@@ -358,8 +358,8 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
         title: t("browse.setRepository"),
         subject: { url: trimmed },
         run: async () => {
-          await addRepository({ url: trimmed });
-          debugRepositoryFlow("add mutation complete", { url: trimmed });
+          await upsertRepository({ url: trimmed });
+          debugRepositoryFlow("upsert mutation complete", { url: trimmed });
         },
       }).promise;
     },
@@ -470,7 +470,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
         title: t("tasks.task.uninstallPlugin", { name: id }),
         subject: { pluginId: id },
         run: async () => {
-          pluginManager.uninstallPlugin(id);
+          await pluginManager.uninstallPlugin(id);
         },
       }).promise;
     },

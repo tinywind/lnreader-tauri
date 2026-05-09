@@ -136,6 +136,12 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+function missingLocalChapterError(job: ChapterDownloadJob): Error {
+  return new Error(
+    `chapter-download: local chapter ${job.id} was not found for "${job.title}" from plugin "${job.pluginId}" at path "${job.chapterPath}".`,
+  );
+}
+
 function readStringField(
   record: Record<string, unknown>,
   key: string,
@@ -359,8 +365,11 @@ export function enqueueChapterDownload(
           executor ?? "immediate",
         );
         const chapter = await getChapterById(job.id);
+        if (!chapter) {
+          throw missingLocalChapterError(job);
+        }
         const contentType = normalizeChapterContentType(
-          job.contentType ?? chapter?.contentType,
+          job.contentType ?? chapter.contentType,
         );
         const rawContent = await plugin.parseChapter(job.chapterPath);
         if (signal.aborted) {
@@ -389,7 +398,10 @@ export function enqueueChapterDownload(
             mediaCacheKey = media.cacheKey;
           }
         }
-        await saveChapterContent(job.id, html, contentType);
+        const saveResult = await saveChapterContent(job.id, html, contentType);
+        if (saveResult.rowsAffected <= 0) {
+          throw missingLocalChapterError(job);
+        }
         if (mediaCacheKey) {
           await pruneChapterMedia(job.id, mediaCacheKey);
         } else {

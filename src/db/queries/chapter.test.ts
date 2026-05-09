@@ -11,7 +11,7 @@ import {
   getAdjacentChapter,
   getChapterById,
   getChapterContent,
-  insertChapter,
+  insertChapterIfAbsent,
   listChaptersByNovel,
   listLibraryUpdates,
   listLibraryUpdatesPage,
@@ -66,10 +66,10 @@ describe("getChapterById", () => {
   });
 });
 
-describe("insertChapter", () => {
+describe("insertChapterIfAbsent", () => {
   it("uses INSERT OR IGNORE with the expected params in order", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
-    await insertChapter({
+    await insertChapterIfAbsent({
       novelId: 1,
       path: "/c/1",
       name: "Chapter One",
@@ -97,7 +97,7 @@ describe("insertChapter", () => {
 
   it("defaults page to '1' and nullable fields to null", async () => {
     mockExecute.mockResolvedValueOnce(undefined);
-    await insertChapter({
+    await insertChapterIfAbsent({
       novelId: 2,
       path: "/c/x",
       name: "Untitled",
@@ -121,7 +121,7 @@ describe("upsertChapter", () => {
   it("updates source metadata without touching progress fields", async () => {
     mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
 
-    const changed = await upsertChapter({
+    const result = await upsertChapter({
       novelId: 7,
       path: "/c/1",
       name: "Chapter One",
@@ -153,7 +153,7 @@ describe("upsertChapter", () => {
       "2026-05-01",
       "html",
     ]);
-    expect(changed).toBe(true);
+    expect(result).toEqual({ rowsAffected: 1 });
   });
 });
 
@@ -249,8 +249,8 @@ describe("setChapterBookmark", () => {
 
 describe("saveChapterContent", () => {
   it("UPDATEs content + flips is_downloaded=1 + bumps updated_at", async () => {
-    mockExecute.mockResolvedValueOnce(undefined);
-    await saveChapterContent(7, "<p>hello</p>");
+    mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
+    const result = await saveChapterContent(7, "<p>hello</p>");
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("UPDATE chapter");
     expect(sql).toContain("content");
@@ -259,6 +259,7 @@ describe("saveChapterContent", () => {
     expect(sql).toContain("is_downloaded  = 1");
     expect(sql).toContain("updated_at     = unixepoch()");
     expect(params).toEqual([7, "<p>hello</p>", "html", 12]);
+    expect(result).toEqual({ rowsAffected: 1 });
   });
 });
 

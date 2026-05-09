@@ -96,7 +96,11 @@ export interface InsertChapterInput {
   contentType?: ChapterContentType;
 }
 
-export async function insertChapter(
+export interface ChapterMutationResult {
+  rowsAffected: number;
+}
+
+export async function insertChapterIfAbsent(
   input: InsertChapterInput,
 ): Promise<void> {
   const db = await getDb();
@@ -117,7 +121,9 @@ export async function insertChapter(
   );
 }
 
-export async function upsertChapter(input: InsertChapterInput): Promise<boolean> {
+export async function upsertChapter(
+  input: InsertChapterInput,
+): Promise<ChapterMutationResult> {
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO chapter
@@ -149,7 +155,7 @@ export async function upsertChapter(input: InsertChapterInput): Promise<boolean>
       normalizeChapterContentType(input.contentType),
     ],
   );
-  return result.rowsAffected > 0;
+  return { rowsAffected: result.rowsAffected };
 }
 
 export async function updateChapterProgress(
@@ -245,9 +251,9 @@ export async function saveChapterContent(
   chapterId: number,
   html: string,
   contentType: ChapterContentType = DEFAULT_CHAPTER_CONTENT_TYPE,
-): Promise<void> {
+): Promise<ChapterMutationResult> {
   const db = await getDb();
-  await db.execute(
+  const result = await db.execute(
     `UPDATE chapter
      SET
        content        = $2,
@@ -263,6 +269,7 @@ export async function saveChapterContent(
       getUtf8ByteLength(html),
     ],
   );
+  return { rowsAffected: result.rowsAffected };
 }
 
 export async function getChapterContent(

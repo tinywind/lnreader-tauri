@@ -16,6 +16,7 @@ vi.mock("../../db/queries/installed-plugin", () => ({
 }));
 
 import { appFetchText, createPluginFetchShim } from "../http";
+import { deleteInstalledPlugin } from "../../db/queries/installed-plugin";
 import {
   PluginManager,
   PluginValidationError,
@@ -24,6 +25,7 @@ import {
 
 const mockedFetchText = vi.mocked(appFetchText);
 const mockedCreateFetchShim = vi.mocked(createPluginFetchShim);
+const mockedDeleteInstalledPlugin = vi.mocked(deleteInstalledPlugin);
 
 const VALID_ITEM = {
   id: "demo",
@@ -53,6 +55,7 @@ const VALID_PLUGIN_SOURCE = `
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedDeleteInstalledPlugin.mockResolvedValue(undefined);
 });
 
 describe("isValidPluginItem", () => {
@@ -229,17 +232,31 @@ describe("PluginManager.uninstallPlugin", () => {
     await manager.installPlugin(VALID_ITEM);
 
     try {
-      expect(manager.uninstallPlugin("demo")).toBe(true);
+      await expect(manager.uninstallPlugin("demo")).resolves.toBe(true);
       expect(manager.has("demo")).toBe(false);
       expect(manager.size()).toBe(0);
       expect(values.has("plugin:demo:url")).toBe(false);
-      expect(manager.uninstallPlugin("demo")).toBe(false);
+      await expect(manager.uninstallPlugin("demo")).resolves.toBe(false);
     } finally {
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
         value: original,
       });
     }
+  });
+
+  it("keeps the plugin installed when persisted deletion fails", async () => {
+    const manager = new PluginManager();
+    mockedFetchText.mockResolvedValueOnce(VALID_PLUGIN_SOURCE);
+    await manager.installPlugin(VALID_ITEM);
+    mockedDeleteInstalledPlugin.mockRejectedValueOnce(
+      new Error("database is locked"),
+    );
+
+    await expect(manager.uninstallPlugin("demo")).rejects.toThrow(
+      "Failed to delete installed plugin 'demo' during uninstall.",
+    );
+    expect(manager.has("demo")).toBe(true);
   });
 });
 

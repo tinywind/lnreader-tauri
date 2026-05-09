@@ -72,7 +72,11 @@ beforeEach(() => {
   pluginMocks.getPlugin.mockReturnValue(plugin);
   pluginMocks.getPluginForExecutor.mockReturnValue(plugin);
   pluginMocks.parseChapter.mockResolvedValue(`plain <chapter>`);
-  vi.mocked(getChapterById).mockResolvedValue(null);
+  vi.mocked(getChapterById).mockResolvedValue({
+    contentType: "text",
+    id: 7,
+  } as never);
+  vi.mocked(saveChapterContent).mockResolvedValue({ rowsAffected: 1 });
 });
 
 describe("enqueueChapterDownload", () => {
@@ -98,9 +102,60 @@ describe("enqueueChapterDownload", () => {
 
     expect(saveChapterContent).toHaveBeenCalledWith(
       7,
-      "<pre>plain &lt;chapter&gt;</pre>",
+      `<section class="reader-text-content"><p>plain &lt;chapter&gt;</p></section>`,
       "text",
     );
     expect(clearChapterMedia).toHaveBeenCalledWith(7);
+  });
+
+  it("fails when the local chapter row is missing", async () => {
+    vi.mocked(getChapterById).mockResolvedValueOnce(null);
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await expect(
+      capturedSpec.run({
+        setDetail: vi.fn(),
+        setProgress: vi.fn(),
+        signal: new AbortController().signal,
+        taskId: "task-1",
+      }),
+    ).rejects.toThrow(
+      'chapter-download: local chapter 7 was not found for "Chapter 7" from plugin "source-a" at path "/chapter/7".',
+    );
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(saveChapterContent).not.toHaveBeenCalled();
+  });
+
+  it("fails when saving downloaded content does not update a chapter row", async () => {
+    vi.mocked(saveChapterContent).mockResolvedValueOnce({ rowsAffected: 0 });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await expect(
+      capturedSpec.run({
+        setDetail: vi.fn(),
+        setProgress: vi.fn(),
+        signal: new AbortController().signal,
+        taskId: "task-1",
+      }),
+    ).rejects.toThrow(
+      'chapter-download: local chapter 7 was not found for "Chapter 7" from plugin "source-a" at path "/chapter/7".',
+    );
+
+    expect(clearChapterMedia).not.toHaveBeenCalled();
   });
 });

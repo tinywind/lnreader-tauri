@@ -385,21 +385,21 @@ export class PluginManager {
     return plugin;
   }
 
-  uninstallPlugin(id: string): boolean {
-    const removed = this.installed.delete(id);
-    if (removed) {
-      this.installedSources.delete(id);
-      this.clearExecutorRuntimes(id);
-      clearPluginInputValues(id);
-      void deleteInstalledPlugin(id).catch((error: unknown) => {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[PluginManager] failed to delete '${id}' from DB:`,
-          error,
-        );
-      });
+  async uninstallPlugin(id: string): Promise<boolean> {
+    if (!this.installed.has(id)) return false;
+    try {
+      await deleteInstalledPlugin(id);
+    } catch (error) {
+      throw new Error(
+        `Failed to delete installed plugin '${id}' during uninstall.`,
+        { cause: error },
+      );
     }
-    return removed;
+    this.installed.delete(id);
+    this.installedSources.delete(id);
+    this.clearExecutorRuntimes(id);
+    clearPluginInputValues(id);
+    return true;
   }
 
   list(): Plugin[] {

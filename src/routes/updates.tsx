@@ -148,6 +148,10 @@ interface FailureRowProps {
 
 function FailureRow({ failure, onOpenNovel }: FailureRowProps) {
   const { t } = useTranslation();
+  const reason =
+    failure.reason.kind === "plugin-missing"
+      ? t("updates.pluginMissing", { id: failure.reason.pluginId })
+      : failure.reason.message;
 
   return (
     <div className="lnr-updates-failure-row">
@@ -162,8 +166,8 @@ function FailureRow({ failure, onOpenNovel }: FailureRowProps) {
             {failure.novelName}
           </button>
         </Group>
-        <Text className="lnr-updates-row-meta" title={failure.reason}>
-          {failure.pluginId} / {failure.reason}
+        <Text className="lnr-updates-row-meta" title={reason}>
+          {failure.pluginId} / {reason}
         </Text>
       </div>
       <UpdateIconButton label={t("updates.details")} onClick={onOpenNovel}>

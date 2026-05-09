@@ -35,7 +35,7 @@ const SELECT_ALL = `
     source_code AS sourceCode,
     installed_at AS installedAt
   FROM installed_plugin
-  ORDER BY installed_at DESC
+  ORDER BY installed_at DESC, id ASC
 `;
 
 export async function listInstalledPlugins(): Promise<InstalledPluginRow[]> {

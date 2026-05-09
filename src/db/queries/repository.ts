@@ -26,13 +26,18 @@ export async function listRepositories(): Promise<PluginRepository[]> {
   return rows;
 }
 
-export interface AddRepositoryInput {
+export interface UpsertRepositoryInput {
   url: string;
   name?: string | null;
 }
 
-export async function addRepository(input: AddRepositoryInput): Promise<void> {
-  debugRepositoryQuery("add start", { url: input.url, name: input.name ?? null });
+export async function upsertRepository(
+  input: UpsertRepositoryInput,
+): Promise<void> {
+  debugRepositoryQuery("upsert start", {
+    url: input.url,
+    name: input.name ?? null,
+  });
   const db = await getDb();
   debugRepositoryQuery("upsert repository start", { url: input.url });
   await db.execute(
