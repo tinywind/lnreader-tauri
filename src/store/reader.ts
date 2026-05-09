@@ -5,7 +5,15 @@ export type ReaderPresetTheme = "paper" | "sepia" | "sage" | "dark" | "amoled";
 export type ReaderTextAlign = "left" | "justify" | "center" | "right";
 export type ReaderTapAction = "none" | "previous" | "menu" | "next";
 export type ReaderPdfPageFitMode = "width" | "height" | "contain";
-export type ReaderHtmlImagePagingMode = "auto" | "next-page" | "fragment";
+export type ReaderHtmlImagePagingMode =
+  | "auto"
+  | "next-page"
+  | "single-image"
+  | "fragment";
+export type ReaderCustomCssPresetId =
+  | "webtoon"
+  | "comic-spread"
+  | "comic-page";
 export type ReaderTapPresetId =
   | "balanced"
   | "side-columns"
@@ -27,6 +35,18 @@ export type ReaderTapZoneMap = Record<ReaderTapZone, ReaderTapAction>;
 export interface ReaderTapPreset {
   id: ReaderTapPresetId;
   zones: ReaderTapZoneMap;
+}
+
+export interface ReaderCustomCssPreset {
+  id: ReaderCustomCssPresetId;
+  general?: Partial<
+    Pick<
+      ReaderGeneralSettings,
+      "pageReader" | "twoPageReader" | "htmlImagePagingMode"
+    >
+  >;
+  appearance?: Partial<Pick<ReaderAppearanceSettings, "padding">>;
+  css: string;
 }
 
 export interface ReaderThemeDefinition {
@@ -72,15 +92,47 @@ export interface ReaderAppearanceSettings {
   customThemes: ReaderThemeDefinition[];
 }
 
+export type ReaderGeneralSettingsOverride = Partial<
+  Pick<
+    ReaderGeneralSettings,
+    | "pageReader"
+    | "twoPageReader"
+    | "pdfPageFitMode"
+    | "htmlImagePagingMode"
+    | "bionicReading"
+    | "removeExtraParagraphSpacing"
+  >
+>;
+
+export type ReaderAppearanceSettingsOverride = Partial<
+  Omit<ReaderAppearanceSettings, "customThemes">
+>;
+
+export interface ReaderNovelSettingsOverride {
+  general?: ReaderGeneralSettingsOverride;
+  appearance?: ReaderAppearanceSettingsOverride;
+}
+
 interface ReaderState {
   general: ReaderGeneralSettings;
   appearance: ReaderAppearanceSettings;
   fullPageReaderChromeVisible: boolean;
   lastReadChapterByNovel: Record<number, number>;
   novelPageIndexByNovel: Record<number, number>;
+  readerSettingsByNovel: Record<number, ReaderNovelSettingsOverride>;
   setGeneral: (settings: Partial<ReaderGeneralSettings>) => void;
   setAppearance: (settings: Partial<ReaderAppearanceSettings>) => void;
+  setNovelReaderSettingsEnabled: (novelId: number, enabled: boolean) => void;
+  setNovelGeneral: (
+    novelId: number,
+    settings: Partial<ReaderGeneralSettings>,
+  ) => void;
+  setNovelAppearance: (
+    novelId: number,
+    settings: Partial<ReaderAppearanceSettings>,
+  ) => void;
   applyTheme: (theme: ReaderThemeDefinition) => void;
+  applyNovelTheme: (novelId: number, theme: ReaderThemeDefinition) => void;
   saveCustomTheme: (theme: ReaderThemeDefinition) => void;
   deleteCustomTheme: (themeId: string) => void;
   applyTapZonePreset: (presetId: ReaderTapPresetId) => void;
@@ -88,6 +140,7 @@ interface ReaderState {
   setLastReadChapter: (novelId: number, chapterId: number) => void;
   setNovelPageIndex: (novelId: number, pageIndex: number) => void;
   resetReadingProgress: () => void;
+  resetNovelReaderSettings: (novelId: number) => void;
   resetReaderSettings: () => void;
 }
 
@@ -137,7 +190,160 @@ export const READER_FONT_OPTIONS = [
   { value: "OpenDyslexic, Arial, sans-serif", label: "OpenDyslexic" },
 ];
 
+export const READER_CUSTOM_CSS_PRESETS: ReaderCustomCssPreset[] = [
+  {
+    id: "webtoon",
+    general: {
+      pageReader: false,
+      twoPageReader: false,
+      htmlImagePagingMode: "auto",
+    },
+    appearance: {
+      padding: 0,
+    },
+    css: `.reader-content {
+  max-width: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+.reader-content > :where(p, div, figure, a) {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+}
+
+.reader-content :where(img, picture, svg, video, canvas) {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+}
+
+.reader-content picture > img {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+}`,
+  },
+  {
+    id: "comic-spread",
+    general: {
+      pageReader: true,
+      twoPageReader: false,
+      htmlImagePagingMode: "single-image",
+    },
+    appearance: {
+      padding: 0,
+    },
+    css: `.reader-content {
+  max-width: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+.reader-viewport-paged .reader-content {
+  column-gap: 0 !important;
+}
+
+.reader-content > :where(p, div, figure, a) {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.reader-content :where(img, picture, svg, video, canvas) {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+  background: #fff !important;
+}
+
+.reader-content picture > img {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+}`,
+  },
+  {
+    id: "comic-page",
+    general: {
+      pageReader: true,
+      twoPageReader: false,
+      htmlImagePagingMode: "single-image",
+    },
+    appearance: {
+      padding: 0,
+    },
+    css: `.reader-content {
+  max-width: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+.reader-viewport-paged .reader-content {
+  column-gap: 0 !important;
+}
+
+.reader-content > :where(p, div, figure, a) {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.reader-content :where(img, picture, svg, video, canvas) {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+  background: #fff !important;
+}
+
+.reader-content picture > img {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+}`,
+  },
+];
+
 const DEFAULT_READER_THEME = READER_PRESET_THEMES[3]!;
+
+const READER_GENERAL_OVERRIDE_KEYS: Array<keyof ReaderGeneralSettingsOverride> =
+  [
+    "pageReader",
+    "twoPageReader",
+    "pdfPageFitMode",
+    "htmlImagePagingMode",
+    "bionicReading",
+    "removeExtraParagraphSpacing",
+  ];
+
+const READER_APPEARANCE_OVERRIDE_KEYS: Array<
+  keyof ReaderAppearanceSettingsOverride
+> = [
+  "themeId",
+  "backgroundColor",
+  "textColor",
+  "textSize",
+  "textAlign",
+  "padding",
+  "fontFamily",
+  "lineHeight",
+  "customCss",
+  "customJs",
+];
 
 export const READER_TAP_ZONES: ReaderTapZone[] = [
   "topLeft",
@@ -277,7 +483,11 @@ function normalizePdfPageFitMode(value: unknown): ReaderPdfPageFitMode {
 }
 
 function normalizeHtmlImagePagingMode(value: unknown): ReaderHtmlImagePagingMode {
-  if (value === "next-page" || value === "fragment") {
+  if (
+    value === "next-page" ||
+    value === "single-image" ||
+    value === "fragment"
+  ) {
     return value;
   }
   return "auto";
@@ -382,6 +592,193 @@ function normalizeAppearance(
   };
 }
 
+function normalizeAppearanceOverride(
+  settings: Partial<ReaderAppearanceSettings>,
+): ReaderAppearanceSettingsOverride {
+  const { customThemes: _customThemes, ...override } = normalizeAppearance(
+    settings,
+  );
+  return override;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function areSettingValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (isRecord(left) && isRecord(right)) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  return false;
+}
+
+function isEmptyRecord(value: object | undefined): boolean {
+  return !value || Object.keys(value).length === 0;
+}
+
+function assignGeneralOverrideValue(
+  target: ReaderGeneralSettingsOverride,
+  key: keyof ReaderGeneralSettingsOverride,
+  value: unknown,
+): void {
+  (target as Partial<Record<keyof ReaderGeneralSettingsOverride, unknown>>)[
+    key
+  ] = value;
+}
+
+function assignAppearanceOverrideValue(
+  target: ReaderAppearanceSettingsOverride,
+  key: keyof ReaderAppearanceSettingsOverride,
+  value: unknown,
+): void {
+  (
+    target as Partial<Record<keyof ReaderAppearanceSettingsOverride, unknown>>
+  )[key] = value;
+}
+
+function getNextGeneralOverride(
+  globalGeneral: ReaderGeneralSettings,
+  currentOverride: ReaderGeneralSettingsOverride | undefined,
+  settings: Partial<ReaderGeneralSettings>,
+): ReaderGeneralSettingsOverride {
+  const normalizedSettings = normalizeGeneral(settings);
+  const currentEffective = {
+    ...globalGeneral,
+    ...(currentOverride ?? {}),
+  };
+  const nextEffective = {
+    ...currentEffective,
+    ...normalizedSettings,
+  };
+  const nextOverride: ReaderGeneralSettingsOverride = {
+    ...(currentOverride ?? {}),
+  };
+
+  for (const key of READER_GENERAL_OVERRIDE_KEYS) {
+    if (normalizedSettings[key] === undefined) continue;
+    const value = nextEffective[key];
+    if (areSettingValuesEqual(value, globalGeneral[key])) {
+      delete nextOverride[key];
+    } else {
+      assignGeneralOverrideValue(nextOverride, key, value);
+    }
+  }
+
+  return nextOverride;
+}
+
+function getNextAppearanceOverride(
+  globalAppearance: ReaderAppearanceSettings,
+  currentOverride: ReaderAppearanceSettingsOverride | undefined,
+  settings: Partial<ReaderAppearanceSettings>,
+): ReaderAppearanceSettingsOverride {
+  const normalizedSettings = normalizeAppearanceOverride(settings);
+  const currentEffective = {
+    ...globalAppearance,
+    ...(currentOverride ?? {}),
+  };
+  const nextEffective = {
+    ...currentEffective,
+    ...normalizedSettings,
+  };
+  const nextOverride: ReaderAppearanceSettingsOverride = {
+    ...(currentOverride ?? {}),
+  };
+
+  for (const key of Object.keys(
+    normalizedSettings,
+  ) as Array<keyof ReaderAppearanceSettingsOverride>) {
+    const value = nextEffective[key];
+    if (areSettingValuesEqual(value, globalAppearance[key])) {
+      delete nextOverride[key];
+    } else {
+      assignAppearanceOverrideValue(nextOverride, key, value);
+    }
+  }
+
+  return nextOverride;
+}
+
+function normalizeReaderSettingsByNovel(
+  value: unknown,
+): Record<number, ReaderNovelSettingsOverride> {
+  if (!isRecord(value)) return {};
+  const normalized: Record<number, ReaderNovelSettingsOverride> = {};
+  for (const [novelId, entry] of Object.entries(value)) {
+    if (!isRecord(entry)) continue;
+    const parsedNovelId = Number(novelId);
+    if (!Number.isFinite(parsedNovelId)) continue;
+    const nextOverride: ReaderNovelSettingsOverride = {};
+    if (isRecord(entry.general)) {
+      const general = normalizeGeneral(
+        entry.general as Partial<ReaderGeneralSettings>,
+      );
+      for (const key of READER_GENERAL_OVERRIDE_KEYS) {
+        if (general[key] !== undefined) {
+          const nextGeneral = nextOverride.general ?? {};
+          assignGeneralOverrideValue(
+            nextGeneral,
+            key,
+            general[key],
+          );
+          nextOverride.general = nextGeneral;
+        }
+      }
+    }
+    if (isRecord(entry.appearance)) {
+      const appearance = normalizeAppearanceOverride(
+        entry.appearance as Partial<ReaderAppearanceSettings>,
+      );
+      for (const key of READER_APPEARANCE_OVERRIDE_KEYS) {
+        if (appearance[key] !== undefined) {
+          const nextAppearance = nextOverride.appearance ?? {};
+          assignAppearanceOverrideValue(
+            nextAppearance,
+            key,
+            appearance[key],
+          );
+          nextOverride.appearance = nextAppearance;
+        }
+      }
+    }
+    normalized[parsedNovelId] = nextOverride;
+  }
+  return normalized;
+}
+
+function setNovelOverride(
+  overrides: Record<number, ReaderNovelSettingsOverride>,
+  novelId: number,
+  override: ReaderNovelSettingsOverride,
+): Record<number, ReaderNovelSettingsOverride> {
+  return {
+    ...overrides,
+    [novelId]: override,
+  };
+}
+
+export function getEffectiveReaderGeneralSettings(
+  general: ReaderGeneralSettings,
+  override: ReaderNovelSettingsOverride | undefined,
+): ReaderGeneralSettings {
+  return {
+    ...general,
+    ...(override?.general ?? {}),
+  };
+}
+
+export function getEffectiveReaderAppearanceSettings(
+  appearance: ReaderAppearanceSettings,
+  override: ReaderNovelSettingsOverride | undefined,
+): ReaderAppearanceSettings {
+  return {
+    ...appearance,
+    ...(override?.appearance ?? {}),
+    customThemes: appearance.customThemes,
+  };
+}
+
 export const useReaderStore = create<ReaderState>()(
   persist(
     (set) => ({
@@ -390,6 +787,7 @@ export const useReaderStore = create<ReaderState>()(
       fullPageReaderChromeVisible: false,
       lastReadChapterByNovel: {},
       novelPageIndexByNovel: {},
+      readerSettingsByNovel: {},
       setGeneral: (settings) =>
         set((state) => ({
           general: {
@@ -404,6 +802,66 @@ export const useReaderStore = create<ReaderState>()(
             ...normalizeAppearance(settings),
           },
         })),
+      setNovelReaderSettingsEnabled: (novelId, enabled) =>
+        set((state) => {
+          if (enabled) {
+            if (state.readerSettingsByNovel[novelId]) return state;
+            return {
+              readerSettingsByNovel: setNovelOverride(
+                state.readerSettingsByNovel,
+                novelId,
+                {},
+              ),
+            };
+          }
+          const { [novelId]: _removed, ...readerSettingsByNovel } =
+            state.readerSettingsByNovel;
+          return { readerSettingsByNovel };
+        }),
+      setNovelGeneral: (novelId, settings) =>
+        set((state) => {
+          const existing = state.readerSettingsByNovel[novelId] ?? {};
+          const general = getNextGeneralOverride(
+            state.general,
+            existing.general,
+            settings,
+          );
+          const nextOverride: ReaderNovelSettingsOverride = { ...existing };
+          if (isEmptyRecord(general)) {
+            delete nextOverride.general;
+          } else {
+            nextOverride.general = general;
+          }
+          return {
+            readerSettingsByNovel: setNovelOverride(
+              state.readerSettingsByNovel,
+              novelId,
+              nextOverride,
+            ),
+          };
+        }),
+      setNovelAppearance: (novelId, settings) =>
+        set((state) => {
+          const existing = state.readerSettingsByNovel[novelId] ?? {};
+          const appearance = getNextAppearanceOverride(
+            state.appearance,
+            existing.appearance,
+            settings,
+          );
+          const nextOverride: ReaderNovelSettingsOverride = { ...existing };
+          if (isEmptyRecord(appearance)) {
+            delete nextOverride.appearance;
+          } else {
+            nextOverride.appearance = appearance;
+          }
+          return {
+            readerSettingsByNovel: setNovelOverride(
+              state.readerSettingsByNovel,
+              novelId,
+              nextOverride,
+            ),
+          };
+        }),
       applyTheme: (theme) =>
         set((state) => ({
           appearance: {
@@ -413,6 +871,32 @@ export const useReaderStore = create<ReaderState>()(
             textColor: theme.textColor,
           },
         })),
+      applyNovelTheme: (novelId, theme) =>
+        set((state) => {
+          const existing = state.readerSettingsByNovel[novelId] ?? {};
+          const appearance = getNextAppearanceOverride(
+            state.appearance,
+            existing.appearance,
+            {
+              themeId: theme.id,
+              backgroundColor: theme.backgroundColor,
+              textColor: theme.textColor,
+            },
+          );
+          const nextOverride: ReaderNovelSettingsOverride = { ...existing };
+          if (isEmptyRecord(appearance)) {
+            delete nextOverride.appearance;
+          } else {
+            nextOverride.appearance = appearance;
+          }
+          return {
+            readerSettingsByNovel: setNovelOverride(
+              state.readerSettingsByNovel,
+              novelId,
+              nextOverride,
+            ),
+          };
+        }),
       saveCustomTheme: (theme) =>
         set((state) => {
           const customThemes = state.appearance.customThemes.filter(
@@ -467,11 +951,18 @@ export const useReaderStore = create<ReaderState>()(
           lastReadChapterByNovel: {},
           novelPageIndexByNovel: {},
         }),
+      resetNovelReaderSettings: (novelId) =>
+        set((state) => {
+          const { [novelId]: _removed, ...readerSettingsByNovel } =
+            state.readerSettingsByNovel;
+          return { readerSettingsByNovel };
+        }),
       resetReaderSettings: () =>
         set({
           general: READER_GENERAL_DEFAULTS,
           appearance: READER_APPEARANCE_DEFAULTS,
           fullPageReaderChromeVisible: false,
+          readerSettingsByNovel: {},
         }),
     }),
     {
@@ -515,6 +1006,9 @@ export const useReaderStore = create<ReaderState>()(
             ...READER_APPEARANCE_DEFAULTS,
             ...persisted.appearance,
           },
+          readerSettingsByNovel: normalizeReaderSettingsByNovel(
+            persisted.readerSettingsByNovel,
+          ),
         };
       },
       partialize: (state) => ({
@@ -522,6 +1016,7 @@ export const useReaderStore = create<ReaderState>()(
         appearance: state.appearance,
         lastReadChapterByNovel: state.lastReadChapterByNovel,
         novelPageIndexByNovel: state.novelPageIndexByNovel,
+        readerSettingsByNovel: state.readerSettingsByNovel,
       }),
     },
   ),

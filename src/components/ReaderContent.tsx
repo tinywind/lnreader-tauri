@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -15,18 +16,23 @@ import { Box } from "@mantine/core";
 import { formatTimeForLocale, useTranslation, type AppLocale } from "../i18n";
 import {
   useReaderStore,
+  type ReaderAppearanceSettings,
+  type ReaderGeneralSettings,
   type ReaderTapAction,
   type ReaderTapZone,
 } from "../store/reader";
 
 export interface ReaderContentHandle {
   completeIfAtEnd: () => boolean;
+  patchMediaSources: (html: string) => void;
   scrollByPage: (direction: 1 | -1) => void;
   scrollToStart: () => void;
 }
 
 interface ReaderContentProps {
+  appearanceSettings?: ReaderAppearanceSettings;
   bottomOverlayOffset?: number | string;
+  generalSettings?: ReaderGeneralSettings;
   html: string;
   initialProgress?: number;
   interactionBlocked?: boolean;
@@ -60,6 +66,16 @@ const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
 const READER_MEDIA_EVENT_SELECTOR =
   "img,picture,svg,video,audio,canvas,iframe,figure";
+const READER_MEDIA_PATCH_SELECTOR = "img,video,audio,source";
+const READER_MEDIA_PATCH_ATTRIBUTES = [
+  "src",
+  "srcset",
+  "poster",
+  "data-src",
+  "data-original",
+  "data-lazy-src",
+  "data-orig-src",
+] as const;
 
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
@@ -101,6 +117,37 @@ function stopReaderMediaClick(event: MouseEvent<HTMLDivElement>): void {
   if (!isReaderMediaEventTarget(event.target)) return;
   event.preventDefault();
   event.stopPropagation();
+}
+
+function patchReaderMediaSources(container: HTMLElement, html: string): void {
+  if (typeof document === "undefined") return;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const currentElements = [
+    ...container.querySelectorAll<HTMLElement>(READER_MEDIA_PATCH_SELECTOR),
+  ];
+  const nextElements = [
+    ...template.content.querySelectorAll<HTMLElement>(
+      READER_MEDIA_PATCH_SELECTOR,
+    ),
+  ];
+
+  for (let index = 0; index < currentElements.length; index += 1) {
+    const current = currentElements[index];
+    const next = nextElements[index];
+    if (!current || !next || current.tagName !== next.tagName) continue;
+
+    for (const attribute of READER_MEDIA_PATCH_ATTRIBUTES) {
+      if (next.hasAttribute(attribute)) {
+        const value = next.getAttribute(attribute) ?? "";
+        if (current.getAttribute(attribute) !== value) {
+          current.setAttribute(attribute, value);
+        }
+      } else if (current.hasAttribute(attribute)) {
+        current.removeAttribute(attribute);
+      }
+    }
+  }
 }
 
 function formatClock(date: Date, locale: AppLocale): string {
@@ -274,9 +321,13 @@ function ReaderContentInner(
     onToggleChrome,
     onBoundaryPage,
     viewportHeight: requestedViewportHeight,
+    appearanceSettings,
+    generalSettings,
   } = props;
-  const general = useReaderStore((state) => state.general);
-  const appearance = useReaderStore((state) => state.appearance);
+  const storedGeneral = useReaderStore((state) => state.general);
+  const storedAppearance = useReaderStore((state) => state.appearance);
+  const general = generalSettings ?? storedGeneral;
+  const appearance = appearanceSettings ?? storedAppearance;
   const { locale, t } = useTranslation();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -284,6 +335,7 @@ function ReaderContentInner(
   const lastSavedProgressRef = useRef(Math.round(clampProgress(initialProgress)));
   const progressTimerRef = useRef<number | null>(null);
   const completedForNavigationRef = useRef(false);
+  const latestMediaPatchHtmlRef = useRef<string | null>(null);
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
@@ -406,6 +458,19 @@ function ReaderContentInner(
     [flushProgress],
   );
 
+  const patchMediaSources = useCallback(
+    (nextHtml: string) => {
+      latestMediaPatchHtmlRef.current = nextHtml;
+      const content = contentRef.current;
+      if (!content) return;
+      patchReaderMediaSources(
+        content,
+        general.bionicReading ? applyBionicReading(nextHtml) : nextHtml,
+      );
+    },
+    [general.bionicReading],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
@@ -422,6 +487,7 @@ function ReaderContentInner(
         flushProgress(100);
         return true;
       },
+      patchMediaSources,
       scrollByPage,
       scrollToStart() {
         const node = viewportRef.current;
@@ -429,7 +495,7 @@ function ReaderContentInner(
         node.scrollTo({ top: 0, left: 0, behavior: "smooth" });
       },
     }),
-    [flushProgress, isPagedReader, scrollByPage],
+    [flushProgress, isPagedReader, patchMediaSources, scrollByPage],
   );
 
   const applyPageInfo = useCallback(
@@ -508,6 +574,12 @@ function ReaderContentInner(
     visiblePageColumns,
     restoreProgressPosition,
   ]);
+
+  useEffect(() => {
+    const nextHtml = latestMediaPatchHtmlRef.current;
+    if (!nextHtml) return;
+    window.requestAnimationFrame(() => patchMediaSources(nextHtml));
+  }, [patchMediaSources, renderedHtml]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -813,6 +885,32 @@ function ReaderContentInner(
             break-inside: avoid;
             page-break-inside: avoid;
           }
+          .reader-viewport-paged .reader-content[data-image-paging="next-page"] > :where(img, svg, video, canvas, iframe):first-child,
+          .reader-viewport-paged .reader-content[data-image-paging="next-page"] > :first-child :where(img, svg, video, canvas, iframe) {
+            break-before: auto;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :where(p, div, figure, a) {
+            break-inside: auto !important;
+            page-break-inside: auto !important;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="single-image"] :where(img, picture, svg, video, canvas, iframe) {
+            break-before: column !important;
+            break-after: column !important;
+            break-inside: avoid !important;
+            page-break-before: always !important;
+            page-break-after: always !important;
+            page-break-inside: avoid !important;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :where(img, picture, svg, video, canvas, iframe):first-child,
+          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :first-child :where(img, picture, svg, video, canvas, iframe):first-child {
+            break-before: auto !important;
+            page-break-before: auto !important;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :where(img, picture, svg, video, canvas, iframe):last-child,
+          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :last-child :where(img, picture, svg, video, canvas, iframe):last-child {
+            break-after: auto !important;
+            page-break-after: auto !important;
+          }
           .reader-viewport-paged .reader-content[data-image-paging="fragment"] :where(img, svg, video, canvas, iframe) {
             break-inside: auto;
             page-break-inside: auto;
@@ -870,4 +968,4 @@ function ReaderContentInner(
   );
 }
 
-export const ReaderContent = forwardRef(ReaderContentInner);
+export const ReaderContent = memo(forwardRef(ReaderContentInner));

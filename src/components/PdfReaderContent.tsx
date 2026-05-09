@@ -21,6 +21,8 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { useTranslation } from "../i18n";
 import {
   useReaderStore,
+  type ReaderAppearanceSettings,
+  type ReaderGeneralSettings,
   type ReaderPdfPageFitMode,
   type ReaderTapZone,
   type ReaderTapZoneMap,
@@ -30,7 +32,9 @@ import type { ReaderContentHandle } from "./ReaderContent";
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfReaderContentProps {
+  appearanceSettings?: ReaderAppearanceSettings;
   dataUrl: string;
+  generalSettings?: ReaderGeneralSettings;
   initialProgress?: number;
   onBoundaryPage?: (direction: 1 | -1) => void;
   onPageIndexChange?: (pageIndex: number) => void;
@@ -391,10 +395,14 @@ function PdfReaderContentInner(
     onProgressChange,
     onToggleChrome,
     viewportHeight: requestedViewportHeight,
+    appearanceSettings,
+    generalSettings,
   } = props;
   const { t } = useTranslation();
-  const general = useReaderStore((state) => state.general);
-  const appearance = useReaderStore((state) => state.appearance);
+  const storedGeneral = useReaderStore((state) => state.general);
+  const storedAppearance = useReaderStore((state) => state.appearance);
+  const general = generalSettings ?? storedGeneral;
+  const appearance = appearanceSettings ?? storedAppearance;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const pageNumberRef = useRef(1);
@@ -650,6 +658,7 @@ function PdfReaderContentInner(
         flushProgress(100);
         return true;
       },
+      patchMediaSources() {},
       scrollByPage,
       scrollToStart() {
         completedForNavigationRef.current = false;

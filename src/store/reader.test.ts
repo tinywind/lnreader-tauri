@@ -42,6 +42,8 @@ const localStorageHarness = vi.hoisted(() => {
 });
 
 import {
+  getEffectiveReaderAppearanceSettings,
+  getEffectiveReaderGeneralSettings,
   READER_APPEARANCE_DEFAULTS,
   READER_GENERAL_DEFAULTS,
   READER_PRESET_THEMES,
@@ -186,6 +188,53 @@ describe("useReaderStore", () => {
     const remaining = useReaderStore.getState().appearance.customThemes;
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.id).toBe("b");
+  });
+
+  it("stores only novel-specific reader setting overrides", () => {
+    const novelId = 7;
+    const state = useReaderStore.getState();
+    state.setNovelReaderSettingsEnabled(novelId, true);
+    state.setNovelGeneral(novelId, {
+      pageReader: true,
+      keepScreenOn: true,
+      bionicReading: true,
+    });
+    state.setNovelAppearance(novelId, { textSize: 22 });
+
+    const override = useReaderStore.getState().readerSettingsByNovel[novelId];
+    expect(override).toEqual({
+      general: { pageReader: true, bionicReading: true },
+      appearance: { textSize: 22 },
+    });
+
+    const effectiveGeneral = getEffectiveReaderGeneralSettings(
+      READER_GENERAL_DEFAULTS,
+      override,
+    );
+    const effectiveAppearance = getEffectiveReaderAppearanceSettings(
+      READER_APPEARANCE_DEFAULTS,
+      override,
+    );
+    expect(effectiveGeneral.pageReader).toBe(true);
+    expect(effectiveGeneral.keepScreenOn).toBe(
+      READER_GENERAL_DEFAULTS.keepScreenOn,
+    );
+    expect(effectiveGeneral.bionicReading).toBe(true);
+    expect(effectiveAppearance.textSize).toBe(22);
+    expect(effectiveAppearance.customThemes).toBe(
+      READER_APPEARANCE_DEFAULTS.customThemes,
+    );
+  });
+
+  it("removes novel-specific reader settings when the scope is disabled", () => {
+    const novelId = 7;
+    useReaderStore.getState().setNovelReaderSettingsEnabled(novelId, true);
+    useReaderStore.getState().setNovelAppearance(novelId, { textSize: 22 });
+    useReaderStore.getState().setNovelReaderSettingsEnabled(novelId, false);
+
+    expect(
+      useReaderStore.getState().readerSettingsByNovel[novelId],
+    ).toBeUndefined();
   });
 
   it("setLastReadChapter records the chapter id under the novel id", () => {

@@ -24,9 +24,13 @@ import { useTranslation, type TranslationKey } from "../i18n";
 import {
   READER_TAP_PRESETS,
   READER_TAP_ZONES,
+  READER_CUSTOM_CSS_PRESETS,
   READER_FONT_OPTIONS,
   READER_PRESET_THEMES,
+  getEffectiveReaderAppearanceSettings,
+  getEffectiveReaderGeneralSettings,
   useReaderStore,
+  type ReaderCustomCssPresetId,
   type ReaderHtmlImagePagingMode,
   type ReaderPdfPageFitMode,
   type ReaderTapAction,
@@ -50,7 +54,25 @@ const READER_THEME_LABEL_KEYS: Record<string, TranslationKey> = {
   amoled: "readerSettings.theme.amoled",
 };
 
+const CUSTOM_CSS_PRESET_LABEL_KEYS: Record<
+  ReaderCustomCssPresetId,
+  TranslationKey
+> = {
+  webtoon: "readerSettings.customCssPreset.webtoon",
+  "comic-spread": "readerSettings.customCssPreset.comicSpread",
+  "comic-page": "readerSettings.customCssPreset.comicPage",
+};
+
 type ReaderModeOption = "scroll" | "paged" | "two-page";
+type ReaderCustomCssPresetSelectValue =
+  | ReaderCustomCssPresetId
+  | "custom"
+  | "none";
+
+interface ReaderSettingsPanelProps {
+  inlineAutomation?: boolean;
+  novelId?: number | null;
+}
 
 const PDF_PAGE_FIT_OPTIONS: Array<{
   value: ReaderPdfPageFitMode;
@@ -71,24 +93,66 @@ const HTML_IMAGE_PAGING_OPTIONS: Array<{
     labelKey: "readerSettings.htmlImagePagingMode.nextPage",
   },
   {
+    value: "single-image",
+    labelKey: "readerSettings.htmlImagePagingMode.singleImage",
+  },
+  {
     value: "fragment",
     labelKey: "readerSettings.htmlImagePagingMode.fragment",
   },
 ];
 
-export function ReaderSettingsPanel() {
+export function ReaderSettingsPanel({
+  inlineAutomation = false,
+  novelId = null,
+}: ReaderSettingsPanelProps = {}) {
   const { t } = useTranslation();
-  const general = useReaderStore((state) => state.general);
-  const appearance = useReaderStore((state) => state.appearance);
+  const scopedNovelId =
+    typeof novelId === "number" && novelId > 0 ? novelId : null;
+  const globalGeneral = useReaderStore((state) => state.general);
+  const globalAppearance = useReaderStore((state) => state.appearance);
+  const novelSettingsOverride = useReaderStore((state) =>
+    scopedNovelId ? state.readerSettingsByNovel[scopedNovelId] : undefined,
+  );
   const setGeneral = useReaderStore((state) => state.setGeneral);
   const setAppearance = useReaderStore((state) => state.setAppearance);
+  const setNovelReaderSettingsEnabled = useReaderStore(
+    (state) => state.setNovelReaderSettingsEnabled,
+  );
+  const setNovelGeneral = useReaderStore((state) => state.setNovelGeneral);
+  const setNovelAppearance = useReaderStore(
+    (state) => state.setNovelAppearance,
+  );
   const applyTheme = useReaderStore((state) => state.applyTheme);
+  const applyNovelTheme = useReaderStore((state) => state.applyNovelTheme);
   const saveCustomTheme = useReaderStore((state) => state.saveCustomTheme);
   const resetReaderSettings = useReaderStore(
     (state) => state.resetReaderSettings,
   );
-  const applyTapZonePreset = useReaderStore(
-    (state) => state.applyTapZonePreset,
+  const resetNovelReaderSettings = useReaderStore(
+    (state) => state.resetNovelReaderSettings,
+  );
+  const novelSettingsEnabled =
+    scopedNovelId !== null && novelSettingsOverride !== undefined;
+  const general = useMemo(
+    () =>
+      novelSettingsEnabled
+        ? getEffectiveReaderGeneralSettings(
+            globalGeneral,
+            novelSettingsOverride,
+          )
+        : globalGeneral,
+    [globalGeneral, novelSettingsEnabled, novelSettingsOverride],
+  );
+  const appearance = useMemo(
+    () =>
+      novelSettingsEnabled
+        ? getEffectiveReaderAppearanceSettings(
+            globalAppearance,
+            novelSettingsOverride,
+          )
+        : globalAppearance,
+    [globalAppearance, novelSettingsEnabled, novelSettingsOverride],
   );
 
   const readerThemes = useMemo(
@@ -100,6 +164,28 @@ export function ReaderSettingsPanel() {
       ? "two-page"
       : "paged"
     : "scroll";
+  const customCssPresetValue = getCustomCssPresetValue(appearance.customCss);
+  const customCssPresetOptions = useMemo(
+    () => [
+      {
+        value: "none",
+        label: t("readerSettings.customCssPreset.none"),
+      },
+      ...READER_CUSTOM_CSS_PRESETS.map((preset) => ({
+        value: preset.id,
+        label: t(CUSTOM_CSS_PRESET_LABEL_KEYS[preset.id]),
+      })),
+      ...(customCssPresetValue === "custom"
+        ? [
+            {
+              value: "custom",
+              label: t("readerSettings.customCssPreset.custom"),
+            },
+          ]
+        : []),
+    ],
+    [customCssPresetValue, t],
+  );
 
   function handleSaveCustomTheme(): void {
     const id = `custom-${Date.now()}`;
@@ -111,15 +197,157 @@ export function ReaderSettingsPanel() {
       backgroundColor: appearance.backgroundColor,
       textColor: appearance.textColor,
     });
-    setAppearance({ themeId: id });
+    setActiveAppearance({ themeId: id });
   }
 
+  function setActiveGeneral(
+    settings: Parameters<typeof setGeneral>[0],
+  ): void {
+    if (scopedNovelId !== null && novelSettingsEnabled) {
+      setNovelGeneral(scopedNovelId, settings);
+      return;
+    }
+    setGeneral(settings);
+  }
+
+  function setActiveAppearance(
+    settings: Parameters<typeof setAppearance>[0],
+  ): void {
+    if (scopedNovelId !== null && novelSettingsEnabled) {
+      setNovelAppearance(scopedNovelId, settings);
+      return;
+    }
+    setAppearance(settings);
+  }
+
+  function applyActiveTheme(theme: Parameters<typeof applyTheme>[0]): void {
+    if (scopedNovelId !== null && novelSettingsEnabled) {
+      applyNovelTheme(scopedNovelId, theme);
+      return;
+    }
+    applyTheme(theme);
+  }
+
+  function resetActiveReaderSettings(): void {
+    if (scopedNovelId !== null && novelSettingsEnabled) {
+      resetNovelReaderSettings(scopedNovelId);
+      return;
+    }
+    resetReaderSettings();
+  }
+
+  function handleNovelSettingsScopeChange(enabled: boolean): void {
+    if (scopedNovelId === null) return;
+    setNovelReaderSettingsEnabled(scopedNovelId, enabled);
+  }
+
+  function handleApplyTapZonePreset(presetId: ReaderTapPresetId): void {
+    const preset = READER_TAP_PRESETS.find((entry) => entry.id === presetId);
+    if (!preset) return;
+    setGeneral({
+      tapZonePresetId: preset.id,
+      tapZones: preset.zones,
+    });
+  }
+
+  function handleCustomCssPresetChange(presetValue: string | null): void {
+    if (!presetValue || presetValue === "custom") return;
+    if (presetValue === "none") {
+      setActiveAppearance({ customCss: "" });
+      return;
+    }
+    const preset = READER_CUSTOM_CSS_PRESETS.find(
+      (entry) => entry.id === presetValue,
+    );
+    if (preset) {
+      if (preset.general) {
+        setActiveGeneral(preset.general);
+      }
+      setActiveAppearance({
+        ...(preset.appearance ?? {}),
+        customCss: preset.css,
+      });
+    }
+  }
+
+  const automationSettings = (
+    <SettingsSection title={t("readerSettings.automation.title")}>
+      <SettingsFieldRow
+        label={t("readerSettings.autoScroll")}
+        description={t("readerSettings.autoScroll.description")}
+      >
+        <Switch
+          checked={!general.pageReader && globalGeneral.autoScroll}
+          disabled={general.pageReader}
+          onChange={(event) =>
+            setGeneral({ autoScroll: event.currentTarget.checked })
+          }
+        />
+      </SettingsFieldRow>
+      {!general.pageReader && globalGeneral.autoScroll ? (
+        <>
+          <SettingsFieldRow
+            label={t("readerSettings.autoScrollInterval")}
+            description={t("readerSettings.autoScrollInterval.description")}
+          >
+            <NumberInput
+              value={globalGeneral.autoScrollInterval}
+              min={16}
+              max={500}
+              onChange={(value) => {
+                if (typeof value === "number") {
+                  setGeneral({ autoScrollInterval: value });
+                }
+              }}
+            />
+          </SettingsFieldRow>
+          <SettingsFieldRow
+            label={t("readerSettings.autoScrollOffset")}
+            description={t("readerSettings.autoScrollOffset.description")}
+          >
+            <NumberInput
+              value={globalGeneral.autoScrollOffset}
+              min={0.25}
+              max={12}
+              step={0.25}
+              onChange={(value) => {
+                if (typeof value === "number") {
+                  setGeneral({ autoScrollOffset: value });
+                }
+              }}
+            />
+          </SettingsFieldRow>
+        </>
+      ) : null}
+    </SettingsSection>
+  );
+
   return (
-    <Tabs
-      className="lnr-reader-settings-tabs"
-      defaultValue="reading"
-      keepMounted={false}
-    >
+    <Stack gap="md">
+      {scopedNovelId !== null ? (
+        <SettingsSection title={t("readerSettings.scope.title")}>
+          <SettingsFieldRow
+            label={t("readerSettings.novelScope")}
+            description={t(
+              novelSettingsEnabled
+                ? "readerSettings.novelScope.enabledDescription"
+                : "readerSettings.novelScope.disabledDescription",
+            )}
+          >
+            <Switch
+              checked={novelSettingsEnabled}
+              onChange={(event) =>
+                handleNovelSettingsScopeChange(event.currentTarget.checked)
+              }
+            />
+          </SettingsFieldRow>
+        </SettingsSection>
+      ) : null}
+      <Tabs
+        className="lnr-reader-settings-tabs"
+        defaultValue="reading"
+        keepMounted={false}
+      >
       <Tabs.List className="lnr-reader-settings-tab-list">
         <Tabs.Tab value="reading">
           {t("readerSettings.reading.title")}
@@ -128,6 +356,11 @@ export function ReaderSettingsPanel() {
         <Tabs.Tab value="controls">
           {t("readerSettings.controls.title")}
         </Tabs.Tab>
+        {!inlineAutomation ? (
+          <Tabs.Tab value="automation">
+            {t("readerSettings.automation.title")}
+          </Tabs.Tab>
+        ) : null}
         <Tabs.Tab value="indicators">
           {t("readerSettings.indicators.title")}
         </Tabs.Tab>
@@ -136,9 +369,7 @@ export function ReaderSettingsPanel() {
 
       <Tabs.Panel className="lnr-reader-settings-tab-panel" value="reading">
         <Stack gap="lg">
-      <SettingsSection
-        title={t("readerSettings.reading.title")}
-      >
+          <SettingsSection title={t("readerSettings.reading.title")}>
         <SettingsFieldRow
           label={t("readerSettings.readingMode")}
           description={t("readerSettings.readingMode.description")}
@@ -153,21 +384,24 @@ export function ReaderSettingsPanel() {
             onChange={(value) => {
               switch (value) {
                 case "two-page":
-                  setGeneral({
+                  setActiveGeneral({
                     autoScroll: false,
                     pageReader: true,
                     twoPageReader: true,
                   });
                   break;
                 case "paged":
-                  setGeneral({
+                  setActiveGeneral({
                     autoScroll: false,
                     pageReader: true,
                     twoPageReader: false,
                   });
                   break;
                 default:
-                  setGeneral({ pageReader: false, twoPageReader: false });
+                  setActiveGeneral({
+                    pageReader: false,
+                    twoPageReader: false,
+                  });
                   break;
               }
             }}
@@ -184,7 +418,7 @@ export function ReaderSettingsPanel() {
             }))}
             value={general.pdfPageFitMode}
             onChange={(pdfPageFitMode) =>
-              setGeneral({
+              setActiveGeneral({
                 pdfPageFitMode: pdfPageFitMode as ReaderPdfPageFitMode,
               })
             }
@@ -201,7 +435,7 @@ export function ReaderSettingsPanel() {
             }))}
             value={general.htmlImagePagingMode}
             onChange={(htmlImagePagingMode) =>
-              setGeneral({
+              setActiveGeneral({
                 htmlImagePagingMode:
                   htmlImagePagingMode as ReaderHtmlImagePagingMode,
               })
@@ -209,60 +443,15 @@ export function ReaderSettingsPanel() {
           />
         </SettingsFieldRow>
         <SettingsFieldRow
-          label={t("readerSettings.autoScroll")}
-          description={t("readerSettings.autoScroll.description")}
-        >
-          <Switch
-            checked={!general.pageReader && general.autoScroll}
-            disabled={general.pageReader}
-            onChange={(event) =>
-              setGeneral({ autoScroll: event.currentTarget.checked })
-            }
-          />
-        </SettingsFieldRow>
-        {!general.pageReader && general.autoScroll ? (
-          <>
-            <SettingsFieldRow
-              label={t("readerSettings.autoScrollInterval")}
-              description={t("readerSettings.autoScrollInterval.description")}
-            >
-              <NumberInput
-                value={general.autoScrollInterval}
-                min={16}
-                max={500}
-                onChange={(value) => {
-                  if (typeof value === "number") {
-                    setGeneral({ autoScrollInterval: value });
-                  }
-                }}
-              />
-            </SettingsFieldRow>
-            <SettingsFieldRow
-              label={t("readerSettings.autoScrollOffset")}
-              description={t("readerSettings.autoScrollOffset.description")}
-            >
-              <NumberInput
-                value={general.autoScrollOffset}
-                min={0.25}
-                max={12}
-                step={0.25}
-                onChange={(value) => {
-                  if (typeof value === "number") {
-                    setGeneral({ autoScrollOffset: value });
-                  }
-                }}
-              />
-            </SettingsFieldRow>
-          </>
-        ) : null}
-        <SettingsFieldRow
           label={t("readerSettings.fullPageReader")}
           description={t("readerSettings.fullPageReader.description")}
         >
           <Switch
-            checked={general.fullPageReader}
+            checked={globalGeneral.fullPageReader}
             onChange={(event) =>
-              setGeneral({ fullPageReader: event.currentTarget.checked })
+              setGeneral({
+                fullPageReader: event.currentTarget.checked,
+              })
             }
           />
         </SettingsFieldRow>
@@ -271,13 +460,14 @@ export function ReaderSettingsPanel() {
           description={t("readerSettings.keepScreenOn.description")}
         >
           <Switch
-            checked={general.keepScreenOn}
+            checked={globalGeneral.keepScreenOn}
             onChange={(event) =>
               setGeneral({ keepScreenOn: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
       </SettingsSection>
+          {inlineAutomation ? automationSettings : null}
         </Stack>
       </Tabs.Panel>
 
@@ -300,7 +490,7 @@ export function ReaderSettingsPanel() {
               const nextTheme = readerThemes.find(
                 (theme) => theme.id === themeId,
               );
-              if (nextTheme) applyTheme(nextTheme);
+              if (nextTheme) applyActiveTheme(nextTheme);
             }}
           />
         </SettingsFieldRow>
@@ -311,7 +501,7 @@ export function ReaderSettingsPanel() {
           <ColorInput
             value={appearance.backgroundColor}
             onChange={(backgroundColor) =>
-              setAppearance({ backgroundColor })
+              setActiveAppearance({ backgroundColor })
             }
           />
         </SettingsFieldRow>
@@ -321,7 +511,7 @@ export function ReaderSettingsPanel() {
         >
           <ColorInput
             value={appearance.textColor}
-            onChange={(textColor) => setAppearance({ textColor })}
+            onChange={(textColor) => setActiveAppearance({ textColor })}
           />
         </SettingsFieldRow>
         <SettingSlider
@@ -332,7 +522,7 @@ export function ReaderSettingsPanel() {
           max={36}
           step={1}
           value={appearance.textSize}
-          onChange={(textSize) => setAppearance({ textSize })}
+          onChange={(textSize) => setActiveAppearance({ textSize })}
         />
         <SettingSlider
           label={t("readerSettings.lineHeight")}
@@ -342,7 +532,7 @@ export function ReaderSettingsPanel() {
           max={2.6}
           step={0.05}
           value={appearance.lineHeight}
-          onChange={(lineHeight) => setAppearance({ lineHeight })}
+          onChange={(lineHeight) => setActiveAppearance({ lineHeight })}
         />
         <SettingSlider
           label={t("readerSettings.padding")}
@@ -352,7 +542,7 @@ export function ReaderSettingsPanel() {
           max={64}
           step={1}
           value={appearance.padding}
-          onChange={(padding) => setAppearance({ padding })}
+          onChange={(padding) => setActiveAppearance({ padding })}
         />
         <SettingsFieldRow
           label={t("readerSettings.font")}
@@ -368,7 +558,7 @@ export function ReaderSettingsPanel() {
             }))}
             value={appearance.fontFamily}
             onChange={(fontFamily) =>
-              setAppearance({ fontFamily: fontFamily ?? "" })
+              setActiveAppearance({ fontFamily: fontFamily ?? "" })
             }
           />
         </SettingsFieldRow>
@@ -379,7 +569,7 @@ export function ReaderSettingsPanel() {
           <SegmentedToggle
             value={appearance.textAlign}
             onChange={(textAlign) =>
-              setAppearance({
+              setActiveAppearance({
                 textAlign: textAlign as typeof appearance.textAlign,
               })
             }
@@ -402,7 +592,7 @@ export function ReaderSettingsPanel() {
             <TextButton variant="default" onClick={handleSaveCustomTheme}>
               {t("readerSettings.saveCustomTheme")}
             </TextButton>
-            <TextButton variant="default" onClick={resetReaderSettings}>
+            <TextButton variant="default" onClick={resetActiveReaderSettings}>
               {t("common.reset")}
             </TextButton>
           </SettingsInlineControls>
@@ -421,7 +611,7 @@ export function ReaderSettingsPanel() {
           description={t("readerSettings.swipeGestures.description")}
         >
           <Switch
-            checked={general.swipeGestures}
+            checked={globalGeneral.swipeGestures}
             onChange={(event) =>
               setGeneral({ swipeGestures: event.currentTarget.checked })
             }
@@ -432,13 +622,13 @@ export function ReaderSettingsPanel() {
           description={t("readerSettings.tapControls.description")}
         >
           <Switch
-            checked={general.tapToScroll}
+            checked={globalGeneral.tapToScroll}
             onChange={(event) =>
               setGeneral({ tapToScroll: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
-        {general.tapToScroll ? (
+        {globalGeneral.tapToScroll ? (
           <SettingsFieldRow
             label={t("readerSettings.tapPreset")}
             description={t("readerSettings.tapPreset.description")}
@@ -451,8 +641,8 @@ export function ReaderSettingsPanel() {
                     key={preset.id}
                     index={index}
                     preset={preset}
-                    selected={preset.id === general.tapZonePresetId}
-                    onApply={applyTapZonePreset}
+                    selected={preset.id === globalGeneral.tapZonePresetId}
+                    onApply={handleApplyTapZonePreset}
                   />
                 ))}
               </div>
@@ -462,6 +652,12 @@ export function ReaderSettingsPanel() {
       </SettingsSection>
         </Stack>
       </Tabs.Panel>
+
+      {!inlineAutomation ? (
+        <Tabs.Panel className="lnr-reader-settings-tab-panel" value="automation">
+          <Stack gap="lg">{automationSettings}</Stack>
+        </Tabs.Panel>
+      ) : null}
 
       <Tabs.Panel className="lnr-reader-settings-tab-panel" value="indicators">
         <Stack gap="lg">
@@ -473,21 +669,23 @@ export function ReaderSettingsPanel() {
           description={t("readerSettings.seekbar.description")}
         >
           <Switch
-            checked={general.showSeekbar}
+            checked={globalGeneral.showSeekbar}
             onChange={(event) =>
               setGeneral({ showSeekbar: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
-        {general.showSeekbar ? (
+        {globalGeneral.showSeekbar ? (
           <SettingsFieldRow
             label={t("readerSettings.verticalSeekbar")}
             description={t("readerSettings.verticalSeekbar.description")}
           >
             <Switch
-              checked={general.verticalSeekbar}
+              checked={globalGeneral.verticalSeekbar}
               onChange={(event) =>
-                setGeneral({ verticalSeekbar: event.currentTarget.checked })
+                setGeneral({
+                  verticalSeekbar: event.currentTarget.checked,
+                })
               }
             />
           </SettingsFieldRow>
@@ -497,7 +695,7 @@ export function ReaderSettingsPanel() {
           description={t("readerSettings.scrollPercentage.description")}
         >
           <Switch
-            checked={general.showScrollPercentage}
+            checked={globalGeneral.showScrollPercentage}
             onChange={(event) =>
               setGeneral({
                 showScrollPercentage: event.currentTarget.checked,
@@ -510,7 +708,7 @@ export function ReaderSettingsPanel() {
           description={t("readerSettings.batteryTimeFooter.description")}
         >
           <Switch
-            checked={general.showBatteryAndTime}
+            checked={globalGeneral.showBatteryAndTime}
             onChange={(event) =>
               setGeneral({
                 showBatteryAndTime: event.currentTarget.checked,
@@ -533,7 +731,9 @@ export function ReaderSettingsPanel() {
                 <Switch
                   checked={general.bionicReading}
                   onChange={(event) =>
-                    setGeneral({ bionicReading: event.currentTarget.checked })
+                    setActiveGeneral({
+                      bionicReading: event.currentTarget.checked,
+                    })
                   }
                 />
               </SettingsFieldRow>
@@ -546,11 +746,21 @@ export function ReaderSettingsPanel() {
                 <Switch
                   checked={general.removeExtraParagraphSpacing}
                   onChange={(event) =>
-                    setGeneral({
+                    setActiveGeneral({
                       removeExtraParagraphSpacing:
                         event.currentTarget.checked,
                     })
                   }
+                />
+              </SettingsFieldRow>
+              <SettingsFieldRow
+                label={t("readerSettings.customCssPreset")}
+                description={t("readerSettings.customCssPreset.description")}
+              >
+                <Select
+                  data={customCssPresetOptions}
+                  value={customCssPresetValue}
+                  onChange={handleCustomCssPresetChange}
                 />
               </SettingsFieldRow>
               <SettingsFieldRow
@@ -564,7 +774,9 @@ export function ReaderSettingsPanel() {
                     autosize
                     minRows={5}
                     onChange={(event) =>
-                      setAppearance({ customCss: event.currentTarget.value })
+                      setActiveAppearance({
+                        customCss: event.currentTarget.value,
+                      })
                     }
                   />
                 </SettingsWideField>
@@ -580,7 +792,9 @@ export function ReaderSettingsPanel() {
                     autosize
                     minRows={5}
                     onChange={(event) =>
-                      setAppearance({ customJs: event.currentTarget.value })
+                      setActiveAppearance({
+                        customJs: event.currentTarget.value,
+                      })
                     }
                   />
                 </SettingsWideField>
@@ -589,8 +803,20 @@ export function ReaderSettingsPanel() {
           </SettingsSection>
         </Stack>
       </Tabs.Panel>
-    </Tabs>
+      </Tabs>
+    </Stack>
   );
+}
+
+function getCustomCssPresetValue(
+  customCss: string,
+): ReaderCustomCssPresetSelectValue {
+  const normalizedCustomCss = customCss.trim();
+  if (!normalizedCustomCss) return "none";
+  const preset = READER_CUSTOM_CSS_PRESETS.find(
+    (entry) => entry.css.trim() === normalizedCustomCss,
+  );
+  return preset?.id ?? "custom";
 }
 
 function SettingSlider({

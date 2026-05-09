@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Box, Loader } from "@mantine/core";
+import { Box } from "@mantine/core";
 import { StateView } from "../components/AppFrame";
 import {
   ReaderContent,
@@ -28,7 +28,11 @@ import { enqueueChapterDownload } from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { readerRoute } from "../router";
 import { useLibraryStore } from "../store/library";
-import { useReaderStore } from "../store/reader";
+import {
+  getEffectiveReaderAppearanceSettings,
+  getEffectiveReaderGeneralSettings,
+  useReaderStore,
+} from "../store/reader";
 import { useTranslation, type TranslationKey } from "../i18n";
 import "../styles/reader.css";
 
@@ -212,9 +216,11 @@ function CloseIcon() {
 }
 
 function ReaderSettingsOverlay({
+  novelId,
   onClose,
   onOpenSettingsPage,
 }: {
+  novelId?: number;
   onClose: () => void;
   onOpenSettingsPage: () => void;
 }) {
@@ -259,53 +265,9 @@ function ReaderSettingsOverlay({
           </div>
         </header>
         <div className="lnr-reader-settings-scroll">
-          <ReaderSettingsPanel />
+          <ReaderSettingsPanel inlineAutomation novelId={novelId} />
         </div>
       </section>
-    </div>
-  );
-}
-
-function ReaderBlockingOverlay({
-  message,
-  title,
-}: {
-  message: string;
-  title: string;
-}) {
-  return (
-    <div
-      aria-live="polite"
-      className="lnr-reader-blocking-overlay"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onPointerDown={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onPointerMove={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onTouchMove={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onWheel={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      role="status"
-    >
-      <div className="lnr-reader-blocking-card">
-        <Loader size="sm" />
-        <div className="lnr-reader-blocking-copy">
-          <strong>{title}</strong>
-          <span>{message}</span>
-        </div>
-      </div>
     </div>
   );
 }
@@ -443,9 +405,54 @@ export function ReaderPage() {
   const [autoDownloadingChapterId, setAutoDownloadingChapterId] = useState<
     number | null
   >(null);
+  const [readerDocument, setReaderDocument] = useState<{
+    chapterId: number;
+    contentType: ChapterRow["contentType"];
+    html: string;
+  } | null>(null);
 
+  const chapterQuery = useQuery({
+    queryKey: chapterDetailKey(chapterId),
+    queryFn: async () => {
+      const chapter = await getChapterById(chapterId);
+      if (!chapter?.content) return chapter;
+      return {
+        ...chapter,
+        content: await resolveLocalChapterMedia(chapter.content),
+      };
+    },
+    enabled: chapterId > 0,
+    refetchInterval: (query) => {
+      const data = query.state.data as ChapterRow | null | undefined;
+      return data && !data.isDownloaded ? 500 : false;
+    },
+  });
+  const currentNovelId = chapterQuery.data?.novelId ?? 0;
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
-  const fullPageReader = useReaderStore((state) => state.general.fullPageReader);
+  const globalReaderGeneral = useReaderStore((state) => state.general);
+  const globalReaderAppearance = useReaderStore((state) => state.appearance);
+  const novelReaderSettingsOverride = useReaderStore((state) =>
+    currentNovelId > 0
+      ? state.readerSettingsByNovel[currentNovelId]
+      : undefined,
+  );
+  const effectiveReaderGeneral = useMemo(
+    () =>
+      getEffectiveReaderGeneralSettings(
+        globalReaderGeneral,
+        novelReaderSettingsOverride,
+      ),
+    [globalReaderGeneral, novelReaderSettingsOverride],
+  );
+  const effectiveReaderAppearance = useMemo(
+    () =>
+      getEffectiveReaderAppearanceSettings(
+        globalReaderAppearance,
+        novelReaderSettingsOverride,
+      ),
+    [globalReaderAppearance, novelReaderSettingsOverride],
+  );
+  const fullPageReader = effectiveReaderGeneral.fullPageReader;
   const setFullPageReaderChromeVisible = useReaderStore(
     (state) => state.setFullPageReaderChromeVisible,
   );
@@ -520,24 +527,12 @@ export function ReaderPage() {
     return run;
   }, []);
 
-  const chapterQuery = useQuery({
-    queryKey: chapterDetailKey(chapterId),
-    queryFn: async () => {
-      const chapter = await getChapterById(chapterId);
-      if (!chapter?.content) return chapter;
-      return {
-        ...chapter,
-        content: await resolveLocalChapterMedia(chapter.content),
-      };
-    },
-    enabled: chapterId > 0,
-  });
-  const currentNovelId = chapterQuery.data?.novelId ?? 0;
   const chapterListQuery = useQuery({
     queryKey: ["chapter", "list", currentNovelId],
     queryFn: () => listChaptersByNovel(currentNovelId),
     enabled: currentNovelId > 0,
   });
+  const chapter = chapterQuery.data;
 
   const progressMutation = useMutation({
     mutationFn: (progress: number) =>
@@ -599,7 +594,6 @@ export function ReaderPage() {
 
   const bookmarkMutation = useMutation({
     mutationFn: async () => {
-      const chapter = chapterQuery.data;
       if (!chapter) return;
       await setChapterBookmark(chapter.id, !chapter.bookmark);
     },
@@ -611,86 +605,88 @@ export function ReaderPage() {
   });
 
   const openChapter = useCallback(
-    async (targetChapter: ChapterListRow) => {
-      if (autoDownloadingChapterRef.current !== null) return;
-      if (targetChapter.id === chapterId && targetChapter.isDownloaded) return;
+    (targetChapter: ChapterListRow) => {
+      if (
+        targetChapter.id === chapterId &&
+        (targetChapter.isDownloaded ||
+          autoDownloadingChapterRef.current === targetChapter.id)
+      ) {
+        return;
+      }
       const requestId = openRequestRef.current + 1;
       openRequestRef.current = requestId;
-      openedChapterRef.current = null;
-
-      if (targetChapter.isDownloaded) {
+      if (targetChapter.id !== chapterId) {
+        openedChapterRef.current = null;
         void navigate({
           to: "/reader",
           search: { chapterId: targetChapter.id },
           replace: true,
         });
+      }
+
+      if (targetChapter.isDownloaded) {
         return;
       }
 
       autoDownloadingChapterRef.current = targetChapter.id;
       setAutoDownloadingChapterId(targetChapter.id);
-      try {
-        const novel = await queryClient.fetchQuery({
-          queryKey: ["novel", "detail", targetChapter.novelId],
-          queryFn: () => getNovelById(targetChapter.novelId),
-        });
-        if (!novel) return;
+      void (async () => {
+        try {
+          const novel = await queryClient.fetchQuery({
+            queryKey: ["novel", "detail", targetChapter.novelId],
+            queryFn: () => getNovelById(targetChapter.novelId),
+          });
+          if (!novel) return;
 
-        await enqueueChapterDownload({
-          id: targetChapter.id,
-          pluginId: novel.pluginId,
-          chapterPath: targetChapter.path,
-          chapterName: targetChapter.name,
-          contentType: targetChapter.contentType,
-          novelId: novel.id,
-          novelName: novel.name,
-          priority: "interactive",
-          title: t("tasks.task.downloadChapter", { name: targetChapter.name }),
-        }).promise;
-        if (openRequestRef.current !== requestId) return;
-        await Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: chapterDetailKey(targetChapter.id),
-          }),
-          queryClient.invalidateQueries({
-            queryKey: ["chapter", "list", targetChapter.novelId],
-          }),
-          queryClient.invalidateQueries({
-            queryKey: ["novel", "detail", targetChapter.novelId, "chapters"],
-          }),
-        ]);
-        void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
-        void navigate({
-          to: "/reader",
-          search: { chapterId: targetChapter.id },
-          replace: true,
-        });
-      } catch {
-        // The reader stays on the current chapter if download cannot finish.
-      } finally {
-        if (autoDownloadingChapterRef.current === targetChapter.id) {
-          autoDownloadingChapterRef.current = null;
+          await enqueueChapterDownload({
+            id: targetChapter.id,
+            pluginId: novel.pluginId,
+            chapterPath: targetChapter.path,
+            chapterName: targetChapter.name,
+            contentType: targetChapter.contentType,
+            novelId: novel.id,
+            novelName: novel.name,
+            priority: "interactive",
+            title: t("tasks.task.downloadChapter", { name: targetChapter.name }),
+          }).promise;
+          if (openRequestRef.current !== requestId) return;
+          await Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: chapterDetailKey(targetChapter.id),
+            }),
+            queryClient.invalidateQueries({
+              queryKey: ["chapter", "list", targetChapter.novelId],
+            }),
+            queryClient.invalidateQueries({
+              queryKey: ["novel", "detail", targetChapter.novelId, "chapters"],
+            }),
+          ]);
+          void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+        } catch {
+          // The reader stays open and continues showing any partial content.
+        } finally {
+          if (autoDownloadingChapterRef.current === targetChapter.id) {
+            autoDownloadingChapterRef.current = null;
+          }
+          setAutoDownloadingChapterId((current) =>
+            current === targetChapter.id ? null : current,
+          );
         }
-        setAutoDownloadingChapterId((current) =>
-          current === targetChapter.id ? null : current,
-        );
-      }
+      })();
     },
     [chapterId, navigate, queryClient, t],
   );
 
   useEffect(() => {
-    const chapter = chapterQuery.data;
     if (!chapter || chapter.isDownloaded) return;
     if (autoDownloadingChapterRef.current === chapter.id) return;
 
     void openChapter(chapter);
-  }, [chapterQuery.data, openChapter]);
+  }, [chapter, openChapter]);
 
   const openAdjacent = useCallback(
     async (direction: 1 | -1) => {
-      const chapter = chapterQuery.data;
-      if (!chapter) return;
+      if (!chapter?.novelId || chapter.position === undefined) return;
       const adjacent = await getAdjacentChapter(
         chapter.novelId,
         chapter.position,
@@ -700,15 +696,15 @@ export function ReaderPage() {
       if (direction === 1) {
         contentRef.current?.completeIfAtEnd();
       }
-      await openChapter(adjacent);
+      openChapter(adjacent);
     },
-    [chapterQuery.data, openChapter],
+    [chapter?.novelId, chapter?.position, openChapter],
   );
 
   const handleReaderBack = useCallback(() => {
-    const novelId = chapterQuery.data?.novelId;
+    const novelId = chapter?.novelId;
     if (novelId) {
-      void navigate({ to: "/novel", search: { id: novelId } });
+      void navigate({ to: "/novel", search: { id: novelId }, replace: true });
       return;
     }
     if (window.history.length > 1) {
@@ -716,11 +712,11 @@ export function ReaderPage() {
       return;
     }
     void navigate({ to: "/" });
-  }, [chapterQuery.data?.novelId, navigate]);
-  const readerInteractionBlocked = autoDownloadingChapterId !== null;
+  }, [chapter?.novelId, navigate]);
+  const readerBusy =
+    autoDownloadingChapterId === chapter?.id && !chapter?.isDownloaded;
 
   useEffect(() => {
-    const chapter = chapterQuery.data;
     if (
       !chapter ||
       !chapter.isDownloaded ||
@@ -737,7 +733,7 @@ export function ReaderPage() {
       });
     }
   }, [
-    chapterQuery.data,
+    chapter,
     enqueueReaderWrite,
     incognitoMode,
     queryClient,
@@ -746,13 +742,6 @@ export function ReaderPage() {
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (readerInteractionBlocked) {
-        if (!event.altKey && !event.ctrlKey && !event.metaKey) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
       if (readerSettingsOpen) {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -808,11 +797,9 @@ export function ReaderPage() {
     closeReaderSettingsPanel,
     handleFullPageActivity,
     handleReaderBack,
-    readerInteractionBlocked,
     readerSettingsOpen,
   ]);
 
-  const chapter = chapterQuery.data;
   const chapters = chapterListQuery.data ?? [];
   const chapterIndex = chapter
     ? chapters.findIndex((item) => item.id === chapter.id)
@@ -823,11 +810,60 @@ export function ReaderPage() {
     chapterIndex >= 0 && chapterIndex < chapters.length - 1
       ? chapters[chapterIndex + 1]
       : undefined;
-  const content =
-    chapter?.content == null
-      ? SAMPLE_CHAPTER_HTML
-      : renderChapterContentAsHtml(chapter.content, chapter.contentType);
-  const isPdfChapter = chapter?.contentType === "pdf";
+  const chapterContentHtml =
+    chapter?.content
+      ? renderChapterContentAsHtml(chapter.content, chapter.contentType)
+      : null;
+
+  useEffect(() => {
+    if (!chapter || !chapterContentHtml) {
+      setReaderDocument(null);
+      return;
+    }
+    setReaderDocument((current) => {
+      if (!current || current.chapterId !== chapter.id) {
+        return {
+          chapterId: chapter.id,
+          contentType: chapter.contentType,
+          html: chapterContentHtml,
+        };
+      }
+      if (chapter.contentType === "html") return current;
+      if (
+        current.contentType === chapter.contentType &&
+        current.html === chapterContentHtml
+      ) {
+        return current;
+      }
+      return {
+        chapterId: chapter.id,
+        contentType: chapter.contentType,
+        html: chapterContentHtml,
+      };
+    });
+  }, [chapter?.id, chapter?.contentType, chapterContentHtml]);
+
+  useEffect(() => {
+    if (
+      !chapter ||
+      chapter.contentType !== "html" ||
+      !chapterContentHtml ||
+      !readerDocument ||
+      readerDocument.chapterId !== chapter.id ||
+      readerDocument.html === chapterContentHtml
+    ) {
+      return;
+    }
+    contentRef.current?.patchMediaSources(chapterContentHtml);
+  }, [chapter?.id, chapter?.contentType, chapterContentHtml, readerDocument]);
+
+  const activeReaderHtml =
+    readerDocument && readerDocument.chapterId === chapter?.id
+      ? readerDocument.html
+      : chapterContentHtml;
+  const hasChapterContent = Boolean(activeReaderHtml);
+  const content = activeReaderHtml ?? SAMPLE_CHAPTER_HTML;
+  const isPdfChapter = hasChapterContent && chapter?.contentType === "pdf";
   const progress = chapter?.progress ?? 0;
   const chapterNovelId = chapter?.novelId;
   const readerStateVisible =
@@ -835,7 +871,7 @@ export function ReaderPage() {
     (chapterQuery.isLoading ||
       Boolean(chapterQuery.error) ||
       chapterQuery.data === null ||
-      Boolean(chapter && !chapter.isDownloaded));
+      Boolean(chapter && !hasChapterContent));
   const readerChromeAutoHide = fullPageReader && !readerStateVisible;
   const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
   const readerOverlayBottom =
@@ -871,6 +907,12 @@ export function ReaderPage() {
     },
     [chapterNovelId, setNovelPageIndex],
   );
+  const handleBoundaryPage = useCallback(
+    (direction: 1 | -1) => {
+      void openAdjacent(direction);
+    },
+    [openAdjacent],
+  );
 
   const readerContent =
     chapterId > 0 && chapterQuery.isLoading ? (
@@ -901,7 +943,7 @@ export function ReaderPage() {
           message={t("reader.chapterNotFoundMessage", { id: chapterId })}
         />
       </Box>
-    ) : chapterId > 0 && chapter && !chapter.isDownloaded ? (
+    ) : chapterId > 0 && chapter && !hasChapterContent ? (
       <Box className="lnr-reader-state-frame">
         <StateView
           color="blue"
@@ -921,23 +963,25 @@ export function ReaderPage() {
       <PdfReaderContent
         key={chapter?.id ?? "sample"}
         ref={contentRef}
+        appearanceSettings={effectiveReaderAppearance}
         dataUrl={content}
+        generalSettings={effectiveReaderGeneral}
         initialProgress={progress}
         onToggleChrome={
           readerChromeAutoHide ? handleToggleFullPageChrome : undefined
         }
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
-        onBoundaryPage={(direction) => {
-          void openAdjacent(direction);
-        }}
+        onBoundaryPage={handleBoundaryPage}
         viewportHeight="100%"
       />
     ) : (
       <ReaderContent
         key={chapter?.id ?? "sample"}
         ref={contentRef}
+        appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}
+        generalSettings={effectiveReaderGeneral}
         html={content}
         initialProgress={progress}
         onToggleChrome={
@@ -945,9 +989,7 @@ export function ReaderPage() {
         }
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
-        onBoundaryPage={(direction) => {
-          void openAdjacent(direction);
-        }}
+        onBoundaryPage={handleBoundaryPage}
         viewportHeight="100%"
       />
     );
@@ -957,8 +999,7 @@ export function ReaderPage() {
       className="lnr-reader-shell"
       data-chrome-visible={readerChromeVisible}
       data-full-page={fullPageReader}
-      data-interaction-blocked={readerInteractionBlocked}
-      aria-busy={readerInteractionBlocked}
+      aria-busy={readerBusy}
       onPointerDown={handleFullPageActivity}
       onPointerMove={handleFullPageActivity}
       onWheel={handleFullPageActivity}
@@ -987,14 +1028,9 @@ export function ReaderPage() {
       </Box>
       {readerSettingsOpen ? (
         <ReaderSettingsOverlay
+          novelId={chapterNovelId}
           onClose={closeReaderSettingsPanel}
           onOpenSettingsPage={openReaderSettingsPage}
-        />
-      ) : null}
-      {readerInteractionBlocked ? (
-        <ReaderBlockingOverlay
-          title={t("reader.downloadingChapter")}
-          message={t("reader.downloadingChapterMessage")}
         />
       ) : null}
       <ReaderBottomStrip
