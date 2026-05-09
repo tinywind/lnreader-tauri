@@ -62,14 +62,12 @@ interface GitHubArtifactsResponse {
 }
 
 interface GitHubArtifact {
-  archive_download_url: string;
   expired: boolean;
   name: string;
 }
 
 interface WorkflowArtifactSelection {
   artifact: GitHubArtifact;
-  downloadExtension: string | null;
 }
 
 interface AssetPreference {
@@ -139,14 +137,21 @@ export async function checkDevUpdate(
     if (!selection) {
       continue;
     }
-    const { artifact, downloadExtension } = selection;
+    const { artifact } = selection;
+    const devRelease = await fetchGithubJson<GitHubRelease>(
+      `${GITHUB_API_BASE}/releases/tags/dev`,
+    );
+    const asset = selectReleaseAsset(devRelease.assets, buildInfo.platform);
+    if (!asset) {
+      throw new Error(`No dev release asset matches ${artifact.name}.`);
+    }
 
     return {
-      assetName: artifact.name,
+      assetName: asset.name,
       channel: "dev",
       displayName: `#${run.id}`,
-      downloadFileName: `${artifact.name}${downloadExtension ?? ".zip"}`,
-      downloadUrl: artifact.archive_download_url,
+      downloadFileName: asset.name,
+      downloadUrl: asset.browser_download_url,
       remoteTime: run.updated_at || run.created_at,
       remoteVersion: null,
       sourceUrl: run.html_url,
@@ -202,7 +207,6 @@ function selectWorkflowArtifact(
     if (artifact) {
       return {
         artifact,
-        downloadExtension: preference.extensions?.[0] ?? null,
       };
     }
   }

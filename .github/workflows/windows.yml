@@ -171,3 +171,26 @@ jobs:
           $assets = Get-ChildItem -Path $env:WINDOWS_BUNDLE_ARTIFACT_DIR -File |
             ForEach-Object { $_.FullName }
           gh release upload "${{ github.ref_name }}" $assets --clobber
+
+      - name: Upload Windows bundles to dev release
+        if: github.ref_type != 'tag'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          gh release view dev *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create dev --title "Latest dev build" --notes "Latest successful development build assets." --prerelease --target "${{ github.sha }}"
+            if ($LASTEXITCODE -ne 0) {
+              gh release view dev *> $null
+              if ($LASTEXITCODE -ne 0) {
+                exit 1
+              }
+            }
+          }
+
+          $assets = Get-ChildItem -Path $env:WINDOWS_BUNDLE_ARTIFACT_DIR -File |
+            ForEach-Object { $_.FullName }
+          gh release upload dev $assets --clobber

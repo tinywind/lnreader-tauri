@@ -192,3 +192,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" "$LINUX_BUNDLE_ARTIFACT_DIR"/* --clobber
+
+      - name: Upload Linux bundles to dev release
+        if: github.ref_type != 'tag'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view dev >/dev/null 2>&1; then
+            gh release create dev \
+              --title "Latest dev build" \
+              --notes "Latest successful development build assets." \
+              --prerelease \
+              --target "$GITHUB_SHA" ||
+              gh release view dev >/dev/null
+          fi
+
+          gh release upload dev "$LINUX_BUNDLE_ARTIFACT_DIR"/* --clobber

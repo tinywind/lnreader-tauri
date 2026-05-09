@@ -209,3 +209,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" "$RELEASE_SIGNED_APK_DIR"/* --clobber
+
+      - name: Upload signed APKs to dev release
+        if: github.ref_type != 'tag'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view dev >/dev/null 2>&1; then
+            gh release create dev \
+              --title "Latest dev build" \
+              --notes "Latest successful development build assets." \
+              --prerelease \
+              --target "$GITHUB_SHA" ||
+              gh release view dev >/dev/null
+          fi
+
+          gh release upload dev "$RELEASE_SIGNED_APK_DIR"/* --clobber
