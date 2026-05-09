@@ -4,6 +4,8 @@ import { persist } from "zustand/middleware";
 export type ReaderPresetTheme = "paper" | "sepia" | "sage" | "dark" | "amoled";
 export type ReaderTextAlign = "left" | "justify" | "center" | "right";
 export type ReaderTapAction = "none" | "previous" | "menu" | "next";
+export type ReaderPdfPageFitMode = "width" | "height" | "contain";
+export type ReaderHtmlImagePagingMode = "auto" | "next-page" | "fragment";
 export type ReaderTapPresetId =
   | "balanced"
   | "side-columns"
@@ -43,6 +45,8 @@ export interface ReaderGeneralSettings {
   tapToScroll: boolean;
   showSeekbar: boolean;
   verticalSeekbar: boolean;
+  pdfPageFitMode: ReaderPdfPageFitMode;
+  htmlImagePagingMode: ReaderHtmlImagePagingMode;
   showScrollPercentage: boolean;
   showBatteryAndTime: boolean;
   autoScroll: boolean;
@@ -233,6 +237,8 @@ export const READER_GENERAL_DEFAULTS: ReaderGeneralSettings = {
   tapToScroll: true,
   showSeekbar: true,
   verticalSeekbar: false,
+  pdfPageFitMode: "width",
+  htmlImagePagingMode: "auto",
   showScrollPercentage: true,
   showBatteryAndTime: true,
   autoScroll: false,
@@ -263,6 +269,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizePdfPageFitMode(value: unknown): ReaderPdfPageFitMode {
+  if (value === "height" || value === "contain") {
+    return value;
+  }
+  return "width";
+}
+
+function normalizeHtmlImagePagingMode(value: unknown): ReaderHtmlImagePagingMode {
+  if (value === "next-page" || value === "fragment") {
+    return value;
+  }
+  return "auto";
+}
+
 function normalizeGeneral(
   settings: Partial<ReaderGeneralSettings>,
 ): Partial<ReaderGeneralSettings> {
@@ -284,6 +304,16 @@ function normalizeGeneral(
     ...(settings.tapZones !== undefined
       ? {
           tapZones: normalizeTapZones(settings.tapZones, TAP_ZONE_DEFAULTS),
+        }
+      : {}),
+    ...(settings.pdfPageFitMode !== undefined
+      ? { pdfPageFitMode: normalizePdfPageFitMode(settings.pdfPageFitMode) }
+      : {}),
+    ...(settings.htmlImagePagingMode !== undefined
+      ? {
+          htmlImagePagingMode: normalizeHtmlImagePagingMode(
+            settings.htmlImagePagingMode,
+          ),
         }
       : {}),
   };
@@ -470,6 +500,12 @@ export const useReaderStore = create<ReaderState>()(
         if (!general.pageReader) {
           general.twoPageReader = false;
         }
+        general.pdfPageFitMode = normalizePdfPageFitMode(
+          general.pdfPageFitMode,
+        );
+        general.htmlImagePagingMode = normalizeHtmlImagePagingMode(
+          general.htmlImagePagingMode,
+        );
 
         return {
           ...currentState,

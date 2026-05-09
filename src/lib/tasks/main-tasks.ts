@@ -1,14 +1,16 @@
 import {
   taskScheduler,
-  type MainTaskKind,
+  type MainLaneTaskKind,
   type TaskHandle,
+  type TaskPriority,
   type TaskRunContext,
   type TaskSubject,
 } from "./scheduler";
 
 interface MainTaskOptions<T> {
-  kind: MainTaskKind;
+  kind: MainLaneTaskKind;
   title: string;
+  priority?: TaskPriority;
   subject?: TaskSubject;
   dedupeKey?: string;
   run: (context: TaskRunContext) => Promise<T>;
@@ -17,13 +19,14 @@ interface MainTaskOptions<T> {
 export function enqueueMainTask<T>({
   dedupeKey,
   kind,
+  priority = "normal",
   run,
   subject,
   title,
 }: MainTaskOptions<T>): TaskHandle<T> {
   return taskScheduler.enqueueMain<T>({
     kind,
-    priority: "normal",
+    priority,
     title,
     subject,
     dedupeKey,

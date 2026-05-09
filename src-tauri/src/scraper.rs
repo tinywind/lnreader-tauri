@@ -82,7 +82,45 @@ static FETCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// - `ReactNativeWebView.postMessage(payload)` polyfill: writes the
 ///   payload to `location.hash` as `#__lnr_result__=ENCODED`. The host
 ///   polls `Webview::url()` to pick up the result.
-#[cfg(desktop)]
+#[cfg(all(desktop, target_os = "windows"))]
+const SCRAPER_INIT_SCRIPT: &str = r##"
+(function () {
+  window.ReactNativeWebView = window.ReactNativeWebView || {};
+  window.ReactNativeWebView.postMessage = function (payload) {
+    try {
+      var encoded = encodeURIComponent(String(payload));
+      var marker = "#__lnr_result__=" + encoded;
+      try {
+        history.replaceState(null, "", location.pathname + location.search + marker);
+      } catch (e) {
+        location.hash = marker;
+      }
+    } catch (e) {}
+  };
+  try {
+    var hash = location.hash || "";
+    var prefix = "#__lnr_script__=";
+    var idx = hash.indexOf(prefix);
+    if (idx !== -1) {
+      var encoded = hash.substring(idx + prefix.length);
+      var script = decodeURIComponent(encoded);
+      try {
+        history.replaceState(null, "", location.pathname + location.search);
+      } catch (e) {}
+      try {
+        (0, eval)(script);
+      } catch (e) {
+        var msg = (e && e.message) || String(e);
+        try {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ ok: false, error: "before-script error: " + msg }));
+        } catch (e2) {}
+      }
+    }
+  } catch (e) {}
+})();
+"##;
+
+#[cfg(all(desktop, not(target_os = "windows")))]
 const SCRAPER_INIT_SCRIPT: &str = r##"
 (function () {
   window.ReactNativeWebView = window.ReactNativeWebView || {};

@@ -27,6 +27,8 @@ import {
   READER_FONT_OPTIONS,
   READER_PRESET_THEMES,
   useReaderStore,
+  type ReaderHtmlImagePagingMode,
+  type ReaderPdfPageFitMode,
   type ReaderTapAction,
   type ReaderTapPreset,
   type ReaderTapPresetId,
@@ -49,6 +51,30 @@ const READER_THEME_LABEL_KEYS: Record<string, TranslationKey> = {
 };
 
 type ReaderModeOption = "scroll" | "paged" | "two-page";
+
+const PDF_PAGE_FIT_OPTIONS: Array<{
+  value: ReaderPdfPageFitMode;
+  labelKey: TranslationKey;
+}> = [
+  { value: "width", labelKey: "readerSettings.pdfPageFitMode.width" },
+  { value: "height", labelKey: "readerSettings.pdfPageFitMode.height" },
+  { value: "contain", labelKey: "readerSettings.pdfPageFitMode.contain" },
+];
+
+const HTML_IMAGE_PAGING_OPTIONS: Array<{
+  value: ReaderHtmlImagePagingMode;
+  labelKey: TranslationKey;
+}> = [
+  { value: "auto", labelKey: "readerSettings.htmlImagePagingMode.auto" },
+  {
+    value: "next-page",
+    labelKey: "readerSettings.htmlImagePagingMode.nextPage",
+  },
+  {
+    value: "fragment",
+    labelKey: "readerSettings.htmlImagePagingMode.fragment",
+  },
+];
 
 export function ReaderSettingsPanel() {
   const { t } = useTranslation();
@@ -145,6 +171,41 @@ export function ReaderSettingsPanel() {
                   break;
               }
             }}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("readerSettings.pdfPageFitMode")}
+          description={t("readerSettings.pdfPageFitMode.description")}
+        >
+          <SegmentedToggle
+            data={PDF_PAGE_FIT_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.labelKey),
+            }))}
+            value={general.pdfPageFitMode}
+            onChange={(pdfPageFitMode) =>
+              setGeneral({
+                pdfPageFitMode: pdfPageFitMode as ReaderPdfPageFitMode,
+              })
+            }
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("readerSettings.htmlImagePagingMode")}
+          description={t("readerSettings.htmlImagePagingMode.description")}
+        >
+          <SegmentedToggle
+            data={HTML_IMAGE_PAGING_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.labelKey),
+            }))}
+            value={general.htmlImagePagingMode}
+            onChange={(htmlImagePagingMode) =>
+              setGeneral({
+                htmlImagePagingMode:
+                  htmlImagePagingMode as ReaderHtmlImagePagingMode,
+              })
+            }
           />
         </SettingsFieldRow>
         <SettingsFieldRow

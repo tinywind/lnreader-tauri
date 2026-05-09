@@ -1064,56 +1064,61 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
             <TextInput
               autoFocus
               label={t("library.localNovel.name")}
-              onChange={(event) =>
+              onChange={(event) => {
+                const { value } = event.currentTarget;
                 setLocalNovelForm((current) => ({
                   ...current,
-                  name: event.currentTarget.value,
-                }))
-              }
+                  name: value,
+                }));
+              }}
               required
               value={localNovelForm.name}
             />
             <Group grow>
               <TextInput
                 label={t("library.localNovel.author")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalNovelForm((current) => ({
                     ...current,
-                    author: event.currentTarget.value,
-                  }))
-                }
+                    author: value,
+                  }));
+                }}
                 value={localNovelForm.author ?? ""}
               />
               <TextInput
                 label={t("library.localNovel.artist")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalNovelForm((current) => ({
                     ...current,
-                    artist: event.currentTarget.value,
-                  }))
-                }
+                    artist: value,
+                  }));
+                }}
                 value={localNovelForm.artist ?? ""}
               />
             </Group>
             <Group grow>
               <TextInput
                 label={t("library.localNovel.status")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalNovelForm((current) => ({
                     ...current,
-                    status: event.currentTarget.value,
-                  }))
-                }
+                    status: value,
+                  }));
+                }}
                 value={localNovelForm.status ?? ""}
               />
               <TextInput
                 label={t("library.localNovel.genres")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalNovelForm((current) => ({
                     ...current,
-                    genres: event.currentTarget.value,
-                  }))
-                }
+                    genres: value,
+                  }));
+                }}
                 value={localNovelForm.genres ?? ""}
               />
             </Group>
@@ -1132,12 +1137,13 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
               autosize
               label={t("library.localNovel.summary")}
               minRows={4}
-              onChange={(event) =>
+              onChange={(event) => {
+                const { value } = event.currentTarget;
                 setLocalNovelForm((current) => ({
                   ...current,
-                  summary: event.currentTarget.value,
-                }))
-              }
+                  summary: value,
+                }));
+              }}
               value={localNovelForm.summary ?? ""}
             />
             {createLocalNovelMutation.error ? (

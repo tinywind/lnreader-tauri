@@ -38,10 +38,8 @@ import {
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { pluginManager } from "../lib/plugins/manager";
 import type { NovelItem, Plugin } from "../lib/plugins/types";
-import {
-  enqueueOpenSiteTask,
-  enqueueSourceTask,
-} from "../lib/tasks/source-tasks";
+import { enqueueMainTask } from "../lib/tasks/main-tasks";
+import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { useBrowseStore } from "../store/browse";
 import "../styles/browse.css";
 
@@ -1017,21 +1015,17 @@ export function PluginSearchSection({
       setOpeningKey(key);
       setOpenError(null);
       try {
-        const id = await enqueueSourceTask<number>({
-          plugin,
+        const id = await enqueueMainTask<number>({
           kind: "source.openNovel",
           priority: "interactive",
           title: t("tasks.task.openNovel", { name: novel.name }),
-          subject: { novelName: novel.name, path: novel.path },
+          subject: {
+            novelName: novel.name,
+            path: novel.path,
+            pluginId: plugin.id,
+          },
           dedupeKey: `source.openNovel:${plugin.id}:${novel.path}`,
-          run: (context) =>
-            importNovelFromSource(
-              pluginManager.getPluginForExecutor(
-                plugin.id,
-                context.executor ?? "immediate",
-              ),
-              novel,
-            ),
+          run: () => importNovelFromSource(plugin, novel),
         }).promise;
         await queryClient.invalidateQueries({ queryKey: ["novel"] });
         await navigate({ to: "/novel", search: { id } });

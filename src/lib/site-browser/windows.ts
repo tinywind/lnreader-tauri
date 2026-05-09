@@ -29,6 +29,17 @@ function fullWindowBounds(): SiteBrowserBounds {
   return bounds;
 }
 
+function rectBounds(node: HTMLDivElement | null): SiteBrowserBounds | null {
+  if (!node) return null;
+  const rect = node.getBoundingClientRect();
+  return {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
 function invokeArgs(bounds: SiteBrowserBounds, url: string): {
   url: string;
   x: number;
@@ -49,8 +60,8 @@ function invokeArgs(bounds: SiteBrowserBounds, url: string): {
 
 export const windowsSiteBrowser: SiteBrowserPlatformApi = {
   name: "windows",
-  chromeMode: "in-page",
-  boundsFor: () => fullWindowBounds(),
+  chromeMode: "react",
+  boundsFor: (node) => rectBounds(node) ?? fullWindowBounds(),
   setBounds: async (bounds, url) => {
     if (!url) {
       debugWindowsSiteBrowser("setBounds skipped: url is empty", { bounds });

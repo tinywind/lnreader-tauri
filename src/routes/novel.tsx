@@ -1715,56 +1715,61 @@ export function NovelDetailPage() {
             <TextInput
               autoFocus
               label={t("library.localNovel.name")}
-              onChange={(event) =>
+              onChange={(event) => {
+                const { value } = event.currentTarget;
                 setLocalMetadataForm((current) => ({
                   ...current,
-                  name: event.currentTarget.value,
-                }))
-              }
+                  name: value,
+                }));
+              }}
               required
               value={localMetadataForm.name}
             />
             <Group grow>
               <TextInput
                 label={t("library.localNovel.author")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalMetadataForm((current) => ({
                     ...current,
-                    author: event.currentTarget.value,
-                  }))
-                }
+                    author: value,
+                  }));
+                }}
                 value={localMetadataForm.author ?? ""}
               />
               <TextInput
                 label={t("library.localNovel.artist")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalMetadataForm((current) => ({
                     ...current,
-                    artist: event.currentTarget.value,
-                  }))
-                }
+                    artist: value,
+                  }));
+                }}
                 value={localMetadataForm.artist ?? ""}
               />
             </Group>
             <Group grow>
               <TextInput
                 label={t("library.localNovel.status")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalMetadataForm((current) => ({
                     ...current,
-                    status: event.currentTarget.value,
-                  }))
-                }
+                    status: value,
+                  }));
+                }}
                 value={localMetadataForm.status ?? ""}
               />
               <TextInput
                 label={t("library.localNovel.genres")}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const { value } = event.currentTarget;
                   setLocalMetadataForm((current) => ({
                     ...current,
-                    genres: event.currentTarget.value,
-                  }))
-                }
+                    genres: value,
+                  }));
+                }}
                 value={localMetadataForm.genres ?? ""}
               />
             </Group>
@@ -1783,12 +1788,13 @@ export function NovelDetailPage() {
               autosize
               label={t("library.localNovel.summary")}
               minRows={4}
-              onChange={(event) =>
+              onChange={(event) => {
+                const { value } = event.currentTarget;
                 setLocalMetadataForm((current) => ({
                   ...current,
-                  summary: event.currentTarget.value,
-                }))
-              }
+                  summary: value,
+                }));
+              }}
               value={localMetadataForm.summary ?? ""}
             />
             {updateLocalMetadata.error ? (

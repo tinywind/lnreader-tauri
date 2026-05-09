@@ -3,8 +3,20 @@ import { pluginFetch } from "./http";
 import { isTauriRuntime } from "./tauri-runtime";
 
 const LOCAL_MEDIA_SRC_PREFIX = "norea-media://chapter/";
-const IMAGE_SOURCE_SELECTOR = "img[src]";
+const MEDIA_SRC_ATTRIBUTES = [
+  "src",
+  "data-src",
+  "data-original",
+  "data-lazy-src",
+  "data-orig-src",
+] as const;
+const MEDIA_SOURCE_SELECTOR = [
+  ...MEDIA_SRC_ATTRIBUTES.map((attribute) => `img[${attribute}]`),
+  "img[srcset]",
+  "source[srcset]",
+].join(",");
 const DEFAULT_MEDIA_EXTENSION = "bin";
+type MediaSrcAttribute = (typeof MEDIA_SRC_ATTRIBUTES)[number];
 
 interface CacheChapterMediaOptions {
   baseUrl: string;
@@ -25,6 +37,22 @@ interface ChapterMediaStoreInput {
   cacheKey: string;
   chapterId: number;
   fileName: string;
+}
+
+interface MediaSrcTarget {
+  attribute: MediaSrcAttribute;
+  element: Element;
+  url: string;
+}
+
+interface SrcsetCandidate {
+  descriptor: string;
+  source: string;
+}
+
+interface MediaSrcsetTarget {
+  candidates: SrcsetCandidate[];
+  element: Element;
 }
 
 function isSkippableMediaSource(src: string): boolean {
@@ -142,6 +170,77 @@ async function storeChapterMedia({
   });
 }
 
+function parseSrcset(srcset: string): SrcsetCandidate[] {
+  return srcset
+    .split(",")
+    .map((candidate) => candidate.trim())
+    .filter(Boolean)
+    .map((candidate) => {
+      const [source = "", ...descriptor] = candidate.split(/\s+/);
+      return {
+        source,
+        descriptor: descriptor.join(" "),
+      };
+    })
+    .filter((candidate) => candidate.source !== "");
+}
+
+function formatSrcset(candidates: SrcsetCandidate[]): string {
+  return candidates
+    .map((candidate) =>
+      candidate.descriptor
+        ? `${candidate.source} ${candidate.descriptor}`
+        : candidate.source,
+    )
+    .join(", ");
+}
+
+function addUniqueUrl(urls: string[], url: string): void {
+  if (!urls.includes(url)) {
+    urls.push(url);
+  }
+}
+
+function collectMediaTargets(
+  root: DocumentFragment,
+  baseUrl: string,
+): {
+  srcTargets: MediaSrcTarget[];
+  srcsetTargets: MediaSrcsetTarget[];
+  urls: string[];
+} {
+  const srcTargets: MediaSrcTarget[] = [];
+  const srcsetTargets: MediaSrcsetTarget[] = [];
+  const urls: string[] = [];
+
+  for (const element of root.querySelectorAll<Element>(MEDIA_SOURCE_SELECTOR)) {
+    for (const attribute of MEDIA_SRC_ATTRIBUTES) {
+      const rawSource = element.getAttribute(attribute);
+      if (!rawSource) continue;
+      const url = absoluteMediaUrl(rawSource, baseUrl);
+      if (!url) continue;
+      srcTargets.push({ attribute, element, url });
+      addUniqueUrl(urls, url);
+    }
+
+    const rawSrcset = element.getAttribute("srcset");
+    if (!rawSrcset) continue;
+    const candidates = parseSrcset(rawSrcset);
+    let hasRemoteCandidate = false;
+    for (const candidate of candidates) {
+      const url = absoluteMediaUrl(candidate.source, baseUrl);
+      if (!url) continue;
+      hasRemoteCandidate = true;
+      addUniqueUrl(urls, url);
+    }
+    if (hasRemoteCandidate) {
+      srcsetTargets.push({ candidates, element });
+    }
+  }
+
+  return { srcTargets, srcsetTargets, urls };
+}
+
 export async function cacheHtmlChapterMedia({
   baseUrl,
   chapterId,
@@ -156,33 +255,27 @@ export async function cacheHtmlChapterMedia({
 
   const template = document.createElement("template");
   template.innerHTML = html;
-  const targets = [...template.content.querySelectorAll<HTMLImageElement>(
-    IMAGE_SOURCE_SELECTOR,
-  )]
-    .map((element) => ({
-      element,
-      url: absoluteMediaUrl(element.getAttribute("src") ?? "", baseUrl),
-    }))
-    .filter(
-      (target): target is { element: HTMLImageElement; url: string } =>
-        target.url !== null,
-    );
+  const { srcTargets, srcsetTargets, urls } = collectMediaTargets(
+    template.content,
+    baseUrl,
+  );
 
-  if (targets.length === 0) {
+  if (urls.length === 0) {
     return { cacheKey: null, html: template.innerHTML };
   }
 
   const cacheKey = makeCacheKey();
-  for (let index = 0; index < targets.length; index += 1) {
+  const localSources = new Map<string, string>();
+  for (let index = 0; index < urls.length; index += 1) {
     throwIfAborted(signal);
-    const target = targets[index]!;
-    const response = await pluginFetch(target.url, {
+    const url = urls[index]!;
+    const response = await pluginFetch(url, {
       contextUrl: contextUrl ?? baseUrl,
       signal,
     });
     if (!response.ok) {
       throw new Error(
-        `HTTP ${response.status} ${response.statusText} on ${target.url}`,
+        `HTTP ${response.status} ${response.statusText} on ${url}`,
       );
     }
     const body = bytesFromArrayBuffer(await response.arrayBuffer());
@@ -192,12 +285,32 @@ export async function cacheHtmlChapterMedia({
       chapterId,
       fileName: mediaFileName(
         index,
-        target.url,
+        url,
         response.headers.get("content-type"),
       ),
     });
+    localSources.set(url, src);
+    onProgress?.({ current: index + 1, total: urls.length });
+  }
+
+  for (const target of srcTargets) {
+    const src = localSources.get(target.url);
+    if (!src) continue;
     target.element.setAttribute("src", src);
-    onProgress?.({ current: index + 1, total: targets.length });
+    if (target.attribute !== "src") {
+      target.element.removeAttribute(target.attribute);
+    }
+  }
+
+  for (const target of srcsetTargets) {
+    const candidates = target.candidates.map((candidate) => {
+      const url = absoluteMediaUrl(candidate.source, baseUrl);
+      return {
+        ...candidate,
+        source: url ? (localSources.get(url) ?? candidate.source) : candidate.source,
+      };
+    });
+    target.element.setAttribute("srcset", formatSrcset(candidates));
   }
 
   return {
@@ -218,24 +331,51 @@ export async function resolveLocalChapterMedia(html: string): Promise<string> {
   const template = document.createElement("template");
   template.innerHTML = html;
   const mediaElements = [
-    ...template.content.querySelectorAll<HTMLImageElement>(
-      IMAGE_SOURCE_SELECTOR,
-    ),
-  ].filter((element) =>
-    (element.getAttribute("src") ?? "").startsWith(LOCAL_MEDIA_SRC_PREFIX),
-  );
+    ...template.content.querySelectorAll<Element>(MEDIA_SOURCE_SELECTOR),
+  ];
+
+  const resolveMediaSrc = async (src: string): Promise<string | null> => {
+    if (!src.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return src;
+    try {
+      const localPath = await invoke<string>("chapter_media_path", {
+        mediaSrc: src,
+      });
+      return convertFileSrc(localPath);
+    } catch {
+      return null;
+    }
+  };
 
   await Promise.all(
     mediaElements.map(async (element) => {
-      const src = element.getAttribute("src");
-      if (!src) return;
-      try {
-        const localPath = await invoke<string>("chapter_media_path", {
-          mediaSrc: src,
-        });
-        element.setAttribute("src", convertFileSrc(localPath));
-      } catch {
-        element.removeAttribute("src");
+      for (const attribute of MEDIA_SRC_ATTRIBUTES) {
+        const rawSource = element.getAttribute(attribute);
+        if (!rawSource?.startsWith(LOCAL_MEDIA_SRC_PREFIX)) continue;
+        const src = await resolveMediaSrc(rawSource);
+        if (src) {
+          element.setAttribute("src", src);
+        } else if (attribute === "src") {
+          element.removeAttribute("src");
+        }
+        if (attribute !== "src") {
+          element.removeAttribute(attribute);
+        }
+      }
+
+      const rawSrcset = element.getAttribute("srcset");
+      if (!rawSrcset?.includes(LOCAL_MEDIA_SRC_PREFIX)) return;
+      const resolvedCandidates = (
+        await Promise.all(
+          parseSrcset(rawSrcset).map(async (candidate) => {
+            const src = await resolveMediaSrc(candidate.source);
+            return src ? { ...candidate, source: src } : null;
+          }),
+        )
+      ).filter((candidate): candidate is SrcsetCandidate => candidate !== null);
+      if (resolvedCandidates.length > 0) {
+        element.setAttribute("srcset", formatSrcset(resolvedCandidates));
+      } else {
+        element.removeAttribute("srcset");
       }
     }),
   );

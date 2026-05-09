@@ -72,12 +72,13 @@ export type MainTaskKind =
   | "plugin.install"
   | "plugin.uninstall";
 
+export type MainLaneTaskKind = MainTaskKind | "source.openNovel";
+
 export type SourceTaskKind =
   | "source.openSite"
   | "source.listPopular"
   | "source.listLatest"
   | "source.search"
-  | "source.openNovel"
   | "source.refreshNovel"
   | "source.checkLibraryUpdates"
   | "source.globalSearch";
@@ -86,7 +87,7 @@ export type ChapterTaskKind =
   | "chapter.download"
   | "chapter.deleteDownload";
 
-export type TaskKind = MainTaskKind | SourceTaskKind | ChapterTaskKind;
+export type TaskKind = MainLaneTaskKind | SourceTaskKind | ChapterTaskKind;
 
 export interface TaskSource {
   id: string;
@@ -171,7 +172,7 @@ export interface TaskSpec<T> {
 
 export interface MainTaskSpec<T>
   extends Omit<TaskSpec<T>, "lane" | "source"> {
-  kind: MainTaskKind;
+  kind: MainLaneTaskKind;
 }
 
 export interface SourceTaskSpec<T> extends Omit<TaskSpec<T>, "lane"> {

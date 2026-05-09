@@ -58,6 +58,8 @@ const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
 const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
+const READER_MEDIA_EVENT_SELECTOR =
+  "img,picture,svg,video,audio,canvas,iframe,figure";
 
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
@@ -76,8 +78,29 @@ function getTwoPageMediaMatches(): boolean {
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (isReaderMediaEventTarget(target)) return true;
   if (!(target instanceof HTMLElement)) return false;
   return !!target.closest("button,a,input,select,textarea,[role='button']");
+}
+
+function getReaderEventElement(target: EventTarget | null): Element | null {
+  if (target instanceof Element) return target;
+  if (target instanceof Node) return target.parentElement;
+  return null;
+}
+
+function isReaderMediaEventTarget(target: EventTarget | null): boolean {
+  const element = getReaderEventElement(target);
+  if (!element) return false;
+  if (element.closest(READER_MEDIA_EVENT_SELECTOR)) return true;
+  const link = element.closest("a");
+  return !!link?.querySelector(READER_MEDIA_EVENT_SELECTOR);
+}
+
+function stopReaderMediaClick(event: MouseEvent<HTMLDivElement>): void {
+  if (!isReaderMediaEventTarget(event.target)) return;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function formatClock(date: Date, locale: AppLocale): string {
@@ -480,6 +503,7 @@ function ReaderContentInner(
     appearance.lineHeight,
     appearance.padding,
     appearance.textSize,
+    general.htmlImagePagingMode,
     viewportWidth,
     visiblePageColumns,
     restoreProgressPosition,
@@ -723,6 +747,8 @@ function ReaderContentInner(
     <Box
       ref={viewportRef}
       className={viewportClassName}
+      onClickCapture={stopReaderMediaClick}
+      onDoubleClickCapture={stopReaderMediaClick}
       onClick={handleClick}
       onScroll={updateProgressFromScroll}
       onWheel={handleWheel}
@@ -763,6 +789,9 @@ function ReaderContentInner(
       <Box
         ref={contentRef}
         className="reader-content"
+        data-image-paging={
+          isPagedReader ? general.htmlImagePagingMode : undefined
+        }
         style={{
           ...contentStyle,
           ...pageStyle,
@@ -771,9 +800,22 @@ function ReaderContentInner(
       />
       <style>
         {`
-          .reader-content img {
+          .reader-content :where(img, svg, video, canvas, iframe) {
             max-width: 100%;
             height: auto;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="auto"] :where(img, svg, video, canvas, iframe) {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="next-page"] :where(img, svg, video, canvas, iframe) {
+            break-before: column;
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .reader-viewport-paged .reader-content[data-image-paging="fragment"] :where(img, svg, video, canvas, iframe) {
+            break-inside: auto;
+            page-break-inside: auto;
           }
           .reader-content p {
             margin-block: ${

@@ -22,7 +22,8 @@ but it is a separate app with its own data, backup, and source system.
 
 - Browse and search installed reading sources.
 - Add novels to your library and organize them with categories.
-- Import local `.txt`, `.html`, `.epub`, and `.pdf` files.
+- Import local plain text, HTML, and PDF files.
+- Download images from HTML `<img>` tags for local reading.
 - Create local novel homes, add chapter files later, reorder local chapters, and
   manage local metadata with locally uploaded cover images.
 - Read in paged or scrolling mode.
@@ -94,7 +95,7 @@ To add the sample source list:
 3. Paste this URL:
 
    ```text
-   https://raw.githubusercontent.com/tinywind/norea-plugins/plugins/v0.1.0/.dist/plugins.min.json
+   https://raw.githubusercontent.com/tinywind/norea-plugins/main-dist/plugins/v0.1.0/.dist/plugins.min.json
    ```
 
 4. Save it.

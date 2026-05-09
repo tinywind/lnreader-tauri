@@ -43,6 +43,7 @@ import {
   writeSourceFilters,
 } from "../lib/plugins/source-filter-storage";
 import type { NovelItem, Plugin } from "../lib/plugins/types";
+import { enqueueMainTask } from "../lib/tasks/main-tasks";
 import {
   enqueueOpenSiteTask,
   enqueueSourceTask,
@@ -296,21 +297,17 @@ export function SourcePage() {
   const open = useMutation({
     mutationFn: async (item: NovelItem) => {
       if (!plugin) throw new Error(t("source.pluginNotLoaded"));
-      return enqueueSourceTask<number>({
-        plugin,
+      return enqueueMainTask<number>({
         kind: "source.openNovel",
         priority: "interactive",
         title: t("tasks.task.openNovel", { name: item.name }),
-        subject: { novelName: item.name, path: item.path },
+        subject: {
+          novelName: item.name,
+          path: item.path,
+          pluginId: plugin.id,
+        },
         dedupeKey: `source.openNovel:${plugin.id}:${item.path}`,
-        run: (context) =>
-          importNovelFromSource(
-            pluginManager.getPluginForExecutor(
-              plugin.id,
-              context.executor ?? "immediate",
-            ),
-            item,
-          ),
+        run: () => importNovelFromSource(plugin, item),
       }).promise;
     },
     onSuccess: (novelId) => {

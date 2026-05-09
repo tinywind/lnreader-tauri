@@ -139,6 +139,12 @@ function sortByName<T extends PluginItem>(plugins: readonly T[]): T[] {
   );
 }
 
+function sortEntriesByName(entries: readonly AvailableEntry[]): AvailableEntry[] {
+  return [...entries].sort((a, b) =>
+    (a.item.name ?? a.item.id).localeCompare(b.item.name ?? b.item.id),
+  );
+}
+
 /**
  * Cache-first index loader.
  *
@@ -249,13 +255,13 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
     staleTime: 0,
   });
 
-  const [forceRefreshNext, setForceRefreshNext] = useState(false);
+  const forceRefreshNextRef = useRef(false);
 
   const available = useQuery({
     queryKey: AVAILABLE_QUERY_KEY,
     queryFn: async () => {
-      const force = forceRefreshNext;
-      setForceRefreshNext(false);
+      const force = forceRefreshNextRef.current;
+      forceRefreshNextRef.current = false;
       if (!force) return fetchAllAvailable(repos.data ?? [], force);
       return enqueueMainTask({
         kind: "repository.refreshIndex",
@@ -321,11 +327,13 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   );
   const filteredAvailableEntries = useMemo(
     () =>
-      availableEntries.filter(
-        ({ item }) =>
-          !installedIds.has(item.id) &&
-          (pluginLanguageFilter.length === 0 ||
-            pluginLanguageFilter.includes(item.lang)),
+      sortEntriesByName(
+        availableEntries.filter(
+          ({ item }) =>
+            !installedIds.has(item.id) &&
+            (pluginLanguageFilter.length === 0 ||
+              pluginLanguageFilter.includes(item.lang)),
+        ),
       ),
     [availableEntries, installedIds, pluginLanguageFilter],
   );
@@ -556,7 +564,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
                 setAddOpen(true);
               }}
               onRefresh={() => {
-                setForceRefreshNext(true);
+                forceRefreshNextRef.current = true;
                 void queryClient.invalidateQueries({
                   queryKey: AVAILABLE_QUERY_KEY,
                 });

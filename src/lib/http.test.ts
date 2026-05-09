@@ -3,12 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
-vi.mock("@tauri-apps/plugin-http", () => ({
-  fetch: vi.fn(),
-}));
-
 import { invoke } from "@tauri-apps/api/core";
-import { pluginFetch, pluginFetchText } from "./http";
+import { appFetchText, pluginFetch, pluginFetchText } from "./http";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -33,6 +29,93 @@ function wireOk(
     finalUrl: overrides.finalUrl ?? "https://ok.test/",
   };
 }
+
+function appFetchBody(body: string): number[] {
+  return [...new TextEncoder().encode(body), 1];
+}
+
+function mockAppFetch(
+  body: string,
+  overrides: Partial<{
+    status: number;
+    statusText: string;
+    headers: HeadersInit;
+    url: string;
+  }> = {},
+): void {
+  invokeMock
+    .mockResolvedValueOnce(100)
+    .mockResolvedValueOnce({
+      status: overrides.status ?? 200,
+      statusText: overrides.statusText ?? "OK",
+      url: overrides.url ?? "https://ok.test/",
+      headers: overrides.headers ?? { "content-type": "text/plain" },
+      rid: 101,
+    })
+    .mockResolvedValueOnce(appFetchBody(body));
+}
+
+describe("appFetchText", () => {
+  it("passes credential URLs to low-level app fetch without rewriting them", async () => {
+    const url =
+      "https://x-access-token:ghp_secret@raw.githubusercontent.com/owner/repo/branch/plugins.json";
+    mockAppFetch("[]", {
+      headers: { "content-type": "application/json" },
+      url,
+    });
+
+    await expect(appFetchText(url)).resolves.toBe("[]");
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "plugin:http|fetch", {
+      clientConfig: {
+        data: null,
+        headers: [],
+        method: "GET",
+        url,
+      },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "plugin:http|fetch_send", {
+      rid: 100,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      3,
+      "plugin:http|fetch_read_body",
+      { rid: 101 },
+    );
+  });
+
+  it("rebuilds the app fetch response and preserves the final URL", async () => {
+    mockAppFetch("ok", { url: "https://example.test/after.js" });
+
+    await expect(appFetchText("https://example.test/plugin.js")).resolves.toBe(
+      "ok",
+    );
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "plugin:http|fetch", {
+      clientConfig: {
+        data: null,
+        headers: [],
+        method: "GET",
+        url: "https://example.test/plugin.js",
+      },
+    });
+  });
+
+  it("throws on a non-2xx app fetch response with a status-aware message", async () => {
+    mockAppFetch("missing", {
+      status: 404,
+      statusText: "Not Found",
+      headers: { "content-type": "text/plain" },
+      url: "https://example.test/missing.js",
+    });
+
+    await expect(
+      appFetchText("https://example.test/missing.js"),
+    ).rejects.toThrow(
+      /HTTP 404 Not Found on https:\/\/example\.test\/missing\.js/,
+    );
+  });
+});
 
 describe("pluginFetch", () => {
   it("forwards url + init to the webview_fetch IPC and rebuilds a Response", async () => {
