@@ -189,6 +189,48 @@ describe("TaskScheduler", () => {
     expect(order).toEqual(["active:start", "user:start"]);
   });
 
+  it("lets interactive source browsing use the immediate executor during background downloads", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    const order: string[] = [];
+    let finishDownload!: () => void;
+
+    const download = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Background download",
+      priority: "background",
+      source: { id: "p", name: "Plugin", site: "https://example.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`download:${context.executor}:start`);
+          finishDownload = resolve;
+        }),
+    });
+
+    await settle();
+
+    const browse = scheduler.enqueueSource({
+      kind: "source.listPopular",
+      title: "Open source",
+      priority: "interactive",
+      source: { id: "p", name: "Plugin", site: "https://example.test" },
+      run: async (context) => {
+        order.push(`browse:${context.executor}:start`);
+      },
+    });
+
+    await browse.promise;
+    expect(order).toEqual([
+      "download:pool:0:start",
+      "browse:immediate:start",
+    ]);
+
+    finishDownload();
+    await download.promise;
+  });
+
   it("reserves the immediate executor for open site work without blocking the pool", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 1,
@@ -262,6 +304,61 @@ describe("TaskScheduler", () => {
 
     expect(order).toEqual(["site:immediate:start"]);
     expect(scheduler.getTask(search.id)?.status).toBe("queued");
+  });
+
+  it("pauses running source work and requeues it", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: false,
+    });
+    const startedSignals: AbortSignal[] = [];
+    let runCount = 0;
+
+    const download = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Download",
+      priority: "background",
+      source: { id: "p", name: "Plugin" },
+      run: (context) => {
+        runCount += 1;
+        startedSignals.push(context.signal);
+        if (runCount > 1) return Promise.resolve();
+
+        return new Promise<void>((_resolve, reject) => {
+          context.signal.addEventListener(
+            "abort",
+            () =>
+              reject(new DOMException("Task was cancelled.", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+    });
+    let settled = false;
+    void download.promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await settle();
+    expect(scheduler.getTask(download.id)?.status).toBe("running");
+
+    expect(scheduler.pauseSourceQueue()).toBe(true);
+    await settle();
+
+    expect(startedSignals[0]?.aborted).toBe(true);
+    expect(settled).toBe(false);
+    expect(scheduler.getTask(download.id)?.status).toBe("queued");
+
+    expect(scheduler.resumeSourceQueue()).toBe(true);
+    await download.promise;
+
+    expect(runCount).toBe(2);
+    expect(scheduler.getTask(download.id)?.status).toBe("succeeded");
   });
 
   it("limits background work inside the shared pool", async () => {

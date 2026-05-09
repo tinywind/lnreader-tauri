@@ -20,6 +20,7 @@ export interface ChapterRow {
   content: string | null;
   contentType: ChapterContentType;
   contentBytes: number;
+  mediaBytes: number;
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number | null;
@@ -43,6 +44,7 @@ const CHAPTER_LIST_SELECT_FIELDS = `
   is_downloaded  AS isDownloaded,
   content_type   AS contentType,
   content_bytes   AS contentBytes,
+  media_bytes     AS mediaBytes,
   release_time   AS releaseTime,
   read_at        AS readAt,
   created_at     AS createdAt,
@@ -98,6 +100,10 @@ export interface InsertChapterInput {
 
 export interface ChapterMutationResult {
   rowsAffected: number;
+}
+
+export interface SaveChapterContentOptions {
+  mediaBytes?: number;
 }
 
 export async function insertChapterIfAbsent(
@@ -251,6 +257,7 @@ export async function saveChapterContent(
   chapterId: number,
   html: string,
   contentType: ChapterContentType = DEFAULT_CHAPTER_CONTENT_TYPE,
+  options: SaveChapterContentOptions = {},
 ): Promise<ChapterMutationResult> {
   const db = await getDb();
   const result = await db.execute(
@@ -259,7 +266,33 @@ export async function saveChapterContent(
        content        = $2,
        content_type   = $3,
        content_bytes  = $4,
+       media_bytes    = $5,
        is_downloaded  = 1,
+       updated_at     = unixepoch()
+     WHERE id = $1`,
+    [
+      chapterId,
+      html,
+      normalizeChapterContentType(contentType),
+      getUtf8ByteLength(html),
+      options.mediaBytes ?? 0,
+    ],
+  );
+  return { rowsAffected: result.rowsAffected };
+}
+
+export async function saveChapterPartialContent(
+  chapterId: number,
+  html: string,
+  contentType: ChapterContentType = DEFAULT_CHAPTER_CONTENT_TYPE,
+): Promise<ChapterMutationResult> {
+  const db = await getDb();
+  const result = await db.execute(
+    `UPDATE chapter
+     SET
+       content        = $2,
+       content_type   = $3,
+       content_bytes  = $4,
        updated_at     = unixepoch()
      WHERE id = $1`,
     [
@@ -292,6 +325,7 @@ export async function clearChapterContent(
      SET
        content        = NULL,
        content_bytes  = 0,
+       media_bytes    = 0,
        is_downloaded  = 0,
        updated_at     = unixepoch()
      WHERE id = $1

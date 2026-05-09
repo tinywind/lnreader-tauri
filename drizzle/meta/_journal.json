@@ -71,6 +71,13 @@
       "when": 1778262077721,
       "tag": "0009_mushy_skrulls",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1778400000000,
+      "tag": "0010_breezy_media_bytes",
+      "breakpoints": true
     }
   ]
 }

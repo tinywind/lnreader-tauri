@@ -256,9 +256,10 @@ describe("saveChapterContent", () => {
     expect(sql).toContain("content");
     expect(sql).toContain("content_type   = $3");
     expect(sql).toContain("content_bytes  = $4");
+    expect(sql).toContain("media_bytes    = $5");
     expect(sql).toContain("is_downloaded  = 1");
     expect(sql).toContain("updated_at     = unixepoch()");
-    expect(params).toEqual([7, "<p>hello</p>", "html", 12]);
+    expect(params).toEqual([7, "<p>hello</p>", "html", 12, 0]);
     expect(result).toEqual({ rowsAffected: 1 });
   });
 });
@@ -287,6 +288,7 @@ describe("clearChapterContent", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content        = NULL");
     expect(sql).toContain("content_bytes  = 0");
+    expect(sql).toContain("media_bytes    = 0");
     expect(sql).toContain("is_downloaded  = 0");
     expect(sql).toContain("FROM novel");
     expect(sql).toContain("is_local = 0");

@@ -45,6 +45,7 @@ const VALID_MANIFEST: BackupManifest = {
       isDownloaded: false,
       contentType: "html",
       content: null,
+      mediaBytes: 0,
       releaseTime: null,
       readAt: null,
       createdAt: 1_700_000_000,

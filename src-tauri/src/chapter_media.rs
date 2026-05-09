@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, io::ErrorKind, path::PathBuf};
 
 use tauri::{AppHandle, Manager};
 
@@ -135,6 +135,28 @@ pub fn chapter_media_path(app: AppHandle, media_src: String) -> Result<String, S
         return Err("chapter media: file not found".to_string());
     }
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn chapter_media_total_size(
+    app: AppHandle,
+    media_srcs: Vec<String>,
+) -> Result<u64, String> {
+    let mut total = 0;
+    for media_src in media_srcs {
+        let path = chapter_media_path_from_src(&app, &media_src)?;
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {
+                total += metadata.len();
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!("chapter media: read media metadata: {err}"));
+            }
+        }
+    }
+    Ok(total)
 }
 
 #[tauri::command]

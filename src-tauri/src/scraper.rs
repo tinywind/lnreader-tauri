@@ -401,7 +401,7 @@ const IMMEDIATE_EXECUTOR: &str = "immediate";
 #[cfg(desktop)]
 fn log_windows_scraper_event(message: &str) {
     if cfg!(target_os = "windows") {
-        log::debug!("[scraper:windows] {message}");
+        log::trace!("[scraper:windows] {message}");
     }
 }
 
@@ -478,9 +478,6 @@ fn scraper_handle_for_key(
     key: &str,
     user_agent: Option<&str>,
 ) -> Result<ScraperWebview, String> {
-    if cfg!(target_os = "windows") {
-        log::debug!("[scraper:windows] handle_for_key start key={key}");
-    }
     let existing_entry = state
         .webviews
         .lock()
@@ -491,12 +488,6 @@ fn scraper_handle_for_key(
         if existing_entry.user_agent.as_deref() != user_agent {
             log::warn!(
                 "[scraper] queue {key} already has a WebView user agent; keeping the existing queue WebView"
-            );
-        }
-        if cfg!(target_os = "windows") {
-            log::debug!(
-                "[scraper:windows] handle_for_key registered label={}",
-                existing_entry.label
             );
         }
         if let Some(webview) = app.get_webview(&existing_entry.label) {
@@ -512,9 +503,7 @@ fn scraper_handle_for_key(
     }
 
     let label = scraper_label_from_key(key);
-    if cfg!(target_os = "windows") {
-        log::debug!("[scraper:windows] handle_for_key computed label={label}");
-    }
+    log::trace!("[scraper] handle_for_key computed key={key} label={label}");
     if let Some(webview) = app.get_webview(&label) {
         log_windows_scraper_event("handle_for_key unregistered webview found");
         state
@@ -619,7 +608,7 @@ fn set_webview_bounds(
     context: &str,
 ) -> Result<(), String> {
     if cfg!(target_os = "windows") {
-        log::debug!(
+        log::trace!(
             "[scraper:windows] set_webview_bounds context={context} x={x} y={y} width={width} height={height}"
         );
     }
@@ -729,7 +718,7 @@ pub async fn scraper_set_bounds(
 ) -> Result<(), String> {
     let user_agent = normalize_user_agent(user_agent);
     if cfg!(target_os = "windows") {
-        log::debug!(
+        log::trace!(
             "[scraper:windows] scraper_set_bounds start url={url} x={x} y={y} width={width} height={height}"
         );
     }
@@ -741,6 +730,7 @@ pub async fn scraper_set_bounds(
         .lock()
         .expect("scraper visible_key mutex")
         .clone();
+    let became_visible = previous_key.as_deref() != Some(key.as_str());
     if previous_key.as_deref() != Some(key.as_str()) {
         if let Some(previous_key) = previous_key {
             if let Some(previous) = state
@@ -764,6 +754,18 @@ pub async fn scraper_set_bounds(
         .map_err(|err| format!("scraper: show: {err}"))?;
     log_windows_scraper_event("scraper_set_bounds show complete");
     set_webview_bounds(&scraper, safe_x, safe_y, safe_w, safe_h, "browser")?;
+    if became_visible {
+        let parsed: Url = url
+            .parse()
+            .map_err(|err| format!("scraper_set_bounds: invalid url '{url}': {err}"))?;
+        scraper
+            .navigate(parsed)
+            .map_err(|err| format!("scraper_set_bounds: navigate: {err}"))?;
+        *state
+            .last_navigated
+            .lock()
+            .expect("scraper last_navigated mutex") = Some(url);
+    }
     *state.visible_key.lock().expect("scraper visible_key mutex") = Some(key);
     log_windows_scraper_event("scraper_set_bounds complete");
     Ok(())
@@ -850,7 +852,7 @@ pub async fn scraper_poll_control_message(
     .await?;
     if let Some(message) = &message {
         if cfg!(target_os = "windows") {
-            log::debug!(
+            log::trace!(
                 "[scraper:windows] scraper_poll_control_message action={} sequence={:?}",
                 message.action,
                 message.sequence
@@ -917,7 +919,7 @@ pub async fn scraper_navigate(
 ) -> Result<(), String> {
     let user_agent = normalize_user_agent(user_agent);
     if cfg!(target_os = "windows") {
-        log::debug!("[scraper:windows] scraper_navigate start url={url}");
+        log::trace!("[scraper:windows] scraper_navigate start url={url}");
     }
     let scraper =
         scraper_handle_for_key(&app, &state, IMMEDIATE_EXECUTOR, user_agent.as_deref())?;
@@ -933,7 +935,7 @@ pub async fn scraper_navigate(
         .expect("scraper last_navigated mutex") = Some(url);
     log_windows_scraper_event("scraper_navigate complete");
     if cfg!(target_os = "linux") {
-        log::debug!("[scraper:linux] scraper_navigate complete");
+        log::trace!("[scraper:linux] scraper_navigate complete");
     }
     Ok(())
 }
@@ -1071,15 +1073,10 @@ fn fetch_init_for_log(init: &Option<FetchInit>) -> String {
 #[cfg(all(desktop, target_os = "windows"))]
 fn log_scraper_cookies(
     _scraper: &ScraperWebview,
-    queue: &str,
-    context: &str,
-    urls: Vec<(&'static str, String)>,
+    _queue: &str,
+    _context: &str,
+    _urls: Vec<(&'static str, String)>,
 ) {
-    let targets: Vec<String> = urls
-        .into_iter()
-        .map(|(label, url)| format!("{label} url={url} native_cookie_read=disabled_on_windows"))
-        .collect();
-    log::debug!("[scraper:cookies] context={context} queue={queue} targets={targets:?}");
 }
 
 #[cfg(all(desktop, not(target_os = "windows")))]
@@ -1103,7 +1100,7 @@ fn log_scraper_cookies(
             Err(err) => targets.push(format!("{label} url={url} parse_error={err}")),
         }
     }
-    log::debug!(
+    log::trace!(
         "[scraper:cookies] context={context} queue={queue} current_url={} targets={targets:?}",
         scraper_current_url_for_log(scraper)
     );
@@ -1316,6 +1313,31 @@ fn build_webview_fetch_cleanup_script(request_id: &str) -> Result<String, String
 }
 
 #[cfg(desktop)]
+fn build_webview_fetch_cancel_script(message: &str) -> Result<String, String> {
+    let message_json = serde_json::to_string(message)
+        .map_err(|err| format!("scraper: serialize cancel message: {err}"))?;
+    Ok(format!(
+        r#"(function () {{
+  const message = {message_json};
+  const controllers = window.__lnrFetchControllers || {{}};
+  const results = window.__lnrFetchResults || (window.__lnrFetchResults = {{}});
+  let cancelled = 0;
+  for (const requestId of Object.keys(controllers)) {{
+    try {{
+      controllers[requestId].abort();
+    }} catch (error) {{}}
+    results[requestId] = {{ done: true, ok: false, error: message }};
+    try {{
+      delete controllers[requestId];
+    }} catch (error) {{}}
+    cancelled += 1;
+  }}
+  return cancelled;
+}})()"#
+    ))
+}
+
+#[cfg(desktop)]
 fn clear_webview_extract_result_marker(scraper: &ScraperWebview, current_url: &str) {
     let result_marker = "#__lnr_result__=";
     let Some((clean_url, _result)) = current_url.split_once(result_marker) else {
@@ -1416,7 +1438,7 @@ pub async fn webview_fetch(
     let _queue_guard = queue_lock.lock().await;
     let fetch_context = fetch_context_url(&url, context_url.as_deref())?;
     let init_log = fetch_init_for_log(&init);
-    log::debug!(
+    log::trace!(
         "[scraper:fetch] request queue={queue} request_url={url} configured_context={:?} fetch_context={fetch_context} timeout_ms={timeout_ms:?} user_agent={user_agent:?} init={init_log}",
         context_url
     );
@@ -1441,12 +1463,15 @@ pub async fn webview_fetch(
     match &result {
         Ok(result) => {
             let header_names: Vec<&String> = result.headers.keys().collect();
-            log::debug!(
+            log::trace!(
                 "[scraper:fetch] response queue={queue} request_url={url} status={} final_url={} header_names={:?}",
                 result.status,
                 result.final_url,
                 header_names
             );
+        }
+        Err(err) if err.contains("Request cancelled") => {
+            log::debug!("[scraper:fetch] cancelled queue={queue} request_url={url}");
         }
         Err(err) => {
             log::error!("[scraper:fetch] failed queue={queue} request_url={url} error={err}");
@@ -1472,6 +1497,45 @@ pub async fn webview_fetch(
     _queue: Option<String>,
     _timeout_ms: Option<u64>,
 ) -> Result<FetchResult, String> {
+    Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn scraper_cancel_executor(
+    app: AppHandle,
+    state: tauri::State<'_, ScraperState>,
+    queue: Option<String>,
+    message: Option<String>,
+) -> Result<bool, String> {
+    let queue = normalize_scraper_executor(queue.as_deref())?;
+    let entry = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .get(&queue)
+        .cloned();
+    let Some(scraper) = entry.and_then(|entry| app.get_webview(&entry.label)) else {
+        return Ok(false);
+    };
+    let script = build_webview_fetch_cancel_script(
+        message.as_deref().unwrap_or("Request cancelled"),
+    )?;
+    let cancelled: u32 = eval_json(&scraper, script).await?;
+    if cancelled > 0 {
+        log::debug!("[scraper:fetch] cancelled queue={queue} count={cancelled}");
+    }
+    Ok(cancelled > 0)
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub async fn scraper_cancel_executor(
+    _app: AppHandle,
+    _state: tauri::State<'_, ScraperState>,
+    _queue: Option<String>,
+    _message: Option<String>,
+) -> Result<bool, String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
 
@@ -1549,7 +1613,7 @@ pub async fn webview_extract(
     let queue_lock = scraper_executor_lock(&state, &queue);
     let _queue_guard = queue_lock.lock().await;
     let scraper = scraper_handle_for_key(&app, &state, &queue, user_agent.as_deref())?;
-    log::debug!(
+    log::trace!(
         "[scraper:extract] request queue={queue} url={url} timeout_ms={timeout_ms:?} user_agent={user_agent:?} before_script_len={}",
         before_script.as_ref().map(|script| script.len()).unwrap_or(0)
     );
@@ -1580,7 +1644,7 @@ pub async fn webview_extract(
         format!("webview_extract: invalid url '{target_url_str}': {err}")
     })?;
 
-    log::debug!("[scraper:extract] navigate queue={queue} url={url} target_url={target_url_str}");
+    log::trace!("[scraper:extract] navigate queue={queue} url={url} target_url={target_url_str}");
 
     scraper
         .navigate(parsed)
@@ -1606,7 +1670,7 @@ pub async fn webview_extract(
             // Parking on about:blank forces the next fetch to prepare the
             // source context again.
             clear_webview_extract_result_marker(&scraper, &current);
-            log::debug!(
+            log::trace!(
                 "[scraper:extract] complete queue={queue} url={url} current_url={current} result_len={}",
                 decoded.len()
             );

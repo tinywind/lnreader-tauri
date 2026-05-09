@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { androidWebviewFetch } from "./android-scraper";
+import {
+  androidWebviewFetch,
+  cancelAndroidScraperExecutor,
+} from "./android-scraper";
 import { isAndroidRuntime } from "./tauri-runtime";
 import { getSourceRequestTimeoutMs } from "../store/browse";
 import { getScraperUserAgent } from "../store/user-agent";
@@ -28,7 +31,7 @@ export interface HttpInit {
   scraperExecutor?: ScraperExecutorId;
   /** Per-request timeout for plugin-owned site traffic. */
   timeoutMs?: number;
-  /** Accepted for API compatibility; the WebView fetch IPC ignores it today. */
+  /** Cancels the plugin-owned WebView request when the owning task is aborted. */
   signal?: AbortSignal;
 }
 
@@ -57,6 +60,17 @@ interface AppFetchSendResult {
 
 const EMPTY_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
 const REQUEST_CANCELLED_ERROR = "Request cancelled";
+
+function requestAbortedError(): DOMException {
+  return new DOMException(REQUEST_CANCELLED_ERROR, "AbortError");
+}
+
+function isRequestAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
 
 function headerUserAgent(
   headers: Record<string, string> | undefined,
@@ -109,10 +123,6 @@ function requestTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(1, Math.round(numeric));
 }
 
-function headerNames(headers: Record<string, string> | undefined): string[] {
-  return Object.keys(headers ?? {});
-}
-
 function decodeBase64Body(bodyBase64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(bodyBase64);
   const bytes = new Uint8Array(binary.length);
@@ -127,6 +137,70 @@ function bodyFromWire(result: FetchResultWire): BodyInit {
     return new Blob([decodeBase64Body(result.bodyBase64)]);
   }
   return result.body ?? "";
+}
+
+async function cancelScraperExecutor(
+  executor: ScraperExecutorId,
+): Promise<boolean> {
+  if (isAndroidRuntime()) {
+    return cancelAndroidScraperExecutor(REQUEST_CANCELLED_ERROR, executor);
+  }
+  try {
+    return await invoke<boolean>("scraper_cancel_executor", {
+      message: REQUEST_CANCELLED_ERROR,
+      queue: executor,
+    });
+  } catch (error) {
+    console.warn("[plugin-fetch] cancel failed", {
+      error,
+      scraperExecutor: executor,
+    });
+    return false;
+  }
+}
+
+async function desktopWebviewFetch(
+  url: string,
+  init: FetchInitWire,
+  contextUrl: string | null,
+  userAgent: string | null,
+  scraperExecutor: ScraperExecutorId,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<FetchResultWire> {
+  if (signal?.aborted) {
+    throw requestAbortedError();
+  }
+
+  const request = invoke<FetchResultWire>("webview_fetch", {
+    url,
+    init,
+    contextUrl,
+    userAgent,
+    queue: scraperExecutor,
+    timeoutMs,
+  });
+  if (!signal) return request;
+
+  let abortListener: (() => void) | undefined;
+  const abort = new Promise<never>((_resolve, reject) => {
+    abortListener = () => {
+      void cancelScraperExecutor(scraperExecutor);
+      reject(requestAbortedError());
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) abortListener();
+  });
+
+  try {
+    return await Promise.race([request, abort]);
+  } catch (error) {
+    if (signal.aborted) throw requestAbortedError();
+    throw error;
+  } finally {
+    if (abortListener) signal.removeEventListener("abort", abortListener);
+    request.catch(() => undefined);
+  }
 }
 
 function encodeAppFetchBody(body: unknown): number[] | null {
@@ -257,17 +331,6 @@ export async function pluginFetch(
   const scraperExecutor =
     init.scraperExecutor ?? activeScraperExecutor(init.sourceId);
   const timeoutMs = requestTimeoutMs(init.timeoutMs);
-  console.debug("[plugin-fetch] request", {
-    bodyLength: wireInit.body?.length ?? 0,
-    contextUrl,
-    headerNames: headerNames(wireInit.headers),
-    method: wireInit.method ?? "GET",
-    scraperExecutor,
-    sourceId: init.sourceId,
-    timeoutMs,
-    url,
-    userAgent,
-  });
   let result: FetchResultWire;
   try {
     result = isAndroidRuntime()
@@ -278,34 +341,29 @@ export async function pluginFetch(
           userAgent,
           scraperExecutor,
           timeoutMs,
+          init.signal,
         )
-      : await invoke<FetchResultWire>("webview_fetch", {
+      : await desktopWebviewFetch(
           url,
-          init: wireInit,
+          wireInit,
           contextUrl,
           userAgent,
-          queue: scraperExecutor,
+          scraperExecutor,
           timeoutMs,
-        });
+          init.signal,
+        );
   } catch (error) {
-    console.error("[plugin-fetch] failed", {
-      contextUrl,
-      error,
-      scraperExecutor,
-      sourceId: init.sourceId,
-      url,
-    });
+    if (!isRequestAbortError(error)) {
+      console.error("[plugin-fetch] failed", {
+        contextUrl,
+        error,
+        scraperExecutor,
+        sourceId: init.sourceId,
+        url,
+      });
+    }
     throw error;
   }
-  console.debug("[plugin-fetch] response", {
-    finalUrl: result.finalUrl,
-    headerNames: headerNames(result.headers),
-    scraperExecutor,
-    sourceId: init.sourceId,
-    status: result.status,
-    statusText: result.statusText,
-    url,
-  });
   const response = new Response(bodyFromWire(result), {
     status: result.status,
     statusText: result.statusText,

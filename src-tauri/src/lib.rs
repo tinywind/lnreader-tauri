@@ -90,6 +90,12 @@ pub fn run() {
             sql: include_str!("../../drizzle/0009_mushy_skrulls.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "store downloaded chapter media byte counts",
+            sql: include_str!("../../drizzle/0010_breezy_media_bytes.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -111,10 +117,12 @@ pub fn run() {
             chapter_media::chapter_media_path,
             chapter_media::chapter_media_prune,
             chapter_media::chapter_media_store,
+            chapter_media::chapter_media_total_size,
             plugin_host::plugin_zip_list,
             plugin_host::plugin_zip_read_file,
             scraper::webview_fetch,
             scraper::webview_extract,
+            scraper::scraper_cancel_executor,
             scraper::scraper_navigate,
             scraper::scraper_set_bounds,
             scraper::scraper_hide,
@@ -135,6 +143,12 @@ pub fn run() {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Trace)
+                        .level_for("h2", log::LevelFilter::Warn)
+                        .level_for("hyper", log::LevelFilter::Warn)
+                        .level_for("hyper_util", log::LevelFilter::Warn)
+                        .level_for("reqwest", log::LevelFilter::Warn)
+                        .level_for("sqlx", log::LevelFilter::Info)
+                        .level_for("tracing", log::LevelFilter::Warn)
                         .build(),
                 )?;
                 log::set_max_level(log::LevelFilter::Info);

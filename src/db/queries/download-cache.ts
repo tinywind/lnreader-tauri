@@ -33,11 +33,18 @@ export interface DownloadCacheChapter {
   readAt: number | null;
   downloadedAt: number | null;
   contentBytes: number;
+  mediaBytes: number;
+  totalBytes: number;
 }
 
 interface RawDownloadCacheChapter
   extends Omit<DownloadCacheChapter, "unread"> {
   unread: number;
+}
+
+export interface DownloadCacheMediaBackfillCandidate {
+  id: number;
+  content: string;
 }
 
 export async function listDownloadCacheNovels(): Promise<DownloadCacheNovel[]> {
@@ -59,7 +66,7 @@ export async function listDownloadCacheNovels(): Promise<DownloadCacheNovel[]> {
                         AS unreadDownloaded,
        COALESCE(SUM(CASE WHEN c.unread = 0 THEN 1 ELSE 0 END), 0)
                         AS readDownloaded,
-       COALESCE(SUM(c.content_bytes), 0) AS totalBytes,
+       COALESCE(SUM(c.content_bytes + c.media_bytes), 0) AS totalBytes,
        MAX(c.updated_at) AS lastDownloadedAt
      FROM novel n
      JOIN chapter c ON c.novel_id = n.id
@@ -89,7 +96,9 @@ export async function listDownloadCacheChapters(
        c.progress,
        c.read_at AS readAt,
        c.updated_at AS downloadedAt,
-       c.content_bytes AS contentBytes
+       c.content_bytes AS contentBytes,
+       c.media_bytes AS mediaBytes,
+       c.content_bytes + c.media_bytes AS totalBytes
      FROM chapter c
      JOIN novel n ON n.id = c.novel_id
      WHERE c.novel_id = $1
@@ -114,6 +123,7 @@ export async function deleteDownloadCacheChapter(
      SET
        content       = NULL,
        content_bytes = 0,
+       media_bytes   = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE id = $1
@@ -137,6 +147,7 @@ export async function deleteDownloadCacheNovel(
      SET
        content       = NULL,
        content_bytes = 0,
+       media_bytes   = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE novel_id = $1
@@ -158,6 +169,7 @@ export async function deleteAllDownloadCache(): Promise<DownloadCacheResult> {
      SET
        content       = NULL,
        content_bytes = 0,
+       media_bytes   = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE is_downloaded = 1
@@ -166,6 +178,39 @@ export async function deleteAllDownloadCache(): Promise<DownloadCacheResult> {
          WHERE n.id = chapter.novel_id
            AND n.is_local = 0
        )`,
+  );
+  return { rowsAffected: result.rowsAffected };
+}
+
+export async function listDownloadCacheMediaBackfillCandidates(
+  novelId?: number,
+): Promise<DownloadCacheMediaBackfillCandidate[]> {
+  const db = await getDb();
+  const novelFilter = novelId === undefined ? "" : "AND c.novel_id = $1";
+  return db.select<DownloadCacheMediaBackfillCandidate[]>(
+    `SELECT c.id, c.content
+     FROM chapter c
+     JOIN novel n ON n.id = c.novel_id
+     WHERE c.is_downloaded = 1
+       AND c.media_bytes = 0
+       AND c.content LIKE '%norea-media://chapter/%'
+       AND n.is_local = 0
+       ${novelFilter}`,
+    novelId === undefined ? [] : [novelId],
+  );
+}
+
+export async function updateDownloadCacheChapterMediaBytes(
+  chapterId: number,
+  mediaBytes: number,
+): Promise<DownloadCacheResult> {
+  const db = await getDb();
+  const result = await db.execute(
+    `UPDATE chapter
+     SET media_bytes = $2
+     WHERE id = $1
+       AND media_bytes IS NOT $2`,
+    [chapterId, Math.max(0, Math.round(mediaBytes))],
   );
   return { rowsAffected: result.rowsAffected };
 }

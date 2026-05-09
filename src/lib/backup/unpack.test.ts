@@ -134,6 +134,7 @@ describe("unpackBackup", () => {
 
     const restored = await unpackBackup("C:\\backup.zip");
 
+    expect(restored.chapters[0]?.mediaBytes).toBe(3);
     expect(getBackupChapterMediaFiles(restored)).toEqual([
       {
         mediaSrc: "norea-media://chapter/10/cache/image.png",

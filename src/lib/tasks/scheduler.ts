@@ -197,6 +197,7 @@ interface TaskEntry {
   controller: AbortController;
   dedupeKey?: string;
   exclusive: boolean;
+  pauseRequested?: boolean;
   promise: Promise<unknown>;
   record: TaskRecord;
   reject: (error: unknown) => void;
@@ -209,6 +210,7 @@ const DEFAULT_SOURCE_FOREGROUND_CONCURRENCY = 3;
 const DEFAULT_SOURCE_BACKGROUND_CONCURRENCY = 2;
 const HISTORY_LIMIT = 200;
 const TERMINAL_TASK_RETENTION_MS = 2_000;
+export const TASK_PAUSE_ABORT_MESSAGE = "Task was paused.";
 
 function priorityRank(priority: TaskPriority): number {
   switch (priority) {
@@ -229,8 +231,24 @@ function isBackgroundPriority(priority: TaskPriority): boolean {
   return priority === "background";
 }
 
-function isImmediateSourceKind(kind: TaskKind): boolean {
+function isOpenSiteSourceKind(kind: TaskKind): boolean {
   return kind === "source.openSite";
+}
+
+function isImmediateBrowseSourceKind(kind: TaskKind): boolean {
+  return (
+    kind === "source.listPopular" ||
+    kind === "source.listLatest" ||
+    kind === "source.search"
+  );
+}
+
+function shouldUseImmediateExecutor(entry: TaskEntry): boolean {
+  if (isOpenSiteSourceKind(entry.record.kind)) return true;
+  return (
+    entry.record.priority === "interactive" &&
+    isImmediateBrowseSourceKind(entry.record.kind)
+  );
 }
 
 function poolExecutorId(index: number): ScraperExecutorId {
@@ -506,6 +524,7 @@ export class TaskScheduler {
     this.debug("cancel requested", entry);
 
     if (entry.record.status === "running") {
+      entry.pauseRequested = false;
       entry.controller.abort();
       this.cancelRunning(entry);
       return true;
@@ -541,6 +560,29 @@ export class TaskScheduler {
     }
 
     return cancelled;
+  }
+
+  private pauseRunningSourceTasks(sourceId?: string): number {
+    let paused = 0;
+    for (const entry of this.entries.values()) {
+      if (
+        !entry.record.canCancel ||
+        entry.record.lane !== "source" ||
+        entry.record.status !== "running" ||
+        entry.record.kind === "source.openSite" ||
+        (sourceId && entry.record.source?.id !== sourceId)
+      ) {
+        continue;
+      }
+      if (!entry.pauseRequested) {
+        paused += 1;
+      }
+      entry.pauseRequested = true;
+      entry.controller.abort(
+        new DOMException(TASK_PAUSE_ABORT_MESSAGE, "AbortError"),
+      );
+    }
+    return paused;
   }
 
   private cancelOtherOpenSiteTasks(taskId: string): void {
@@ -592,15 +634,16 @@ export class TaskScheduler {
   }
 
   pauseSourceQueue(sourceId?: string): boolean {
+    const paused = this.pauseRunningSourceTasks(sourceId);
     if (!sourceId) {
-      if (this.sourceQueuesPaused) return false;
+      if (this.sourceQueuesPaused) return paused > 0;
       this.sourceQueuesPaused = true;
       this.debug("all source queues paused");
       this.publishSnapshot();
       return true;
     }
 
-    if (this.pausedSourceIds.has(sourceId)) return false;
+    if (this.pausedSourceIds.has(sourceId)) return paused > 0;
     this.pausedSourceIds.add(sourceId);
     this.debug("source queue paused", undefined, { sourceId });
     this.publishSnapshot();
@@ -693,17 +736,26 @@ export class TaskScheduler {
   private drainImmediateExecutor(): void {
     if (this.activeImmediateTaskId) return;
     const next = this.pickSourceTask(
-      (entry) => isImmediateSourceKind(entry.record.kind),
+      (entry) => isOpenSiteSourceKind(entry.record.kind),
       { allowPaused: true, allowActiveSource: true },
     );
-    if (!next) return;
-    this.startSource(next, "immediate");
+    if (next) {
+      this.startSource(next, "immediate");
+      return;
+    }
+    const browse = this.pickSourceTask(
+      (entry) =>
+        entry.record.priority === "interactive" &&
+        isImmediateBrowseSourceKind(entry.record.kind),
+      { allowActiveSource: true },
+    );
+    if (browse) this.startSource(browse, "immediate");
   }
 
   private drainSourcePool(): void {
     for (const executorId of this.freePoolExecutorIds()) {
       const next = this.pickSourceTask((entry) => {
-        if (isImmediateSourceKind(entry.record.kind)) return false;
+        if (shouldUseImmediateExecutor(entry)) return false;
         if (!this.canUseExecutorForSourceDomain(entry, executorId)) return false;
         if (
           isBackgroundPriority(entry.record.priority) &&
@@ -963,6 +1015,10 @@ export class TaskScheduler {
       .then(() => this.runWithScraperExecutorContext(entry, context))
       .then((value) => {
         if (entry.controller.signal.aborted) {
+          if (entry.pauseRequested && entry.record.lane === "source") {
+            this.requeuePausedRunningAfterSettlement(entry);
+            return;
+          }
           this.finishCancelledRunningAfterSettlement(entry);
           return;
         }
@@ -975,6 +1031,10 @@ export class TaskScheduler {
       })
       .catch((error) => {
         const cancelled = entry.controller.signal.aborted || isAbortError(error);
+        if (entry.pauseRequested && entry.record.lane === "source" && cancelled) {
+          this.requeuePausedRunningAfterSettlement(entry);
+          return;
+        }
         if (cancelled && entry.record.status === "cancelled") {
           this.finishCancelledRunningAfterSettlement(entry);
           return;
@@ -1046,6 +1106,47 @@ export class TaskScheduler {
     this.releaseActive(entry);
     this.trimHistory();
     this.drain();
+  }
+
+  private requeuePausedRunningAfterSettlement(entry: TaskEntry): void {
+    if (entry.activeReleased) return;
+    const previousStatus = entry.record.status;
+    const sourceCooldownKey = entry.spec.sourceCooldownKey;
+    this.debug("paused task settled", entry);
+    this.releaseActive(entry);
+    if (sourceCooldownKey) {
+      this.clearSourceCooldown(sourceCooldownKey);
+    }
+    if (entry.dedupeKey) {
+      this.activeDedupeByKey.set(entry.dedupeKey, entry.record.id);
+    }
+    entry.controller = new AbortController();
+    entry.pauseRequested = false;
+
+    const nextRecord = { ...entry.record };
+    delete nextRecord.startedAt;
+    delete nextRecord.finishedAt;
+    delete nextRecord.error;
+    entry.record = {
+      ...nextRecord,
+      status: "queued",
+      canCancel: true,
+      canRetry: false,
+    };
+    this.entries.set(entry.record.id, entry);
+    this.requeueSourceEntry(entry);
+    this.publish(entry, previousStatus);
+    this.drain();
+  }
+
+  private requeueSourceEntry(entry: TaskEntry): void {
+    const sourceId = entry.record.source?.id;
+    if (!sourceId) return;
+    const queue = this.sourceQueues.get(sourceId) ?? [];
+    if (!queue.includes(entry.record.id)) {
+      queue.unshift(entry.record.id);
+    }
+    this.sourceQueues.set(sourceId, queue);
   }
 
   private releaseActive(entry: TaskEntry): void {

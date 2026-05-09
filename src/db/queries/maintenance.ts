@@ -25,11 +25,13 @@ export async function clearDownloadedChapterContent(): Promise<MaintenanceResult
      SET
        content = NULL,
        content_bytes = 0,
+       media_bytes = 0,
        is_downloaded = 0,
        updated_at = unixepoch()
      WHERE (
          content IS NOT NULL
          OR content_bytes > 0
+         OR media_bytes > 0
          OR is_downloaded = 1
        )
        AND EXISTS (

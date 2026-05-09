@@ -10,7 +10,9 @@ import {
   deleteDownloadCacheChapter,
   deleteDownloadCacheNovel,
   listDownloadCacheChapters,
+  listDownloadCacheMediaBackfillCandidates,
   listDownloadCacheNovels,
+  updateDownloadCacheChapterMediaBytes,
 } from "./download-cache";
 
 const mockedGetDb = vi.mocked(getDb);
@@ -28,13 +30,13 @@ beforeEach(() => {
 });
 
 describe("listDownloadCacheNovels", () => {
-  it("uses stored content_bytes instead of scanning chapter content", async () => {
+  it("uses stored byte columns instead of scanning chapter content", async () => {
     mockSelect.mockResolvedValueOnce([]);
 
     await listDownloadCacheNovels();
 
     const [sql] = mockSelect.mock.calls[0]!;
-    expect(sql).toContain("SUM(c.content_bytes)");
+    expect(sql).toContain("SUM(c.content_bytes + c.media_bytes)");
     expect(sql).toContain("n.is_local = 0");
     expect(sql).not.toContain("length(CAST");
     expect(sql).not.toContain("COALESCE(c.content");
@@ -42,13 +44,15 @@ describe("listDownloadCacheNovels", () => {
 });
 
 describe("listDownloadCacheChapters", () => {
-  it("uses stored content_bytes for chapter sizes", async () => {
+  it("uses stored content and media byte counts for chapter sizes", async () => {
     mockSelect.mockResolvedValueOnce([]);
 
     await listDownloadCacheChapters(7);
 
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("content_bytes AS contentBytes");
+    expect(sql).toContain("media_bytes AS mediaBytes");
+    expect(sql).toContain("content_bytes + c.media_bytes AS totalBytes");
     expect(sql).toContain("JOIN novel n ON n.id = c.novel_id");
     expect(sql).toContain("n.is_local = 0");
     expect(sql).not.toContain("length(CAST");
@@ -65,6 +69,7 @@ describe("deleteDownloadCacheChapter", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content       = NULL");
     expect(sql).toContain("content_bytes = 0");
+    expect(sql).toContain("media_bytes   = 0");
     expect(sql).toContain("is_downloaded = 0");
     expect(sql).toContain("n.is_local = 0");
     expect(params).toEqual([7]);
@@ -73,13 +78,14 @@ describe("deleteDownloadCacheChapter", () => {
 });
 
 describe("deleteDownloadCacheNovel", () => {
-  it("clears cached content byte counts for one novel", async () => {
+  it("clears cached byte counts for one novel", async () => {
     mockExecute.mockResolvedValueOnce({ rowsAffected: 2 });
 
     await deleteDownloadCacheNovel(7);
 
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content_bytes = 0");
+    expect(sql).toContain("media_bytes   = 0");
     expect(sql).toContain("novel_id = $1");
     expect(sql).toContain("n.is_local = 0");
     expect(params).toEqual([7]);
@@ -87,14 +93,42 @@ describe("deleteDownloadCacheNovel", () => {
 });
 
 describe("deleteAllDownloadCache", () => {
-  it("clears cached content byte counts globally", async () => {
+  it("clears cached byte counts globally", async () => {
     mockExecute.mockResolvedValueOnce({ rowsAffected: 3 });
 
     await deleteAllDownloadCache();
 
     const [sql] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content_bytes = 0");
+    expect(sql).toContain("media_bytes   = 0");
     expect(sql).toContain("WHERE is_downloaded = 1");
     expect(sql).toContain("n.is_local = 0");
+  });
+});
+
+describe("download cache media byte backfill", () => {
+  it("selects only downloaded non-local chapters that still need media bytes", async () => {
+    mockSelect.mockResolvedValueOnce([]);
+
+    await listDownloadCacheMediaBackfillCandidates(7);
+
+    const [sql, params] = mockSelect.mock.calls[0]!;
+    expect(sql).toContain("c.media_bytes = 0");
+    expect(sql).toContain("c.content LIKE '%norea-media://chapter/%'");
+    expect(sql).toContain("n.is_local = 0");
+    expect(sql).toContain("c.novel_id = $1");
+    expect(params).toEqual([7]);
+  });
+
+  it("updates a chapter media byte count without changing download time", async () => {
+    mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
+
+    const result = await updateDownloadCacheChapterMediaBytes(7, 42.4);
+
+    const [sql, params] = mockExecute.mock.calls[0]!;
+    expect(sql).toContain("SET media_bytes = $2");
+    expect(sql).not.toContain("updated_at");
+    expect(params).toEqual([7, 42]);
+    expect(result.rowsAffected).toBe(1);
   });
 });

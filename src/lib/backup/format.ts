@@ -53,6 +53,8 @@ export interface BackupChapter {
   contentType?: ChapterContentType;
   /** Inline reader body. Null when the chapter wasn't downloaded yet. */
   content: string | null;
+  /** Bytes occupied by local chapter media files referenced by content. */
+  mediaBytes?: number;
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number;
@@ -181,6 +183,7 @@ function isChapter(value: unknown): value is BackupChapter {
       value.contentType === "html" ||
       value.contentType === "text" ||
       value.contentType === "pdf") &&
+    (value.mediaBytes === undefined || typeof value.mediaBytes === "number") &&
     typeof value.updatedAt === "number" &&
     (value.createdAt === undefined || typeof value.createdAt === "number") &&
     (value.foundAt === undefined || typeof value.foundAt === "number")
@@ -202,6 +205,7 @@ function normalizeChapter(chapter: BackupChapter): BackupChapter {
     contentType: normalizeChapterContentType(
       chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
     ),
+    mediaBytes: chapter.mediaBytes ?? 0,
     createdAt,
     foundAt: chapter.foundAt ?? Math.max(createdAt, chapter.updatedAt),
   };

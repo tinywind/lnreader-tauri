@@ -13,6 +13,8 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { pluginFetch } from "./http";
 import {
   cacheHtmlChapterMedia,
+  getStoredChapterMediaBytes,
+  localChapterMediaSources,
   resolveLocalChapterMedia,
 } from "./chapter-media";
 
@@ -137,6 +139,7 @@ describe("cacheHtmlChapterMedia", () => {
       }),
     ]);
     expect(result.cacheKey).toEqual(expect.any(String));
+    expect(result.mediaBytes).toBe(6);
     expect(result.html).toContain("norea-media://chapter/");
     expect(result.html).toContain("data:image/png;base64,abc");
     expect(result.html).toContain("blob:https://source.test/image");
@@ -175,11 +178,66 @@ describe("cacheHtmlChapterMedia", () => {
     });
 
     expect(pluginFetchMock).toHaveBeenCalledTimes(5);
+    expect(result.mediaBytes).toBe(15);
     expect(result.html).toContain("norea-media://chapter/7/");
     expect(result.html).not.toContain("data-src=");
     expect(result.html).toContain(" 1x");
     expect(result.html).toContain(" 2x");
     expect(result.html).toContain(" 800w");
+  });
+
+  it("emits blank media markup before progressively restoring local sources", async () => {
+    pluginFetchMock.mockImplementation(async () => {
+      return new Response(new Uint8Array([7, 8, 9]), {
+        headers: { "content-type": "image/png" },
+        status: 200,
+        statusText: "OK",
+      });
+    });
+    invokeMock.mockImplementation(async (_command, args) => {
+      const input = args as {
+        cacheKey: string;
+        chapterId: number;
+        fileName: string;
+      };
+      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+    });
+    const htmlUpdates: string[] = [];
+
+    await cacheHtmlChapterMedia({
+      baseUrl: "https://source.test/topic/1",
+      chapterId: 7,
+      html: `<img src="./page.png"><video src="./clip.png"></video>`,
+      onHtmlUpdate: (html) => {
+        htmlUpdates.push(html);
+      },
+    });
+
+    expect(htmlUpdates).toHaveLength(3);
+    expect(htmlUpdates[0]).toContain('src=""');
+    expect(htmlUpdates[1]).toContain("norea-media://chapter/7/");
+    expect(htmlUpdates[2]).toContain("page-1.png");
+    expect(htmlUpdates[2]).toContain("clip-2.png");
+  });
+});
+
+describe("stored chapter media byte stats", () => {
+  it("deduplicates local media refs before measuring stored files", async () => {
+    invokeMock.mockResolvedValueOnce(7);
+
+    const html = [
+      `<img src="norea-media://chapter/42/cache/page.png">`,
+      `<img data-src="norea-media://chapter/42/cache/page.png">`,
+      `<img src="https://source.test/page.png">`,
+    ].join("");
+
+    expect(localChapterMediaSources(html)).toEqual([
+      "norea-media://chapter/42/cache/page.png",
+    ]);
+    await expect(getStoredChapterMediaBytes(html)).resolves.toBe(7);
+    expect(invokeMock).toHaveBeenCalledWith("chapter_media_total_size", {
+      mediaSrcs: ["norea-media://chapter/42/cache/page.png"],
+    });
   });
 });
 

@@ -4,6 +4,8 @@ import type { ScraperExecutorId } from "./tasks/scraper-queue";
 import { isTauriRuntime } from "./tauri-runtime";
 
 const LOCAL_MEDIA_SRC_PREFIX = "norea-media://chapter/";
+const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
+  /norea-media:\/\/chapter\/\d+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/g;
 const MEDIA_SRC_ATTRIBUTES = [
   "src",
   "data-src",
@@ -11,8 +13,11 @@ const MEDIA_SRC_ATTRIBUTES = [
   "data-lazy-src",
   "data-orig-src",
 ] as const;
+const MEDIA_SOURCE_ELEMENTS = ["img", "video", "audio", "source"] as const;
 const MEDIA_SOURCE_SELECTOR = [
-  ...MEDIA_SRC_ATTRIBUTES.map((attribute) => `img[${attribute}]`),
+  ...MEDIA_SRC_ATTRIBUTES.flatMap((attribute) =>
+    MEDIA_SOURCE_ELEMENTS.map((element) => `${element}[${attribute}]`),
+  ),
   "img[srcset]",
   "source[srcset]",
 ].join(",");
@@ -24,6 +29,7 @@ interface CacheChapterMediaOptions {
   chapterId: number;
   contextUrl?: string;
   html: string;
+  onHtmlUpdate?: (html: string) => Promise<void> | void;
   onProgress?: (progress: { current: number; total: number }) => void;
   scraperExecutor?: ScraperExecutorId;
   signal?: AbortSignal;
@@ -33,6 +39,7 @@ interface CacheChapterMediaOptions {
 interface CacheChapterMediaResult {
   cacheKey: string | null;
   html: string;
+  mediaBytes: number;
 }
 
 interface ChapterMediaStoreInput {
@@ -150,6 +157,17 @@ function bytesFromArrayBuffer(buffer: ArrayBuffer): number[] {
   return Array.from(new Uint8Array(buffer));
 }
 
+export function localChapterMediaSources(html: string): string[] {
+  return [...new Set(html.match(LOCAL_CHAPTER_MEDIA_SRC_PATTERN) ?? [])];
+}
+
+export async function getStoredChapterMediaBytes(html: string): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+  const mediaSrcs = localChapterMediaSources(html);
+  if (mediaSrcs.length === 0) return 0;
+  return invoke<number>("chapter_media_total_size", { mediaSrcs });
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new DOMException(
@@ -244,18 +262,76 @@ function collectMediaTargets(
   return { srcTargets, srcsetTargets, urls };
 }
 
+function blankCollectedMediaTargets(
+  srcTargets: MediaSrcTarget[],
+  srcsetTargets: MediaSrcsetTarget[],
+): void {
+  for (const target of srcTargets) {
+    target.element.setAttribute(target.attribute, "");
+  }
+  for (const target of srcsetTargets) {
+    target.element.setAttribute("srcset", "");
+  }
+}
+
+function applyLocalMediaSource({
+  baseUrl,
+  localSources,
+  src,
+  srcTargets,
+  srcsetTargets,
+  url,
+}: {
+  baseUrl: string;
+  localSources: Map<string, string>;
+  src: string;
+  srcTargets: MediaSrcTarget[];
+  srcsetTargets: MediaSrcsetTarget[];
+  url: string;
+}): void {
+  for (const target of srcTargets) {
+    if (target.url !== url) continue;
+    target.element.setAttribute("src", src);
+    if (target.attribute !== "src") {
+      target.element.removeAttribute(target.attribute);
+    }
+  }
+
+  for (const target of srcsetTargets) {
+    const candidates = target.candidates
+      .map((candidate) => {
+        const candidateUrl = absoluteMediaUrl(candidate.source, baseUrl);
+        if (!candidateUrl) return candidate;
+        return {
+          ...candidate,
+          source: localSources.get(candidateUrl) ?? "",
+        };
+      })
+      .filter((candidate) => candidate.source !== "");
+    target.element.setAttribute("srcset", formatSrcset(candidates));
+  }
+}
+
+async function emitHtmlUpdate(
+  onHtmlUpdate: CacheChapterMediaOptions["onHtmlUpdate"],
+  template: HTMLTemplateElement,
+): Promise<void> {
+  await onHtmlUpdate?.(template.innerHTML);
+}
+
 export async function cacheHtmlChapterMedia({
   baseUrl,
   chapterId,
   contextUrl,
   html,
+  onHtmlUpdate,
   onProgress,
   scraperExecutor,
   signal,
   sourceId,
 }: CacheChapterMediaOptions): Promise<CacheChapterMediaResult> {
   if (!isTauriRuntime() || typeof document === "undefined") {
-    return { cacheKey: null, html };
+    return { cacheKey: null, html, mediaBytes: 0 };
   }
 
   const template = document.createElement("template");
@@ -266,11 +342,15 @@ export async function cacheHtmlChapterMedia({
   );
 
   if (urls.length === 0) {
-    return { cacheKey: null, html: template.innerHTML };
+    return { cacheKey: null, html: template.innerHTML, mediaBytes: 0 };
   }
 
   const cacheKey = makeCacheKey();
   const localSources = new Map<string, string>();
+  let mediaBytes = 0;
+  blankCollectedMediaTargets(srcTargets, srcsetTargets);
+  await emitHtmlUpdate(onHtmlUpdate, template);
+
   for (let index = 0; index < urls.length; index += 1) {
     throwIfAborted(signal);
     const url = urls[index]!;
@@ -285,7 +365,9 @@ export async function cacheHtmlChapterMedia({
         `HTTP ${response.status} ${response.statusText} on ${url}`,
       );
     }
+    throwIfAborted(signal);
     const body = bytesFromArrayBuffer(await response.arrayBuffer());
+    throwIfAborted(signal);
     const src = await storeChapterMedia({
       body,
       cacheKey,
@@ -296,33 +378,24 @@ export async function cacheHtmlChapterMedia({
         response.headers.get("content-type"),
       ),
     });
+    mediaBytes += body.length;
     localSources.set(url, src);
-    onProgress?.({ current: index + 1, total: urls.length });
-  }
-
-  for (const target of srcTargets) {
-    const src = localSources.get(target.url);
-    if (!src) continue;
-    target.element.setAttribute("src", src);
-    if (target.attribute !== "src") {
-      target.element.removeAttribute(target.attribute);
-    }
-  }
-
-  for (const target of srcsetTargets) {
-    const candidates = target.candidates.map((candidate) => {
-      const url = absoluteMediaUrl(candidate.source, baseUrl);
-      return {
-        ...candidate,
-        source: url ? (localSources.get(url) ?? candidate.source) : candidate.source,
-      };
+    applyLocalMediaSource({
+      baseUrl,
+      localSources,
+      src,
+      srcTargets,
+      srcsetTargets,
+      url,
     });
-    target.element.setAttribute("srcset", formatSrcset(candidates));
+    await emitHtmlUpdate(onHtmlUpdate, template);
+    onProgress?.({ current: index + 1, total: urls.length });
   }
 
   return {
     cacheKey,
     html: template.innerHTML,
+    mediaBytes,
   };
 }
 

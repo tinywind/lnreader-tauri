@@ -44,11 +44,16 @@ let nextRequestId = 1;
 const pending = new Map<
   string,
   {
+    cleanup: () => void;
     resolve: (value: unknown) => void;
     reject: (reason?: unknown) => void;
     timeoutId: number;
   }
 >();
+
+function requestAbortedError(): DOMException {
+  return new DOMException("Request cancelled", "AbortError");
+}
 
 function installResolver(): void {
   if (typeof window === "undefined" || window.__lnrAndroidScraperResolve) {
@@ -59,7 +64,7 @@ function installResolver(): void {
     const entry = pending.get(id);
     if (!entry) return;
     pending.delete(id);
-    window.clearTimeout(entry.timeoutId);
+    entry.cleanup();
 
     let envelope: NativeEnvelope<unknown>;
     try {
@@ -92,13 +97,37 @@ function callNative<T>(
   method: "fetch" | "extract" | "navigate",
   payload: Record<string, unknown>,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<T> {
   installResolver();
+  if (signal?.aborted) return Promise.reject(requestAbortedError());
   const id = `android-scraper-${nextRequestId}`;
   nextRequestId += 1;
 
   return new Promise<T>((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
+    let timeoutId = 0;
+    let abortListener: (() => void) | undefined;
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      if (abortListener) signal?.removeEventListener("abort", abortListener);
+    };
+    abortListener = () => {
+      pending.delete(id);
+      cleanup();
+      try {
+        bridge().cancel?.(
+          JSON.stringify({
+            id,
+            message: "Android scraper request cancelled",
+          }),
+        );
+      } catch {
+        // Best-effort native cleanup; the JS abort result is authoritative.
+      }
+      reject(requestAbortedError());
+    };
+
+    timeoutId = window.setTimeout(() => {
       pending.delete(id);
       try {
         bridge().cancel?.(
@@ -110,14 +139,21 @@ function callNative<T>(
       } catch {
         // Best-effort native cleanup; the JS promise timeout is authoritative.
       }
+      cleanup();
       reject(new Error(`Android scraper ${String(method)} timed out`));
     }, timeoutMs);
 
     pending.set(id, {
+      cleanup,
       resolve: (value) => resolve(value as T),
       reject,
       timeoutId,
     });
+    signal?.addEventListener("abort", abortListener, { once: true });
+    if (signal?.aborted) {
+      abortListener();
+      return;
+    }
 
     try {
       bridge()[method](
@@ -128,7 +164,7 @@ function callNative<T>(
       );
     } catch (error) {
       pending.delete(id);
-      window.clearTimeout(timeoutId);
+      cleanup();
       reject(error);
     }
   });
@@ -152,6 +188,7 @@ export function androidWebviewFetch(
   userAgent: string | null,
   executor: ScraperExecutorId,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<AndroidFetchResultWire> {
   return callNative<AndroidFetchResultWire>(
     "fetch",
@@ -164,6 +201,7 @@ export function androidWebviewFetch(
       timeoutMs,
     },
     timeoutMs + 5_000,
+    signal,
   );
 }
 

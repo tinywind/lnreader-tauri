@@ -33,6 +33,7 @@ import {
   clearAllChapterMedia,
   clearChapterMedia,
 } from "../lib/chapter-media";
+import { backfillDownloadCacheMediaBytes } from "../lib/download-cache-media";
 import {
   formatRelativeTimeForLocale,
   useTranslation,
@@ -161,7 +162,7 @@ function DownloadCacheChapterRow({
   onDelete: () => void;
 }) {
   const { locale, t } = useTranslation();
-  const size = formatBytes(chapter.contentBytes, locale);
+  const size = formatBytes(chapter.totalBytes, locale);
   const readState = chapter.unread
     ? t("downloads.unreadState")
     : t("downloads.readState");
@@ -212,7 +213,10 @@ function DownloadCacheChapters({
   const queryClient = useQueryClient();
   const chapters = useQuery({
     queryKey: [...DOWNLOAD_CACHE_QUERY_KEY, "chapters", novelId] as const,
-    queryFn: () => listDownloadCacheChapters(novelId),
+    queryFn: async () => {
+      await backfillDownloadCacheMediaBytes(novelId);
+      return listDownloadCacheChapters(novelId);
+    },
   });
   const deleteChapter = useMutation({
     mutationFn: async (chapterId: number) => {
@@ -420,7 +424,10 @@ export function DownloadsPage() {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: DOWNLOAD_CACHE_QUERY_KEY,
-    queryFn: listDownloadCacheNovels,
+    queryFn: async () => {
+      await backfillDownloadCacheMediaBytes();
+      return listDownloadCacheNovels();
+    },
   });
   const deleteAll = useMutation({
     mutationFn: async () => {

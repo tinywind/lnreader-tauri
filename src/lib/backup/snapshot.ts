@@ -63,6 +63,7 @@ interface RawChapterRow {
   isDownloaded: number;
   contentType: string;
   content: string | null;
+  mediaBytes: number;
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number;
@@ -139,6 +140,7 @@ const SELECT_CHAPTERS = `
     is_downloaded  AS isDownloaded,
     content_type   AS contentType,
     content,
+    media_bytes    AS mediaBytes,
     release_time   AS releaseTime,
     read_at        AS readAt,
     COALESCE(created_at, updated_at) AS createdAt,
@@ -193,8 +195,8 @@ const INSERT_CHAPTER = `
   INSERT INTO chapter (
     id, novel_id, path, name, chapter_number, position, page,
     bookmark, unread, progress, is_downloaded, content, content_bytes,
-    content_type, release_time, read_at, created_at, found_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    media_bytes, content_type, release_time, read_at, created_at, found_at, updated_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 `;
 
 const INSERT_CATEGORY = `
@@ -301,6 +303,7 @@ function toChapter(row: RawChapterRow): BackupChapter {
     isDownloaded: !!row.isDownloaded,
     contentType: normalizeChapterContentType(row.contentType),
     content: row.content,
+    mediaBytes: row.mediaBytes,
     releaseTime: row.releaseTime,
     readAt: row.readAt,
     createdAt: row.createdAt,
@@ -311,6 +314,20 @@ function toChapter(row: RawChapterRow): BackupChapter {
 
 function getUtf8ByteLength(value: string | null): number {
   return value === null ? 0 : new TextEncoder().encode(value).byteLength;
+}
+
+function getBackupChapterMediaBytesByChapterId(
+  files: readonly BackupChapterMediaFile[],
+): Map<number, number> {
+  const bytesByChapterId = new Map<number, number>();
+  for (const file of files) {
+    const { chapterId } = parseBackupChapterMediaSource(file.mediaSrc);
+    bytesByChapterId.set(
+      chapterId,
+      (bytesByChapterId.get(chapterId) ?? 0) + file.body.length,
+    );
+  }
+  return bytesByChapterId;
 }
 
 function parseBackupChapterMediaSource(mediaSrc: string): {
@@ -428,6 +445,11 @@ export async function applyBackupSnapshot(
   manifest: BackupManifest,
 ): Promise<void> {
   const db = await getDb();
+  const mediaBytesByChapterId = hasBackupChapterMediaFiles(manifest)
+    ? getBackupChapterMediaBytesByChapterId(
+        getBackupChapterMediaFiles(manifest),
+      )
+    : new Map<number, number>();
 
   await db.execute("BEGIN IMMEDIATE");
   try {
@@ -511,6 +533,7 @@ export async function applyBackupSnapshot(
         chapter.isDownloaded,
         chapter.content,
         getUtf8ByteLength(chapter.content),
+        mediaBytesByChapterId.get(chapter.id) ?? chapter.mediaBytes ?? 0,
         normalizeChapterContentType(
           chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
         ),

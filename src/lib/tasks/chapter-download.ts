@@ -1,6 +1,7 @@
 import {
   getChapterById,
   saveChapterContent,
+  saveChapterPartialContent,
 } from "../../db/queries/chapter";
 import { useBrowseStore } from "../../store/browse";
 import {
@@ -18,6 +19,7 @@ import type { Plugin } from "../plugins/types";
 import { isTauriRuntime } from "../tauri-runtime";
 import {
   sourceBaseDomainKey,
+  TASK_PAUSE_ABORT_MESSAGE,
   taskScheduler,
   type TaskEvent,
   type TaskHandle,
@@ -135,6 +137,15 @@ function makeChapterDownloadBatchId(): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isPauseAbort(signal: AbortSignal): boolean {
+  const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+  return (
+    reason instanceof DOMException &&
+    reason.name === "AbortError" &&
+    reason.message === TASK_PAUSE_ABORT_MESSAGE
+  );
 }
 
 function missingLocalChapterError(job: ChapterDownloadJob): Error {
@@ -384,6 +395,7 @@ export function enqueueChapterDownload(
         }
         let html = chapterContentToHtml(rawContent, contentType);
         let mediaCacheKey: string | null = null;
+        let mediaBytes = 0;
         if (contentType === "html") {
           const baseUrl = absolutePluginUrl(plugin, job.chapterPath);
           if (baseUrl) {
@@ -392,6 +404,16 @@ export function enqueueChapterDownload(
               chapterId: job.id,
               contextUrl: baseUrl,
               html,
+              onHtmlUpdate: async (partialHtml) => {
+                const partialSaveResult = await saveChapterPartialContent(
+                  job.id,
+                  partialHtml,
+                  contentType,
+                );
+                if (partialSaveResult.rowsAffected <= 0) {
+                  throw missingLocalChapterError(job);
+                }
+              },
               onProgress: ({ current, total }) => {
                 progressTotal = total + 1;
                 setProgress({ current, total: progressTotal });
@@ -402,9 +424,12 @@ export function enqueueChapterDownload(
             });
             html = media.html;
             mediaCacheKey = media.cacheKey;
+            mediaBytes = media.mediaBytes;
           }
         }
-        const saveResult = await saveChapterContent(job.id, html, contentType);
+        const saveResult = await saveChapterContent(job.id, html, contentType, {
+          mediaBytes,
+        });
         if (saveResult.rowsAffected <= 0) {
           throw missingLocalChapterError(job);
         }
@@ -416,11 +441,13 @@ export function enqueueChapterDownload(
         settleChapterDownloadBatchJob(job.batchId, job.id, "succeeded");
         setProgress({ current: progressTotal, total: progressTotal });
       } catch (error) {
-        settleChapterDownloadBatchJob(
-          job.batchId,
-          job.id,
-          signal.aborted || isAbortError(error) ? "cancelled" : "failed",
-        );
+        if (!isPauseAbort(signal)) {
+          settleChapterDownloadBatchJob(
+            job.batchId,
+            job.id,
+            signal.aborted || isAbortError(error) ? "cancelled" : "failed",
+          );
+        }
         throw error;
       }
     },

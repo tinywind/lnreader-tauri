@@ -63,7 +63,7 @@ export function isTaskEventNotificationCandidate(
   task: TaskRecord,
 ): boolean {
   if (task.kind === "chapter.download") {
-    return !task.subject?.batchId || !isTerminalTaskStatus(task.status);
+    return isTerminalTaskStatus(task.status);
   }
   return AGGREGATE_TASK_KINDS.has(task.kind);
 }
@@ -98,6 +98,9 @@ export function taskNotificationRouteForTask(
 }
 
 export function taskNotificationKey(task: TaskRecord): string {
+  if (task.kind === "chapter.download" && isTerminalTaskStatus(task.status)) {
+    return task.id;
+  }
   const groupKey = taskNotificationGroupKey(task);
   if (groupKey) return `group:${groupKey}`;
   return task.id;
@@ -107,6 +110,9 @@ export function taskNotificationTitleForTask(
   t: TaskNotificationTranslate,
   task: TaskRecord,
 ): string {
+  if (task.kind === "chapter.download" && isTerminalTaskStatus(task.status)) {
+    return task.title;
+  }
   const groupKey = taskNotificationGroupKey(task);
   return groupKey
     ? taskNotificationGroupTitle(t, groupKey, task.progress)

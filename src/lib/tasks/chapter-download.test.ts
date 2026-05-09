@@ -15,6 +15,7 @@ const pluginMocks = vi.hoisted(() => ({
 vi.mock("../../db/queries/chapter", () => ({
   getChapterById: vi.fn(),
   saveChapterContent: vi.fn(),
+  saveChapterPartialContent: vi.fn(),
 }));
 vi.mock("../../store/browse", () => ({
   useBrowseStore: {
@@ -38,6 +39,7 @@ vi.mock("../tauri-runtime", () => ({
 }));
 vi.mock("./scheduler", () => ({
   sourceBaseDomainKey: vi.fn((site?: string) => (site ? "source.test" : null)),
+  TASK_PAUSE_ABORT_MESSAGE: "Task was paused.",
   taskScheduler: {
     enqueueSource: schedulerMocks.enqueueSource,
     getSnapshot: vi.fn(() => ({ records: [] })),
@@ -49,6 +51,7 @@ vi.mock("./scheduler", () => ({
 import {
   getChapterById,
   saveChapterContent,
+  saveChapterPartialContent,
 } from "../../db/queries/chapter";
 import { cacheHtmlChapterMedia, clearChapterMedia } from "../chapter-media";
 import { enqueueChapterDownload } from "./chapter-download";
@@ -76,12 +79,14 @@ beforeEach(() => {
   vi.mocked(cacheHtmlChapterMedia).mockResolvedValue({
     cacheKey: "media-cache",
     html: "<img>",
+    mediaBytes: 3,
   });
   vi.mocked(getChapterById).mockResolvedValue({
     contentType: "text",
     id: 7,
   } as never);
   vi.mocked(saveChapterContent).mockResolvedValue({ rowsAffected: 1 });
+  vi.mocked(saveChapterPartialContent).mockResolvedValue({ rowsAffected: 1 });
 });
 
 describe("enqueueChapterDownload", () => {
@@ -109,6 +114,7 @@ describe("enqueueChapterDownload", () => {
       7,
       `<section class="reader-text-content"><p>plain &lt;chapter&gt;</p></section>`,
       "text",
+      { mediaBytes: 0 },
     );
     expect(clearChapterMedia).toHaveBeenCalledWith(7);
   });
@@ -143,6 +149,9 @@ describe("enqueueChapterDownload", () => {
         sourceId: "source-a",
       }),
     );
+    expect(saveChapterContent).toHaveBeenCalledWith(7, "<img>", "html", {
+      mediaBytes: 3,
+    });
   });
 
   it("fails when the local chapter row is missing", async () => {

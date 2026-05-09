@@ -154,6 +154,7 @@ const RAW_CHAPTER = {
   isDownloaded: 1,
   contentType: "html",
   content: "<p>hi</p>",
+  mediaBytes: 5,
   releaseTime: null,
   readAt: null,
   createdAt: 1_700_000_000,
@@ -203,6 +204,7 @@ describe("gatherBackupSnapshot", () => {
     expect(manifest.chapters[0]?.unread).toBe(true);
     expect(manifest.chapters[0]?.isDownloaded).toBe(true);
     expect(manifest.chapters[0]?.contentType).toBe("html");
+    expect(manifest.chapters[0]?.mediaBytes).toBe(5);
     expect(manifest.categories[0]?.isSystem).toBe(true);
   });
 
@@ -396,7 +398,7 @@ describe("applyBackupSnapshot", () => {
     expect(storage.getItem("unrelated")).toBe("keep");
   });
 
-  it("restores downloaded chapter byte counts from content", async () => {
+  it("restores downloaded chapter byte counts from content and media metadata", async () => {
     const manifest = parseBackupManifest(
       encodeBackupManifest(await gatherForTest()),
     );
@@ -408,6 +410,28 @@ describe("applyBackupSnapshot", () => {
       String(sql).includes("INSERT INTO chapter"),
     );
     expect(chapterInsert?.[1]).toContain(9);
+    expect(chapterInsert?.[1]).toContain(5);
+  });
+
+  it("restores media byte counts from attached media files when available", async () => {
+    installTauriRuntime();
+    const manifest = attachBackupChapterMediaFiles(
+      parseBackupManifest(encodeBackupManifest(await gatherForTest())),
+      [
+        {
+          mediaSrc: "norea-media://chapter/10/cache/image.png",
+          body: [1, 2, 3],
+        },
+      ],
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    const chapterInsert = mockExecute.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO chapter"),
+    );
+    expect(chapterInsert?.[1]).toContain(3);
   });
 
   it("restores only the newest repository as the singleton row", async () => {

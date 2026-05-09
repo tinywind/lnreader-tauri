@@ -246,6 +246,29 @@ describe("pluginFetch", () => {
     expect(response.status).toBe(404);
   });
 
+  it("cancels the desktop scraper executor when the request signal aborts", async () => {
+    const controller = new AbortController();
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "webview_fetch") {
+        return await new Promise<never>(() => undefined);
+      }
+      if (command === "scraper_cancel_executor") return true;
+      throw new Error(`Unexpected command: ${String(command)}`);
+    });
+
+    const request = pluginFetch("https://ok.test/slow", {
+      scraperExecutor: "pool:0",
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(invokeMock).toHaveBeenCalledWith("scraper_cancel_executor", {
+      message: "Request cancelled",
+      queue: "pool:0",
+    });
+  });
+
   it("propagates an IPC rejection so the global toast can fire", async () => {
     invokeMock.mockRejectedValueOnce(new Error("scraper not ready"));
     await expect(pluginFetch("https://ok.test/")).rejects.toThrow(

@@ -14,6 +14,8 @@ export interface BackupChapterMediaFile {
 }
 
 const BACKUP_CHAPTER_MEDIA_FILES = Symbol("backupChapterMediaFiles");
+const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
+  /^norea-media:\/\/chapter\/([1-9]\d*)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 type BackupManifestWithChapterMedia = BackupManifest & {
   [BACKUP_CHAPTER_MEDIA_FILES]?: readonly BackupChapterMediaFile[];
@@ -49,6 +51,22 @@ export function getBackupChapterMediaFiles(
   );
 }
 
+function chapterMediaByteCounts(
+  files: readonly BackupChapterMediaFile[],
+): Map<number, number> {
+  const bytesByChapterId = new Map<number, number>();
+  for (const file of files) {
+    const match = LOCAL_CHAPTER_MEDIA_SRC_PATTERN.exec(file.mediaSrc);
+    if (!match) continue;
+    const chapterId = Number.parseInt(match[1]!, 10);
+    bytesByChapterId.set(
+      chapterId,
+      (bytesByChapterId.get(chapterId) ?? 0) + file.body.length,
+    );
+  }
+  return bytesByChapterId;
+}
+
 /**
  * Read a backup zip from disk via the Rust `backup_unpack` IPC
  * command. Re-injects each `chapters/<id>.html` body into the
@@ -66,18 +84,24 @@ export async function unpackBackup(inputPath: string): Promise<BackupManifest> {
   for (const entry of result.chapters) {
     htmlById.set(entry.id, entry.html);
   }
+  const chapterMediaFiles = (result.chapter_media ?? []).map((file) => ({
+    body: file.body,
+    mediaSrc: file.media_src,
+  }));
+  const mediaBytesByChapterId = chapterMediaByteCounts(chapterMediaFiles);
   const restored = {
     ...manifest,
     chapters: manifest.chapters.map((chapter) => {
       const html = htmlById.get(chapter.id);
-      return html !== undefined ? { ...chapter, content: html } : chapter;
+      const mediaBytes = mediaBytesByChapterId.get(chapter.id);
+      return html !== undefined || mediaBytes !== undefined
+        ? {
+            ...chapter,
+            ...(html !== undefined ? { content: html } : {}),
+            ...(mediaBytes !== undefined ? { mediaBytes } : {}),
+          }
+        : chapter;
     }),
   };
-  return attachBackupChapterMediaFiles(
-    restored,
-    (result.chapter_media ?? []).map((file) => ({
-      body: file.body,
-      mediaSrc: file.media_src,
-    })),
-  );
+  return attachBackupChapterMediaFiles(restored, chapterMediaFiles);
 }
