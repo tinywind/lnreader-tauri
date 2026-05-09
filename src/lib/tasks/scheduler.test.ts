@@ -38,6 +38,48 @@ describe("TaskScheduler", () => {
     expect(scheduler.getSnapshot().running).toBe(0);
   });
 
+  it("moves queued main work before it starts", async () => {
+    const scheduler = new TaskScheduler();
+    const order: string[] = [];
+    let finishFirst!: () => void;
+
+    const first = scheduler.enqueueMain({
+      kind: "backup.export",
+      title: "First",
+      run: () =>
+        new Promise<void>((resolve) => {
+          order.push("first:start");
+          finishFirst = resolve;
+        }),
+    });
+    const second = scheduler.enqueueMain({
+      kind: "repository.refreshIndex",
+      title: "Second",
+      run: async () => {
+        order.push("second:start");
+      },
+    });
+    const third = scheduler.enqueueMain({
+      kind: "library.checkUpdates",
+      title: "Third",
+      run: async () => {
+        order.push("third:start");
+      },
+    });
+
+    await settle();
+    expect(scheduler.moveQueuedTask(third.id, "up")).toBe(true);
+    expect(
+      scheduler.getSnapshot().records.find((task) => task.id === third.id)
+        ?.queueIndex,
+    ).toBe(0);
+
+    finishFirst();
+    await Promise.all([first.promise, second.promise, third.promise]);
+
+    expect(order).toEqual(["first:start", "third:start", "second:start"]);
+  });
+
   it("caps pool source work at the configured executor count", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,
@@ -187,6 +229,55 @@ describe("TaskScheduler", () => {
     await Promise.all([active.promise, user.promise]);
 
     expect(order).toEqual(["active:start", "user:start"]);
+  });
+
+  it("moves queued source work inside its source queue", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: true,
+    });
+    const order: string[] = [];
+    const source = { id: "p", name: "Plugin" };
+
+    const first = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "First",
+      priority: "background",
+      source,
+      run: async () => {
+        order.push("first:start");
+      },
+    });
+    const second = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Second",
+      priority: "background",
+      source,
+      run: async () => {
+        order.push("second:start");
+      },
+    });
+
+    await settle();
+    expect(
+      scheduler.getSnapshot().records.find((task) => task.id === first.id)
+        ?.queueIndex,
+    ).toBe(0);
+    expect(
+      scheduler.getSnapshot().records.find((task) => task.id === second.id)
+        ?.queueIndex,
+    ).toBe(1);
+
+    expect(scheduler.moveQueuedTask(second.id, "up")).toBe(true);
+    expect(
+      scheduler.getSnapshot().records.find((task) => task.id === second.id)
+        ?.queueIndex,
+    ).toBe(0);
+
+    expect(scheduler.resumeSourceQueue()).toBe(true);
+    await Promise.all([first.promise, second.promise]);
+
+    expect(order).toEqual(["second:start", "first:start"]);
   });
 
   it("lets interactive source browsing use the immediate executor during background downloads", async () => {

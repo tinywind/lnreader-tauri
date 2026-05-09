@@ -36,6 +36,8 @@
   "tasks.cancelSourceCurrent": "이 소스 작업 취소",
   "tasks.pauseSource": "소스 중지",
   "tasks.resumeSource": "소스 재개",
+  "tasks.moveUp": "위로 이동",
+  "tasks.moveDown": "아래로 이동",
   "tasks.summary.running": "진행 {count}",
   "tasks.summary.queued": "대기 {count}",
   "tasks.summary.failed": "실패 {count}",

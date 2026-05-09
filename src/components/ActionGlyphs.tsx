@@ -10,6 +10,24 @@ export function CheckGlyph({ className }: ActionGlyphProps) {
   );
 }
 
+export function ArrowDownGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="m7 14 5 5 5-5" />
+    </svg>
+  );
+}
+
+export function ArrowUpGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 19V5" />
+      <path d="m7 10 5-5 5 5" />
+    </svg>
+  );
+}
+
 export function ChevronDownGlyph({ className }: ActionGlyphProps) {
   return (
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
@@ -116,6 +134,15 @@ export function PlayGlyph({ className }: ActionGlyphProps) {
   return (
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
       <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+export function PauseGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M8 5v14" />
+      <path d="M16 5v14" />
     </svg>
   );
 }

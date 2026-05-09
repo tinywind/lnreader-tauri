@@ -8,9 +8,9 @@
  * - Gate each source with pause, cooldown, backoff, and an active lease.
  * - Dispatch source queues through a base-domain lane so sources sharing a
  *   site do not spread across multiple hidden WebViews.
- * - Default to one active task per source, even when a higher priority task
- *   is waiting. Priority may change ordering, but it must not bypass source
- *   rate limits unless a future task explicitly opts into that policy.
+ * - Default to one active task per source. Queue order can be changed by the
+ *   user, but it must not bypass source rate limits unless a future task
+ *   explicitly opts into that policy.
  *
  * Physical scraper executors own WebViews:
  * - `immediate` owns the foreground/site-browser WebView and is reserved for
@@ -129,11 +129,15 @@ export interface TaskRecord {
   startedAt?: number;
   finishedAt?: number;
   progress?: TaskProgress;
+  queueIndex?: number;
+  queueSize?: number;
   detail?: string;
   error?: string;
   canCancel: boolean;
   canRetry: boolean;
 }
+
+export type TaskMoveTarget = "top" | "up" | "down" | "bottom";
 
 export interface TaskSnapshot {
   pausedSourceIds: string[];
@@ -562,6 +566,29 @@ export class TaskScheduler {
     return cancelled;
   }
 
+  moveQueuedTask(id: string, target: TaskMoveTarget): boolean {
+    const entry = this.entries.get(id);
+    if (!entry || entry.record.status !== "queued") return false;
+    const queue = this.queueForEntry(entry);
+    if (!queue) return false;
+
+    const currentIndex = queue.indexOf(id);
+    if (currentIndex < 0) return false;
+
+    const nextIndex = this.moveTargetIndex(currentIndex, queue.length, target);
+    if (nextIndex === currentIndex) return false;
+
+    queue.splice(currentIndex, 1);
+    queue.splice(nextIndex, 0, id);
+    this.debug("queued task moved", entry, {
+      queueIndex: nextIndex,
+      target,
+    });
+    this.publishSnapshot();
+    this.drain();
+    return true;
+  }
+
   private pauseRunningSourceTasks(sourceId?: string): number {
     let paused = 0;
     for (const entry of this.entries.values()) {
@@ -722,10 +749,9 @@ export class TaskScheduler {
     for (let index = 0; index < this.mainQueue.length; index += 1) {
       const candidate = this.entries.get(this.mainQueue[index]);
       if (!candidate || candidate.record.status !== "queued") continue;
-      if (!entry || this.compareTaskOrder(candidate, entry) < 0) {
-        entry = candidate;
-        nextIndex = index;
-      }
+      entry = candidate;
+      nextIndex = index;
+      break;
     }
     if (!entry || nextIndex < 0) return;
     this.mainQueue.splice(nextIndex, 1);
@@ -882,9 +908,8 @@ export class TaskScheduler {
           continue;
         }
         if (!predicate(entry)) continue;
-        if (!sourceCandidate || this.compareTaskOrder(entry, sourceCandidate) < 0) {
-          sourceCandidate = entry;
-        }
+        sourceCandidate = entry;
+        break;
       }
       if (sourceCandidate) candidates.push(sourceCandidate);
     }
@@ -1262,8 +1287,24 @@ export class TaskScheduler {
   }
 
   private buildSnapshot(): TaskSnapshot {
+    const queuePositions = new Map<
+      string,
+      Pick<TaskRecord, "queueIndex" | "queueSize">
+    >();
+    this.mainQueue.forEach((id, queueIndex) => {
+      queuePositions.set(id, { queueIndex, queueSize: this.mainQueue.length });
+    });
+    for (const queue of this.sourceQueues.values()) {
+      queue.forEach((id, queueIndex) => {
+        queuePositions.set(id, { queueIndex, queueSize: queue.length });
+      });
+    }
+
     const records = [...this.entries.values()]
-      .map((entry) => ({ ...entry.record }))
+      .map((entry) => ({
+        ...entry.record,
+        ...queuePositions.get(entry.record.id),
+      }))
       .sort((a, b) => b.createdAt - a.createdAt);
     return {
       pausedSourceIds: [...this.pausedSourceIds].sort(),
@@ -1303,6 +1344,30 @@ export class TaskScheduler {
   private removeQueuedId(queue: string[], id: string): void {
     const index = queue.indexOf(id);
     if (index >= 0) queue.splice(index, 1);
+  }
+
+  private queueForEntry(entry: TaskEntry): string[] | null {
+    if (entry.record.lane === "main") return this.mainQueue;
+    const sourceId = entry.record.source?.id;
+    if (!sourceId) return null;
+    return this.sourceQueues.get(sourceId) ?? null;
+  }
+
+  private moveTargetIndex(
+    currentIndex: number,
+    queueLength: number,
+    target: TaskMoveTarget,
+  ): number {
+    switch (target) {
+      case "top":
+        return 0;
+      case "up":
+        return Math.max(0, currentIndex - 1);
+      case "down":
+        return Math.min(queueLength - 1, currentIndex + 1);
+      case "bottom":
+        return queueLength - 1;
+    }
   }
 
   private trimHistory(): void {

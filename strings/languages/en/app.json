@@ -36,6 +36,8 @@
   "tasks.cancelSourceCurrent": "Cancel source work",
   "tasks.pauseSource": "Pause source",
   "tasks.resumeSource": "Resume source",
+  "tasks.moveUp": "Move up",
+  "tasks.moveDown": "Move down",
   "tasks.summary.running": "Running {count}",
   "tasks.summary.queued": "Queued {count}",
   "tasks.summary.failed": "Failed {count}",
