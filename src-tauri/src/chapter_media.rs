@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use tauri::{AppHandle, Manager};
 
-const MEDIA_ROOT_DIR: &str = "chapter-media";
+pub(crate) const MEDIA_ROOT_DIR: &str = "chapter-media";
 const MEDIA_URI_PREFIX: &str = "norea-media://chapter/";
 
 fn media_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -68,6 +68,46 @@ fn parse_media_src(media_src: &str) -> Result<(i64, String, String), String> {
     Ok((chapter_id, cache_key, file_name))
 }
 
+pub(crate) fn chapter_media_path_from_src(
+    app: &AppHandle,
+    media_src: &str,
+) -> Result<PathBuf, String> {
+    let (chapter_id, cache_key, file_name) = parse_media_src(media_src)?;
+    Ok(chapter_dir(app, chapter_id)?
+        .join(cache_key)
+        .join(file_name))
+}
+
+pub(crate) fn chapter_media_backup_entry_name(
+    media_src: &str,
+) -> Result<String, String> {
+    let (chapter_id, cache_key, file_name) = parse_media_src(media_src)?;
+    Ok(format!(
+        "{MEDIA_ROOT_DIR}/{chapter_id}/{cache_key}/{file_name}"
+    ))
+}
+
+pub(crate) fn chapter_media_src_from_backup_entry(
+    entry_name: &str,
+) -> Option<String> {
+    let rest = entry_name.strip_prefix(&format!("{MEDIA_ROOT_DIR}/"))?;
+    let mut parts = rest.split('/');
+    let chapter_id = parts.next()?.parse::<i64>().ok()?;
+    if chapter_id <= 0 {
+        return None;
+    }
+    let cache_key = parts.next()?;
+    let file_name = parts.next()?;
+    if parts.next().is_some() || cache_key.is_empty() || file_name.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{MEDIA_URI_PREFIX}{chapter_id}/{}/{}",
+        safe_segment(cache_key, "cache"),
+        safe_segment(file_name, "media")
+    ))
+}
+
 #[tauri::command]
 pub fn chapter_media_store(
     app: AppHandle,
@@ -90,10 +130,7 @@ pub fn chapter_media_store(
 
 #[tauri::command]
 pub fn chapter_media_path(app: AppHandle, media_src: String) -> Result<String, String> {
-    let (chapter_id, cache_key, file_name) = parse_media_src(&media_src)?;
-    let path = chapter_dir(&app, chapter_id)?
-        .join(cache_key)
-        .join(file_name);
+    let path = chapter_media_path_from_src(&app, &media_src)?;
     if !path.is_file() {
         return Err("chapter media: file not found".to_string());
     }

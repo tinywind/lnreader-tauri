@@ -28,6 +28,7 @@ const SELECT_ALL = `
     fetched_at  AS fetchedAt,
     items_json  AS itemsJson
   FROM repository_index_cache
+  ORDER BY repo_url
 `;
 
 function parseRow(row: RawRow): RepositoryIndexCacheRow {

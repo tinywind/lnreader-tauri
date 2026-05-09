@@ -5,6 +5,8 @@
 //! ```text
 //! manifest.json           — JSON envelope (see src/lib/backup/format.ts)
 //! chapters/<id>.html      — one entry per downloaded chapter body
+//! chapter-media/<id>/<cache-key>/<file-name>
+//!                         — local files referenced by norea-media://chapter/...
 //! ```
 //!
 //! The manifest is the source of truth for structure (novels,
@@ -14,12 +16,19 @@
 //! `unpack.ts` strip / re-merge `chapter.content` around these
 //! commands.
 
+use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 
 use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+use crate::chapter_media::{
+    chapter_media_backup_entry_name, chapter_media_path_from_src,
+    chapter_media_src_from_backup_entry,
+};
 
 const MANIFEST_ENTRY: &str = "manifest.json";
 const CHAPTERS_PREFIX: &str = "chapters/";
@@ -32,23 +41,74 @@ pub struct ChapterContent {
     pub html: String,
 }
 
+/// One local chapter media file to include in the backup archive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChapterMediaContent {
+    pub media_src: String,
+    pub body: Vec<u8>,
+}
+
+/// One local chapter media reference discovered in downloaded HTML.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterMediaReference {
+    pub media_src: String,
+}
+
 /// Result of `backup_unpack`: the raw manifest JSON plus every
-/// chapter HTML entry the archive carried.
+/// chapter HTML and local media entry carried by the archive.
 #[derive(Debug, Serialize)]
 pub struct UnpackedBackup {
     pub manifest_json: String,
     pub chapters: Vec<ChapterContent>,
+    pub chapter_media: Vec<ChapterMediaContent>,
 }
 
-/// Write a backup zip to `output_path`.
-///
-/// `manifest_json` should be the output of TS-side
-/// `encodeBackupManifest(...)` — this command does not validate or
-/// reshape it; the JS side owns the schema.
-#[tauri::command]
-pub fn backup_pack(
+fn read_chapter_media_files(
+    app: &AppHandle,
+    chapter_media: &[ChapterMediaReference],
+) -> Result<Vec<ChapterMediaContent>, String> {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+
+    for media in chapter_media {
+        if !seen.insert(media.media_src.clone()) {
+            continue;
+        }
+        let path = chapter_media_path_from_src(app, &media.media_src)?;
+        let mut file = File::open(&path).map_err(|err| {
+            if err.kind() == ErrorKind::NotFound {
+                format!(
+                    "backup_pack: chapter media file referenced by '{}' was not found",
+                    media.media_src
+                )
+            } else {
+                format!(
+                    "backup_pack: open chapter media '{}': {err}",
+                    path.to_string_lossy()
+                )
+            }
+        })?;
+        let mut body = Vec::new();
+        file.read_to_end(&mut body).map_err(|err| {
+            format!(
+                "backup_pack: read chapter media '{}': {err}",
+                path.to_string_lossy()
+            )
+        })?;
+        files.push(ChapterMediaContent {
+            media_src: media.media_src.clone(),
+            body,
+        });
+    }
+
+    Ok(files)
+}
+
+fn write_backup_zip(
     manifest_json: String,
     chapters: Vec<ChapterContent>,
+    chapter_media: Vec<ChapterMediaContent>,
     output_path: String,
 ) -> Result<(), String> {
     let file = File::create(&output_path)
@@ -71,13 +131,39 @@ pub fn backup_pack(
             .map_err(|err| format!("backup_pack: write {entry_name}: {err}"))?;
     }
 
+    for media in &chapter_media {
+        let entry_name = chapter_media_backup_entry_name(&media.media_src)
+            .map_err(|err| format!("backup_pack: chapter media entry: {err}"))?;
+        zip.start_file(&entry_name, options)
+            .map_err(|err| format!("backup_pack: start {entry_name}: {err}"))?;
+        zip.write_all(&media.body)
+            .map_err(|err| format!("backup_pack: write {entry_name}: {err}"))?;
+    }
+
     zip.finish()
         .map_err(|err| format!("backup_pack: finalize: {err}"))?;
     Ok(())
 }
 
+/// Write a backup zip to `output_path`.
+///
+/// `manifest_json` should be the output of TS-side
+/// `encodeBackupManifest(...)` — this command does not validate or
+/// reshape it; the JS side owns the schema.
+#[tauri::command]
+pub fn backup_pack(
+    app: AppHandle,
+    manifest_json: String,
+    chapters: Vec<ChapterContent>,
+    chapter_media: Vec<ChapterMediaReference>,
+    output_path: String,
+) -> Result<(), String> {
+    let chapter_media = read_chapter_media_files(&app, &chapter_media)?;
+    write_backup_zip(manifest_json, chapters, chapter_media, output_path)
+}
+
 /// Read a backup zip from `input_path` and return the manifest JSON
-/// plus every `chapters/<id>.html` entry.
+/// plus every `chapters/<id>.html` and chapter media entry.
 ///
 /// Unrelated entries (foreign tools writing extra files) are skipped
 /// silently. Missing `manifest.json` is an error.
@@ -90,12 +176,16 @@ pub fn backup_unpack(input_path: String) -> Result<UnpackedBackup, String> {
 
     let mut manifest_json: Option<String> = None;
     let mut chapters: Vec<ChapterContent> = Vec::new();
+    let mut chapter_media: Vec<ChapterMediaContent> = Vec::new();
 
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
             .map_err(|err| format!("backup_unpack: read entry {index}: {err}"))?;
         let name = entry.name().to_string();
+        if entry.is_dir() {
+            continue;
+        }
 
         if name == MANIFEST_ENTRY {
             let mut buf = String::new();
@@ -117,6 +207,15 @@ pub fn backup_unpack(input_path: String) -> Result<UnpackedBackup, String> {
                     .map_err(|err| format!("backup_unpack: read {name}: {err}"))?;
                 chapters.push(ChapterContent { id, html });
             }
+            continue;
+        }
+
+        if let Some(media_src) = chapter_media_src_from_backup_entry(&name) {
+            let mut body = Vec::new();
+            entry
+                .read_to_end(&mut body)
+                .map_err(|err| format!("backup_unpack: read {name}: {err}"))?;
+            chapter_media.push(ChapterMediaContent { media_src, body });
         }
     }
 
@@ -126,6 +225,7 @@ pub fn backup_unpack(input_path: String) -> Result<UnpackedBackup, String> {
     Ok(UnpackedBackup {
         manifest_json,
         chapters,
+        chapter_media,
     })
 }
 
@@ -152,12 +252,18 @@ mod tests {
             },
         ];
 
-        backup_pack(manifest_json.clone(), chapters.clone(), zip_path_str.clone())
-            .expect("pack");
+        write_backup_zip(
+            manifest_json.clone(),
+            chapters.clone(),
+            Vec::new(),
+            zip_path_str.clone(),
+        )
+        .expect("pack");
 
         let unpacked = backup_unpack(zip_path_str).expect("unpack");
         assert_eq!(unpacked.manifest_json, manifest_json);
         assert_eq!(unpacked.chapters.len(), 2);
+        assert!(unpacked.chapter_media.is_empty());
 
         let mut by_id = unpacked.chapters.clone();
         by_id.sort_by_key(|c| c.id);
@@ -165,6 +271,30 @@ mod tests {
         assert_eq!(by_id[0].html, "<p>chapter ten</p>");
         assert_eq!(by_id[1].id, 11);
         assert_eq!(by_id[1].html, "<p>chapter eleven</p>");
+    }
+
+    #[test]
+    fn pack_then_unpack_round_trips_chapter_media() {
+        let dir = tempdir().expect("tempdir");
+        let zip_path = dir.path().join("backup.zip");
+        let zip_path_str = zip_path.to_string_lossy().to_string();
+
+        let manifest_json = r#"{"version":1,"exportedAt":1700000000}"#.to_string();
+        let chapter_media = vec![ChapterMediaContent {
+            media_src: "norea-media://chapter/10/cache/image.png".into(),
+            body: vec![1, 2, 3, 4],
+        }];
+
+        write_backup_zip(manifest_json, Vec::new(), chapter_media, zip_path_str.clone())
+            .expect("pack");
+
+        let unpacked = backup_unpack(zip_path_str).expect("unpack");
+        assert_eq!(unpacked.chapter_media.len(), 1);
+        assert_eq!(
+            unpacked.chapter_media[0].media_src.as_str(),
+            "norea-media://chapter/10/cache/image.png"
+        );
+        assert_eq!(unpacked.chapter_media[0].body.as_slice(), &[1, 2, 3, 4]);
     }
 
     #[test]

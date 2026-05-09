@@ -11,7 +11,7 @@ import {
   encodeBackupManifest,
   type BackupManifest,
 } from "./format";
-import { unpackBackup } from "./unpack";
+import { getBackupChapterMediaFiles, unpackBackup } from "./unpack";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -117,6 +117,29 @@ describe("unpackBackup", () => {
     const restored = await unpackBackup("C:\\empty.zip");
     expect(restored.chapters[0]?.content).toBeNull();
     expect(restored.chapters[1]?.content).toBeNull();
+  });
+
+  it("attaches local chapter media entries for restore", async () => {
+    const lean = makeLeanManifest();
+    invokeMock.mockResolvedValue({
+      manifest_json: encodeBackupManifest(lean),
+      chapters: [],
+      chapter_media: [
+        {
+          media_src: "norea-media://chapter/10/cache/image.png",
+          body: [1, 2, 3],
+        },
+      ],
+    });
+
+    const restored = await unpackBackup("C:\\backup.zip");
+
+    expect(getBackupChapterMediaFiles(restored)).toEqual([
+      {
+        mediaSrc: "norea-media://chapter/10/cache/image.png",
+        body: [1, 2, 3],
+      },
+    ]);
   });
 
   it("propagates BackupFormatError on a malformed envelope", async () => {

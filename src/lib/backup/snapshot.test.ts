@@ -4,6 +4,11 @@ vi.mock("../../db/client", () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
+import { invoke } from "@tauri-apps/api/core";
 import { getDb } from "../../db/client";
 import {
   BACKUP_FORMAT_VERSION,
@@ -11,14 +16,24 @@ import {
   parseBackupManifest,
 } from "./format";
 import { applyBackupSnapshot, gatherBackupSnapshot } from "./snapshot";
+import { attachBackupChapterMediaFiles } from "./unpack";
 
 const mockedGetDb = vi.mocked(getDb);
+const invokeMock = vi.mocked(invoke);
 let mockSelect: ReturnType<typeof vi.fn>;
 let mockExecute: ReturnType<typeof vi.fn>;
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "localStorage",
 );
+const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "window",
+);
+const originalTauriInternalsDescriptor =
+  typeof window === "undefined"
+    ? undefined
+    : Object.getOwnPropertyDescriptor(window, "__TAURI_INTERNALS__");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -28,6 +43,7 @@ beforeEach(() => {
     select: mockSelect,
     execute: mockExecute,
   } as never);
+  invokeMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -39,6 +55,23 @@ afterEach(() => {
     );
   } else {
     delete (globalThis as { localStorage?: Storage }).localStorage;
+  }
+  if (typeof window !== "undefined") {
+    if (originalTauriInternalsDescriptor) {
+      Object.defineProperty(
+        window,
+        "__TAURI_INTERNALS__",
+        originalTauriInternalsDescriptor,
+      );
+    } else {
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+    }
+  }
+  if (originalWindowDescriptor) {
+    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+  } else {
+    delete (globalThis as { window?: Window }).window;
   }
 });
 
@@ -69,6 +102,23 @@ function installLocalStorage(initial: Record<string, string>): Storage {
     value: storage,
   });
   return storage;
+}
+
+function installTauriRuntime(): void {
+  const runtimeWindow =
+    typeof window === "undefined"
+      ? ({} as Window & { __TAURI_INTERNALS__?: unknown })
+      : window;
+  if (typeof window === "undefined") {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: runtimeWindow,
+    });
+  }
+  Object.defineProperty(runtimeWindow, "__TAURI_INTERNALS__", {
+    configurable: true,
+    value: {},
+  });
 }
 
 const RAW_NOVEL = {
@@ -223,6 +273,7 @@ describe("applyBackupSnapshot", () => {
       "DELETE FROM novel",
       "DELETE FROM category",
       "DELETE FROM repository",
+      "DELETE FROM repository_index_cache",
       "DELETE FROM installed_plugin",
     ]);
   });
@@ -393,5 +444,29 @@ describe("applyBackupSnapshot", () => {
       "New",
       1_700_000_000,
     ]);
+  });
+
+  it("restores chapter media files attached by unpack", async () => {
+    installTauriRuntime();
+    const manifest = attachBackupChapterMediaFiles(
+      parseBackupManifest(encodeBackupManifest(await gatherForTest())),
+      [
+        {
+          mediaSrc: "norea-media://chapter/10/cache/image.png",
+          body: [1, 2, 3],
+        },
+      ],
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    expect(invokeMock).toHaveBeenCalledWith("chapter_media_clear_all");
+    expect(invokeMock).toHaveBeenCalledWith("chapter_media_store", {
+      body: [1, 2, 3],
+      cacheKey: "cache",
+      chapterId: 10,
+      fileName: "image.png",
+    });
   });
 });

@@ -1,8 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getDb } from "../../db/client";
 import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
 } from "../chapter-content";
+import { isTauriRuntime } from "../tauri-runtime";
 import {
   BACKUP_FORMAT_VERSION,
   type BackupCategory,
@@ -14,6 +16,11 @@ import {
   type BackupRepository,
   type BackupSetting,
 } from "./format";
+import {
+  getBackupChapterMediaFiles,
+  hasBackupChapterMediaFiles,
+  type BackupChapterMediaFile,
+} from "./unpack";
 
 /**
  * SQLite stores booleans as 0/1 integers; raw `select` returns those
@@ -92,6 +99,8 @@ const BACKUP_SETTING_KEYS = new Set([
 ]);
 
 const BACKUP_SETTING_PREFIXES = ["plugin:", "source-filters:"];
+const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
+  /^norea-media:\/\/chapter\/([1-9]\d*)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/;
 
 const SELECT_NOVELS = `
   SELECT
@@ -169,7 +178,7 @@ const SELECT_INSTALLED_PLUGINS = `
     source_code AS sourceCode,
     installed_at AS installedAt
   FROM installed_plugin
-  ORDER BY installed_at DESC
+  ORDER BY installed_at DESC, id ASC
 `;
 
 const INSERT_NOVEL = `
@@ -304,6 +313,41 @@ function getUtf8ByteLength(value: string | null): number {
   return value === null ? 0 : new TextEncoder().encode(value).byteLength;
 }
 
+function parseBackupChapterMediaSource(mediaSrc: string): {
+  cacheKey: string;
+  chapterId: number;
+  fileName: string;
+} {
+  const match = LOCAL_CHAPTER_MEDIA_SRC_PATTERN.exec(mediaSrc);
+  if (!match) {
+    throw new Error(`Invalid backup chapter media reference: ${mediaSrc}`);
+  }
+  return {
+    chapterId: Number.parseInt(match[1]!, 10),
+    cacheKey: match[2]!,
+    fileName: match[3]!,
+  };
+}
+
+async function restoreBackupChapterMediaFiles(
+  files: readonly BackupChapterMediaFile[],
+): Promise<void> {
+  if (!isTauriRuntime()) return;
+
+  await invoke("chapter_media_clear_all");
+  for (const file of files) {
+    const { cacheKey, chapterId, fileName } = parseBackupChapterMediaSource(
+      file.mediaSrc,
+    );
+    await invoke("chapter_media_store", {
+      body: file.body,
+      cacheKey,
+      chapterId,
+      fileName,
+    });
+  }
+}
+
 function toCategory(row: RawCategoryRow): BackupCategory {
   return {
     id: row.id,
@@ -394,6 +438,7 @@ export async function applyBackupSnapshot(
     await db.execute("DELETE FROM novel");
     await db.execute("DELETE FROM category");
     await db.execute("DELETE FROM repository");
+    await db.execute("DELETE FROM repository_index_cache");
     if (manifest.installedPlugins !== undefined) {
       await db.execute("DELETE FROM installed_plugin");
     }
@@ -487,6 +532,10 @@ export async function applyBackupSnapshot(
   } catch (error) {
     await db.execute("ROLLBACK").catch(() => undefined);
     throw error;
+  }
+
+  if (hasBackupChapterMediaFiles(manifest)) {
+    await restoreBackupChapterMediaFiles(getBackupChapterMediaFiles(manifest));
   }
 
   if (manifest.settings !== undefined) {
