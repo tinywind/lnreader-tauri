@@ -1017,6 +1017,98 @@ fn same_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
+#[cfg(all(desktop, target_os = "windows"))]
+fn scraper_current_url_for_log(_scraper: &ScraperWebview) -> String {
+    "<native_url_read_disabled_on_windows>".to_string()
+}
+
+#[cfg(all(desktop, not(target_os = "windows")))]
+fn scraper_current_url_for_log(scraper: &ScraperWebview) -> String {
+    scraper
+        .url()
+        .map(|url| url.to_string())
+        .unwrap_or_else(|err| format!("<unavailable: {err}>"))
+}
+
+#[cfg(all(desktop, not(target_os = "windows")))]
+fn cookie_details_for_log(cookies: &[tauri::webview::Cookie<'static>]) -> Vec<String> {
+    cookies
+        .iter()
+        .map(|cookie| {
+            format!(
+                "name={}; value_len={}; domain={:?}; path={:?}; secure={:?}; http_only={:?}; same_site={:?}; expires={:?}",
+                cookie.name(),
+                cookie.value().len(),
+                cookie.domain(),
+                cookie.path(),
+                cookie.secure(),
+                cookie.http_only(),
+                cookie.same_site(),
+                cookie.expires(),
+            )
+        })
+        .collect()
+}
+
+#[cfg(desktop)]
+fn fetch_init_for_log(init: &Option<FetchInit>) -> String {
+    let Some(init) = init else {
+        return "none".to_string();
+    };
+    let header_names: Vec<&String> = init
+        .headers
+        .as_ref()
+        .map(|headers| headers.keys().collect())
+        .unwrap_or_default();
+    format!(
+        "method={:?} header_names={:?} body_len={}",
+        init.method.as_deref(),
+        header_names,
+        init.body.as_ref().map(|body| body.len()).unwrap_or(0)
+    )
+}
+
+#[cfg(all(desktop, target_os = "windows"))]
+fn log_scraper_cookies(
+    _scraper: &ScraperWebview,
+    queue: &str,
+    context: &str,
+    urls: Vec<(&'static str, String)>,
+) {
+    let targets: Vec<String> = urls
+        .into_iter()
+        .map(|(label, url)| format!("{label} url={url} native_cookie_read=disabled_on_windows"))
+        .collect();
+    log::debug!("[scraper:cookies] context={context} queue={queue} targets={targets:?}");
+}
+
+#[cfg(all(desktop, not(target_os = "windows")))]
+fn log_scraper_cookies(
+    scraper: &ScraperWebview,
+    queue: &str,
+    context: &str,
+    urls: Vec<(&'static str, String)>,
+) {
+    let mut targets = Vec::new();
+    for (label, url) in urls {
+        match url.parse::<Url>() {
+            Ok(parsed) => match scraper.cookies_for_url(parsed) {
+                Ok(cookies) => targets.push(format!(
+                    "{label} url={url} count={} cookies={:?}",
+                    cookies.len(),
+                    cookie_details_for_log(&cookies)
+                )),
+                Err(err) => targets.push(format!("{label} url={url} error={err}")),
+            },
+            Err(err) => targets.push(format!("{label} url={url} parse_error={err}")),
+        }
+    }
+    log::debug!(
+        "[scraper:cookies] context={context} queue={queue} current_url={} targets={targets:?}",
+        scraper_current_url_for_log(scraper)
+    );
+}
+
 #[cfg(desktop)]
 fn scraper_is_at_origin(scraper: &ScraperWebview, target: &Url) -> bool {
     scraper
@@ -1323,13 +1415,49 @@ pub async fn webview_fetch(
     let queue_lock = scraper_executor_lock(&state, &queue);
     let _queue_guard = queue_lock.lock().await;
     let fetch_context = fetch_context_url(&url, context_url.as_deref())?;
+    let init_log = fetch_init_for_log(&init);
     log::debug!(
-        "[scraper:fetch] context selected request_url={url} configured_context={:?} fetch_context={fetch_context}",
+        "[scraper:fetch] request queue={queue} request_url={url} configured_context={:?} fetch_context={fetch_context} timeout_ms={timeout_ms:?} user_agent={user_agent:?} init={init_log}",
         context_url
     );
     let scraper = scraper_handle_for_key(&app, &state, &queue, user_agent.as_deref())?;
-    webview_fetch_with_ready_scraper(&scraper, url, init, Some(fetch_context), timeout_ms)
-        .await
+    log_scraper_cookies(
+        &scraper,
+        &queue,
+        "before_webview_fetch",
+        vec![
+            ("request", url.clone()),
+            ("fetch_context", fetch_context.clone()),
+        ],
+    );
+    let result = webview_fetch_with_ready_scraper(
+        &scraper,
+        url.clone(),
+        init,
+        Some(fetch_context.clone()),
+        timeout_ms,
+    )
+    .await;
+    match &result {
+        Ok(result) => {
+            let header_names: Vec<&String> = result.headers.keys().collect();
+            log::debug!(
+                "[scraper:fetch] response queue={queue} request_url={url} status={} final_url={} header_names={:?}",
+                result.status,
+                result.final_url,
+                header_names
+            );
+        }
+        Err(err) => {
+            log::error!("[scraper:fetch] failed queue={queue} request_url={url} error={err}");
+        }
+    }
+    let mut cookie_log_urls = vec![("request", url.clone()), ("fetch_context", fetch_context)];
+    if let Ok(result) = &result {
+        cookie_log_urls.push(("final", result.final_url.clone()));
+    }
+    log_scraper_cookies(&scraper, &queue, "after_webview_fetch", cookie_log_urls);
+    result
 }
 
 #[cfg(not(desktop))]
@@ -1421,6 +1549,16 @@ pub async fn webview_extract(
     let queue_lock = scraper_executor_lock(&state, &queue);
     let _queue_guard = queue_lock.lock().await;
     let scraper = scraper_handle_for_key(&app, &state, &queue, user_agent.as_deref())?;
+    log::debug!(
+        "[scraper:extract] request queue={queue} url={url} timeout_ms={timeout_ms:?} user_agent={user_agent:?} before_script_len={}",
+        before_script.as_ref().map(|script| script.len()).unwrap_or(0)
+    );
+    log_scraper_cookies(
+        &scraper,
+        &queue,
+        "before_webview_extract",
+        vec![("request", url.clone())],
+    );
 
     // Embed the before-content script in the URL fragment. The
     // browser does not send the fragment to the server, and the
@@ -1442,7 +1580,7 @@ pub async fn webview_extract(
         format!("webview_extract: invalid url '{target_url_str}': {err}")
     })?;
 
-    log::debug!("[scraper] webview_extract navigate: {url}");
+    log::debug!("[scraper:extract] navigate queue={queue} url={url} target_url={target_url_str}");
 
     scraper
         .navigate(parsed)
@@ -1468,10 +1606,30 @@ pub async fn webview_extract(
             // Parking on about:blank forces the next fetch to prepare the
             // source context again.
             clear_webview_extract_result_marker(&scraper, &current);
+            log::debug!(
+                "[scraper:extract] complete queue={queue} url={url} current_url={current} result_len={}",
+                decoded.len()
+            );
+            log_scraper_cookies(
+                &scraper,
+                &queue,
+                "after_webview_extract",
+                vec![("request", url.clone()), ("current", current)],
+            );
             return Ok(decoded);
         }
     }
 
+    log::error!(
+        "[scraper:extract] timeout queue={queue} url={url} current_url={}",
+        scraper_current_url_for_log(&scraper)
+    );
+    log_scraper_cookies(
+        &scraper,
+        &queue,
+        "after_webview_extract_timeout",
+        vec![("request", url.clone())],
+    );
     Err(format!(
         "webview_extract: timeout after {}ms",
         timeout.as_millis(),

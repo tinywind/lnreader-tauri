@@ -109,6 +109,10 @@ function requestTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(1, Math.round(numeric));
 }
 
+function headerNames(headers: Record<string, string> | undefined): string[] {
+  return Object.keys(headers ?? {});
+}
+
 function decodeBase64Body(bodyBase64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(bodyBase64);
   const bytes = new Uint8Array(binary.length);
@@ -253,23 +257,55 @@ export async function pluginFetch(
   const scraperExecutor =
     init.scraperExecutor ?? activeScraperExecutor(init.sourceId);
   const timeoutMs = requestTimeoutMs(init.timeoutMs);
-  const result = isAndroidRuntime()
-    ? await androidWebviewFetch(
-        url,
-        wireInit,
-        contextUrl,
-        userAgent,
-        scraperExecutor,
-        timeoutMs,
-      )
-    : await invoke<FetchResultWire>("webview_fetch", {
-        url,
-        init: wireInit,
-        contextUrl,
-        userAgent,
-        queue: scraperExecutor,
-        timeoutMs,
-      });
+  console.debug("[plugin-fetch] request", {
+    bodyLength: wireInit.body?.length ?? 0,
+    contextUrl,
+    headerNames: headerNames(wireInit.headers),
+    method: wireInit.method ?? "GET",
+    scraperExecutor,
+    sourceId: init.sourceId,
+    timeoutMs,
+    url,
+    userAgent,
+  });
+  let result: FetchResultWire;
+  try {
+    result = isAndroidRuntime()
+      ? await androidWebviewFetch(
+          url,
+          wireInit,
+          contextUrl,
+          userAgent,
+          scraperExecutor,
+          timeoutMs,
+        )
+      : await invoke<FetchResultWire>("webview_fetch", {
+          url,
+          init: wireInit,
+          contextUrl,
+          userAgent,
+          queue: scraperExecutor,
+          timeoutMs,
+        });
+  } catch (error) {
+    console.error("[plugin-fetch] failed", {
+      contextUrl,
+      error,
+      scraperExecutor,
+      sourceId: init.sourceId,
+      url,
+    });
+    throw error;
+  }
+  console.debug("[plugin-fetch] response", {
+    finalUrl: result.finalUrl,
+    headerNames: headerNames(result.headers),
+    scraperExecutor,
+    sourceId: init.sourceId,
+    status: result.status,
+    statusText: result.statusText,
+    url,
+  });
   const response = new Response(bodyFromWire(result), {
     status: result.status,
     statusText: result.statusText,

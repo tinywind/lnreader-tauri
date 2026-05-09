@@ -5,6 +5,7 @@ import android.app.Activity
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -61,6 +62,72 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   private val queues = mutableMapOf(IMMEDIATE_EXECUTOR to QueueState(IMMEDIATE_EXECUTOR))
   private var browserVisible = false
   private var bounds = CssBounds(0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
+
+  private fun cookieSummary(url: String?): String {
+    if (url.isNullOrBlank()) return "<none>"
+    val header = CookieManager.getInstance().getCookie(url) ?: return "<empty>"
+    val names = header.split(";")
+      .mapNotNull { cookie -> cookie.substringBefore("=").trim().takeIf { it.isNotEmpty() } }
+    return "count=${names.size} names=${names.joinToString(",")}"
+  }
+
+  private fun jsonKeysForLog(json: JSONObject?): String {
+    if (json == null) return "<none>"
+    val names = mutableListOf<String>()
+    val keys = json.keys()
+    while (keys.hasNext()) {
+      names.add(keys.next())
+    }
+    return "count=${names.size} names=${names.joinToString(",")}"
+  }
+
+  private fun fetchInitForLog(init: JSONObject): String {
+    val body = init.optString("body").takeIf { init.has("body") }
+    return "method=${init.opt("method")} headers=${jsonKeysForLog(init.optJSONObject("headers"))} " +
+      "bodyLength=${body?.length ?: 0}"
+  }
+
+  private fun logState(state: QueueState, message: String, url: String? = null) {
+    Log.d(
+      TAG,
+      "[${state.key}] $message busy=${state.busy} queue=${state.queue.size} " +
+        "browserVisible=$browserVisible currentUrl=${state.currentUrl} " +
+        "knownQueues=${queues.keys.joinToString(",")} " +
+        "webViews=${queues.values.count { it.webView != null }} " +
+        "targetUrl=$url currentCookies=${cookieSummary(state.currentUrl)} " +
+        "targetCookies=${cookieSummary(url)}",
+    )
+  }
+
+  private fun fetchPayloadForLog(payload: String): String {
+    return try {
+      val result = JSONObject(payload)
+      val body = result.optString("body").takeIf { result.has("body") }
+      val bodyBase64 = result.optString("bodyBase64").takeIf { result.has("bodyBase64") }
+      "success=${result.optBoolean("success", false)} " +
+        "status=${result.opt("status")} statusText=${result.opt("statusText")} " +
+        "finalUrl=${result.opt("finalUrl")} headers=${jsonKeysForLog(result.optJSONObject("headers"))} " +
+        "error=${result.opt("error")} bodyLength=${body?.length ?: 0} " +
+        "bodyBase64Length=${bodyBase64?.length ?: 0} payloadLength=${payload.length}"
+    } catch (error: Throwable) {
+      "payloadLength=${payload.length} parseError=${error.message}"
+    }
+  }
+
+  private fun envelopeForLog(envelope: JSONObject): String {
+    val result = envelope.opt("result")
+    if (result is JSONObject) {
+      val body = result.optString("body").takeIf { result.has("body") }
+      val bodyBase64 = result.optString("bodyBase64").takeIf { result.has("bodyBase64") }
+      return "ok=${envelope.optBoolean("ok", false)} " +
+        "status=${result.opt("status")} statusText=${result.opt("statusText")} " +
+        "finalUrl=${result.opt("finalUrl")} headers=${jsonKeysForLog(result.optJSONObject("headers"))} " +
+        "error=${envelope.opt("error")} bodyLength=${body?.length ?: 0} " +
+        "bodyBase64Length=${bodyBase64?.length ?: 0} envelopeLength=${envelope.toString().length}"
+    }
+    return "ok=${envelope.optBoolean("ok", false)} error=${envelope.opt("error")} " +
+      "resultType=${result?.javaClass?.name ?: "null"} envelopeLength=${envelope.toString().length}"
+  }
 
   @JavascriptInterface
   fun cancel(payload: String) {
@@ -162,6 +229,10 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun enqueue(state: QueueState, action: QueuedAction) {
     mainHandler.post {
+      logState(
+        state,
+        "enqueue id=${action.id} priority=${action.priority} browserAction=${action.browserAction}",
+      )
       state.queue.add(action.copy(sequence = state.nextSequence))
       state.nextSequence += 1
       runNext(state)
@@ -174,6 +245,10 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val action = state.queue.removeAt(index)
     state.busy = true
     state.activeAction = action
+    logState(
+      state,
+      "runNext id=${action.id} priority=${action.priority} browserAction=${action.browserAction}",
+    )
     try {
       action.run(state)
     } catch (error: Throwable) {
@@ -227,6 +302,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val existing = state.webView
     if (existing != null) {
       if (!userAgent.isNullOrBlank() && state.userAgent != userAgent) {
+        logState(state, "update userAgent userAgent=$userAgent")
         existing.settings.userAgentString = userAgent
         state.userAgent = userAgent
       }
@@ -236,6 +312,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val webView = createScraperWebView(state, userAgent)
     state.webView = webView
     state.userAgent = userAgent
+    logState(state, "created scraper webview userAgent=$userAgent")
     return webView
   }
 
@@ -324,6 +401,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun showScraper() {
     val state = queueState(IMMEDIATE_EXECUTOR)
+    logState(state, "showScraper before")
     val webView = scraper(
       state,
       state.userAgent ?: mainWebView.settings.userAgentString,
@@ -344,11 +422,13 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView.bringToFront()
     webView.requestLayout()
     webView.invalidate()
+    logState(state, "showScraper after")
   }
 
   private fun hideScraper() {
     val state = queueState(IMMEDIATE_EXECUTOR)
     val webView = state.webView ?: return
+    logState(state, "hideScraper before")
     browserVisible = false
     webView.layoutParams = hiddenLayoutParams()
     webView.alpha = 0f
@@ -359,6 +439,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView.isFocusable = false
     webView.isFocusableInTouchMode = false
     webView.requestLayout()
+    CookieManager.getInstance().flush()
+    logState(state, "hideScraper after")
     runNext(state)
   }
 
@@ -369,6 +451,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     return object : WebViewClient() {
       override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
         state.currentUrl = url
+        logState(state, "pageStarted url=$url", url)
         if (!state.documentStartScriptEnabled) {
           view.evaluateJavascript(INIT_SCRIPT, null)
         }
@@ -376,6 +459,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
       override fun onPageFinished(view: WebView, url: String) {
         state.currentUrl = url
+        CookieManager.getInstance().flush()
+        logState(state, "pageFinished url=$url", url)
         onFinished?.invoke(url)
       }
     }
@@ -389,9 +474,15 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val timeoutMs = payload.optLong("timeoutMs", 60_000L).coerceAtLeast(1L)
     val webView = scraper(state, payloadUserAgent(payload))
     state.activeFetchId = id
+    logState(
+      state,
+      "runFetch start id=$id url=$url contextUrl=$contextUrl timeoutMs=$timeoutMs init=${fetchInitForLog(init)}",
+      url,
+    )
 
     prepareContext(state, webView, id, contextUrl) {
       if (state.activeFetchId != id) return@prepareContext
+      logState(state, "runFetch prepared id=$id url=$url contextUrl=$contextUrl", url)
       setTimeout(
         state,
         id,
@@ -418,6 +509,11 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     }
 
     state.activeExtractId = id
+    logState(
+      state,
+      "runExtract start id=$id url=$url timeoutMs=$timeoutMs beforeScriptLength=${beforeScript?.length ?: 0}",
+      url,
+    )
     setTimeout(state, id, timeoutMs, "webview_extract: timeout after ${timeoutMs}ms")
     scraper(state, payloadUserAgent(payload)).loadUrl(targetUrl)
   }
@@ -426,6 +522,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val id = payload.getString("id")
     val url = payload.getString("url")
     val webView = scraper(state, payloadUserAgent(payload))
+    logState(state, "runNavigate start id=$id url=$url", url)
     showScraper()
     webView.loadUrl(url)
     finish(
@@ -445,9 +542,15 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     ready: () -> Unit,
   ) {
     if (contextUrl == null || sameOrigin(state.currentUrl, contextUrl)) {
+      logState(
+        state,
+        "prepareContext skipped id=$id contextUrl=$contextUrl sameOrigin=${contextUrl != null}",
+        contextUrl,
+      )
       ready()
       return
     }
+    logState(state, "prepareContext navigate id=$id contextUrl=$contextUrl", contextUrl)
 
     var finished = false
     val timeout = Runnable {
@@ -455,6 +558,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
       finished = true
       webView.stopLoading()
       webView.webViewClient = makeClient(state, null)
+      logState(state, "prepareContext timeout id=$id contextUrl=$contextUrl", contextUrl)
       finishError(state, id, "scraper: timed out preparing fetch context $contextUrl")
     }
     state.activeTimeout = timeout
@@ -464,6 +568,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
       finished = true
       clearTimeout(state)
       webView.webViewClient = makeClient(state, null)
+      logState(state, "prepareContext ready id=$id contextUrl=$contextUrl", contextUrl)
       ready()
     }
     webView.loadUrl(contextUrl)
@@ -519,6 +624,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   private fun finishError(state: QueueState, id: String, message: String) {
+    logState(state, "finishError id=$id message=$message")
     finish(
       state,
       id,
@@ -588,6 +694,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   private fun sendError(id: String, message: String) {
+    Log.d(TAG, "sendError id=$id message=$message")
     sendResult(
       id,
       JSONObject()
@@ -598,6 +705,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun finish(state: QueueState, id: String, envelope: JSONObject) {
     clearTimeout(state)
+    logState(state, "finish id=$id envelope=${envelopeForLog(envelope)}")
     state.activeFetchId = null
     state.activeExtractId = null
     state.activeAction = null
@@ -614,6 +722,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun onFetchResult(state: QueueState, id: String, payload: String) {
     if (state.activeFetchId != id) return
+    CookieManager.getInstance().flush()
+    logState(state, "onFetchResult id=$id ${fetchPayloadForLog(payload)}")
     try {
       val result = JSONObject(payload)
       if (!result.optBoolean("success", false)) {
@@ -629,6 +739,8 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
 
   private fun onExtractResult(state: QueueState, payload: String) {
     val id = state.activeExtractId ?: return
+    CookieManager.getInstance().flush()
+    logState(state, "onExtractResult id=$id payloadLength=${payload.length}")
     state.webView?.loadUrl("about:blank")
     finishSuccess(state, id, payload)
   }
@@ -704,9 +816,10 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
               finalUrl: response.url || request.url
             }));
           } catch (error) {
+            const message = (error && (error.message || error.toString())) || String(error);
             AndroidScraper.postFetchResult(requestId, JSON.stringify({
               success: false,
-              error: (error && (error.message || error.toString())) || String(error)
+              error: "scraper: browser fetch to " + request.url + " failed: " + message
             }));
           } finally {
             try {
@@ -719,6 +832,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   companion object {
+    private const val TAG = "NoreaScraper"
     private const val IMMEDIATE_EXECUTOR = "immediate"
     private const val PRIORITY_INTERACTIVE = 0
     private const val PRIORITY_USER = 1
