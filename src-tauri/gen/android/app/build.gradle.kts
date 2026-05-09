@@ -15,8 +15,10 @@ val tauriProperties = Properties().apply {
 
 fun envOrNull(name: String) = System.getenv(name)?.takeIf { it.isNotBlank() }
 
-// The checked-in keystore is public and exists only to keep local tester APK upgrades continuous.
-val releaseKeystoreFile = envOrNull("ANDROID_RELEASE_KEYSTORE_FILE")?.let { file(it) } ?: file("test-release.keystore")
+// Production signing uses environment-provided secrets; fallback tester keys are generated under .tmp.
+val releaseKeystoreFile =
+    envOrNull("ANDROID_RELEASE_KEYSTORE_FILE")?.let { file(it) }
+        ?: file("../../../../.tmp/android-release-signing/test-release.jks")
 val releaseKeyAlias = envOrNull("ANDROID_RELEASE_KEY_ALIAS") ?: "androiddebugkey"
 val releaseStorePassword = envOrNull("ANDROID_RELEASE_STORE_PASSWORD") ?: "android"
 val releaseKeyPassword = envOrNull("ANDROID_RELEASE_KEY_PASSWORD") ?: "android"

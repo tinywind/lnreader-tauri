@@ -107,7 +107,22 @@ jobs:
             echo "ANDROID_RELEASE_STORE_PASSWORD=$ANDROID_RELEASE_STORE_PASSWORD" >> "$GITHUB_ENV"
             echo "ANDROID_RELEASE_KEY_PASSWORD=$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
           else
-            echo "::warning::Android release signing secrets are not configured; using the committed public test release key."
+            mkdir -p "$signing_dir"
+            keystore="$(pwd)/$signing_dir/test-release.jks"
+            keytool -genkeypair \
+              -keystore "$keystore" \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Norea Test Release,O=Norea,C=US"
+            echo "ANDROID_RELEASE_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_RELEASE_KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
+            echo "ANDROID_RELEASE_STORE_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "ANDROID_RELEASE_KEY_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "::warning::Android release signing secrets are not configured; generated a public test release key."
           fi
 
       - name: Stamp build metadata

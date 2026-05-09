@@ -19,10 +19,6 @@ import kotlin.math.roundToInt
 import org.json.JSONObject
 
 class AndroidScraperBridge(private val mainWebView: WebView) {
-  private companion object {
-    const val IMMEDIATE_EXECUTOR = "immediate"
-  }
-
   private data class CssBounds(
     val x: Double,
     val y: Double,
@@ -723,6 +719,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   companion object {
+    private const val IMMEDIATE_EXECUTOR = "immediate"
     private const val PRIORITY_INTERACTIVE = 0
     private const val PRIORITY_USER = 1
     private const val PRIORITY_NORMAL = 2
