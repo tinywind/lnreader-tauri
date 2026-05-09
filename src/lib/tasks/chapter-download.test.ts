@@ -50,7 +50,7 @@ import {
   getChapterById,
   saveChapterContent,
 } from "../../db/queries/chapter";
-import { clearChapterMedia } from "../chapter-media";
+import { cacheHtmlChapterMedia, clearChapterMedia } from "../chapter-media";
 import { enqueueChapterDownload } from "./chapter-download";
 
 let capturedSpec: SourceTaskSpec<void> | null = null;
@@ -73,6 +73,10 @@ beforeEach(() => {
   pluginMocks.getPlugin.mockReturnValue(plugin);
   pluginMocks.getPluginForExecutor.mockReturnValue(plugin);
   pluginMocks.parseChapter.mockResolvedValue(`plain <chapter>`);
+  vi.mocked(cacheHtmlChapterMedia).mockResolvedValue({
+    cacheKey: "media-cache",
+    html: "<img>",
+  });
   vi.mocked(getChapterById).mockResolvedValue({
     contentType: "text",
     id: 7,
@@ -107,6 +111,38 @@ describe("enqueueChapterDownload", () => {
       "text",
     );
     expect(clearChapterMedia).toHaveBeenCalledWith(7);
+  });
+
+  it("keeps chapter media downloads on the assigned scraper executor", async () => {
+    pluginMocks.parseChapter.mockResolvedValueOnce(`<img src="/page.png">`);
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      contentType: "html",
+      id: 7,
+    } as never);
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7",
+      contentType: "html",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      executor: "pool:1",
+      setDetail: vi.fn(),
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scraperExecutor: "pool:1",
+        sourceId: "source-a",
+      }),
+    );
   });
 
   it("fails when the local chapter row is missing", async () => {

@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { pluginFetch } from "./http";
+import type { ScraperExecutorId } from "./tasks/scraper-queue";
 import { isTauriRuntime } from "./tauri-runtime";
 
 const LOCAL_MEDIA_SRC_PREFIX = "norea-media://chapter/";
@@ -24,7 +25,9 @@ interface CacheChapterMediaOptions {
   contextUrl?: string;
   html: string;
   onProgress?: (progress: { current: number; total: number }) => void;
+  scraperExecutor?: ScraperExecutorId;
   signal?: AbortSignal;
+  sourceId?: string;
 }
 
 interface CacheChapterMediaResult {
@@ -247,7 +250,9 @@ export async function cacheHtmlChapterMedia({
   contextUrl,
   html,
   onProgress,
+  scraperExecutor,
   signal,
+  sourceId,
 }: CacheChapterMediaOptions): Promise<CacheChapterMediaResult> {
   if (!isTauriRuntime() || typeof document === "undefined") {
     return { cacheKey: null, html };
@@ -271,7 +276,9 @@ export async function cacheHtmlChapterMedia({
     const url = urls[index]!;
     const response = await pluginFetch(url, {
       contextUrl: contextUrl ?? baseUrl,
+      ...(scraperExecutor ? { scraperExecutor } : {}),
       signal,
+      ...(sourceId ? { sourceId } : {}),
     });
     if (!response.ok) {
       throw new Error(

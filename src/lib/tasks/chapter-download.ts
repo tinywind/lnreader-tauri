@@ -396,7 +396,9 @@ export function enqueueChapterDownload(
                 progressTotal = total + 1;
                 setProgress({ current, total: progressTotal });
               },
+              scraperExecutor: executor ?? "immediate",
               signal,
+              sourceId: job.pluginId,
             });
             html = media.html;
             mediaCacheKey = media.cacheKey;
