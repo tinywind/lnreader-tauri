@@ -10,6 +10,10 @@ import { SiteBrowserOverlay } from "../components/SiteBrowserOverlay";
 import { TaskNotifications } from "../components/TaskNotifications";
 import { useTranslation, type TranslationKey } from "../i18n";
 import { startDeepLinkListener } from "../lib/deep-link";
+import {
+  getAppNavigationHistoryIndex,
+  recordAppNavigationEntry,
+} from "../lib/navigation-history";
 import { useAppearanceStore } from "../store/appearance";
 import { useBrowseStore } from "../store/browse";
 import { useReaderStore } from "../store/reader";
@@ -280,6 +284,8 @@ export function RootLayout() {
   );
   const location = useRouterState({
     select: (state) => ({
+      historyIndex: getAppNavigationHistoryIndex(state.location.state),
+      href: state.location.href,
       pathname: state.location.pathname,
       search: state.location.search,
     }),
@@ -308,6 +314,14 @@ export function RootLayout() {
     activePersistentPage === "settings"
       ? getSearchString(search, "section", "app")
       : lastSettingsSection;
+
+  useEffect(() => {
+    recordAppNavigationEntry({
+      historyIndex: location.historyIndex,
+      href: location.href,
+      pathname,
+    });
+  }, [location.historyIndex, location.href, pathname]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

@@ -612,27 +612,31 @@ describe("upsertLocalNovelChapters", () => {
 describe("reorderLocalNovelChapters", () => {
   it("renumbers local chapter positions in the requested order", async () => {
     const db = stubDb();
-    db.execute
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce(undefined);
+    db.execute.mockResolvedValueOnce({ rowsAffected: 2 });
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
       .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
 
     await reorderLocalNovelChapters(42, [9, 8]);
 
-    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
-    expect(db.execute.mock.calls[1]?.[1]).toEqual([9, 42, 1]);
-    expect(db.execute.mock.calls[2]?.[1]).toEqual([8, 42, 2]);
-    expect(db.execute.mock.calls[4]?.[0]).toBe("COMMIT");
+    expect(db.execute).toHaveBeenCalledOnce();
+    expect(db.execute.mock.calls[0]?.[0]).toContain("WITH requested");
+    expect(db.execute.mock.calls[0]?.[1]).toEqual([9, 1, 8, 2, 42]);
+  });
+
+  it("skips writes when the requested order is unchanged", async () => {
+    const db = stubDb();
+    db.select
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+
+    await reorderLocalNovelChapters(42, [8, 9]);
+
+    expect(db.execute).not.toHaveBeenCalled();
   });
 
   it("rejects reorder lists that do not match existing chapters", async () => {
     const db = stubDb();
-    db.execute.mockResolvedValue({ rowsAffected: 1 });
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
       .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
@@ -640,23 +644,20 @@ describe("reorderLocalNovelChapters", () => {
     await expect(reorderLocalNovelChapters(42, [9, 9])).rejects.toThrow(
       "local novel: reorder ids must match existing chapters",
     );
-    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
-    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+    expect(db.execute).not.toHaveBeenCalled();
   });
 
-  it("preserves the mutation error when rollback fails", async () => {
+  it("rejects partial reorder writes", async () => {
     const db = stubDb();
-    db.execute
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("rollback failed"));
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
       .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
 
-    await expect(reorderLocalNovelChapters(42, [9, 9])).rejects.toThrow(
-      "local novel: reorder ids must match existing chapters",
+    await expect(reorderLocalNovelChapters(42, [9, 8])).rejects.toThrow(
+      "local novel: failed to update chapter order",
     );
-    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+    expect(db.execute).toHaveBeenCalledOnce();
   });
 });
 

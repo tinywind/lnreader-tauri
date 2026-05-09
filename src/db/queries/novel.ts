@@ -574,61 +574,74 @@ export async function reorderLocalNovelChapters(
   chapterIds: number[],
 ): Promise<void> {
   const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    const novelRows = await db.select<{ id: number }[]>(
-      `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
-      [novelId, LOCAL_PLUGIN_ID],
-    );
-    if (!novelRows[0]) {
-      throw new Error("local novel: target novel is not local");
-    }
+  const novelRows = await db.select<{ id: number }[]>(
+    `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
+    [novelId, LOCAL_PLUGIN_ID],
+  );
+  if (!novelRows[0]) {
+    throw new Error("local novel: target novel is not local");
+  }
 
-    const chapterRows = await db.select<{ id: number }[]>(
-      `SELECT id FROM chapter
-       WHERE novel_id = $1
-       ORDER BY position`,
-      [novelId],
-    );
-    const existingChapterIds = chapterRows.map((chapter) => chapter.id);
-    const requestedChapterIds = new Set(chapterIds);
-    if (
-      requestedChapterIds.size !== chapterIds.length ||
-      existingChapterIds.length !== chapterIds.length ||
-      existingChapterIds.some((chapterId) => !requestedChapterIds.has(chapterId))
-    ) {
-      throw new Error("local novel: reorder ids must match existing chapters");
-    }
+  const chapterRows = await db.select<{ id: number }[]>(
+    `SELECT id FROM chapter
+     WHERE novel_id = $1
+     ORDER BY position`,
+    [novelId],
+  );
+  const existingChapterIds = chapterRows.map((chapter) => chapter.id);
+  const requestedChapterIds = new Set(chapterIds);
+  if (
+    requestedChapterIds.size !== chapterIds.length ||
+    existingChapterIds.length !== chapterIds.length ||
+    existingChapterIds.some((chapterId) => !requestedChapterIds.has(chapterId))
+  ) {
+    throw new Error("local novel: reorder ids must match existing chapters");
+  }
 
-    const existingPositionById = new Map(
-      existingChapterIds.map((chapterId, index) => [chapterId, index + 1]),
+  const existingPositionById = new Map(
+    existingChapterIds.map((chapterId, index) => [chapterId, index + 1]),
+  );
+  const changedEntries = chapterIds
+    .map((chapterId, index) => ({ chapterId, position: index + 1 }))
+    .filter(
+      ({ chapterId, position }) =>
+        existingPositionById.get(chapterId) !== position,
     );
-    for (const [index, chapterId] of chapterIds.entries()) {
-      const position = index + 1;
-      if (existingPositionById.get(chapterId) === position) continue;
+  if (changedEntries.length === 0) return;
 
-      const result = await db.execute(
-        `UPDATE chapter
-         SET position = $3,
-             updated_at = unixepoch()
-         WHERE id = $1
-           AND novel_id = $2`,
-        [chapterId, novelId, position],
-      );
-      if (result.rowsAffected !== 1) {
-        throw new Error("local novel: failed to update chapter order");
-      }
-    }
-    await db.execute(
-      `UPDATE novel
-       SET updated_at = unixepoch()
-       WHERE id = $1`,
-      [novelId],
-    );
-    await db.execute("COMMIT");
-  } catch (error) {
-    await db.execute("ROLLBACK").catch(() => undefined);
-    throw error;
+  const requestedValuesSql = changedEntries
+    .map((_, index) => {
+      const idParam = index * 2 + 1;
+      const positionParam = idParam + 1;
+      return `($${idParam}, $${positionParam})`;
+    })
+    .join(", ");
+  const novelIdParam = changedEntries.length * 2 + 1;
+  const params = changedEntries.flatMap(({ chapterId, position }) => [
+    chapterId,
+    position,
+  ]);
+  const result = await db.execute(
+    `WITH requested(id, position) AS (VALUES ${requestedValuesSql})
+     UPDATE chapter
+     SET
+       position = (
+         SELECT requested.position
+         FROM requested
+         WHERE requested.id = chapter.id
+       ),
+       updated_at = unixepoch()
+     WHERE novel_id = $${novelIdParam}
+       AND id IN (SELECT id FROM requested)
+       AND position IS NOT (
+         SELECT requested.position
+         FROM requested
+         WHERE requested.id = chapter.id
+       )`,
+    [...params, novelId],
+  );
+  if (result.rowsAffected !== changedEntries.length) {
+    throw new Error("local novel: failed to update chapter order");
   }
 }
 
