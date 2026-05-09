@@ -33,6 +33,7 @@ import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
 import { IconButton } from "../components/IconButton";
 import { LibraryGrid } from "../components/LibraryGrid";
 import { LibrarySettingsPanel } from "../components/LibrarySettingsPanel";
+import { LocalCoverPicker } from "../components/LocalCoverPicker";
 import { TextButton } from "../components/TextButton";
 import {
   addNovelsToCategory,
@@ -49,11 +50,11 @@ import {
   type ChapterListRow,
 } from "../db/queries/chapter";
 import {
-  createLocalNovel,
   getNovelById,
   listLibraryNovels,
   findLocalNovelByPath,
   upsertLocalNovel,
+  upsertLocalNovelMetadata,
   type LibraryNovel,
   type LocalNovelMetadataInput,
   type LocalNovelImportResult,
@@ -645,7 +646,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
 
   const createLocalNovelMutation = useMutation({
     mutationFn: (input: LocalNovelMetadataInput) =>
-      createLocalNovel({
+      upsertLocalNovelMetadata({
         ...input,
         path: createManualLocalNovelPath(),
       }),
@@ -1116,15 +1117,16 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                 value={localNovelForm.genres ?? ""}
               />
             </Group>
-            <TextInput
-              label={t("library.localNovel.cover")}
-              onChange={(event) =>
+            <LocalCoverPicker
+              alt={localNovelForm.name || t("library.localNovel.name")}
+              disabled={createLocalNovelMutation.isPending}
+              onChange={(cover) =>
                 setLocalNovelForm((current) => ({
                   ...current,
-                  cover: event.currentTarget.value,
+                  cover,
                 }))
               }
-              value={localNovelForm.cover ?? ""}
+              value={localNovelForm.cover}
             />
             <Textarea
               autosize

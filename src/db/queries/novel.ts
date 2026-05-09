@@ -4,6 +4,7 @@ import {
   normalizeChapterContentType,
   type ChapterContentType,
 } from "../../lib/chapter-content";
+import { isLocalCoverSource } from "../../lib/local-cover";
 import type { LibrarySortOrder } from "../../store/library";
 
 export const LOCAL_PLUGIN_ID = "local";
@@ -141,11 +142,15 @@ export async function listLibraryNovels(
   `;
 
   const rows = await db.select<RawLibraryNovel[]>(sql, params);
-  return rows.map((row) => ({
-    ...row,
-    inLibrary: !!row.inLibrary,
-    isLocal: !!row.isLocal,
-  }));
+  return rows.map((row) => {
+    const isLocal = !!row.isLocal;
+    return {
+      ...row,
+      cover: isLocal ? displayLocalCover(row.cover) : row.cover,
+      inLibrary: !!row.inLibrary,
+      isLocal,
+    };
+  });
 }
 
 export async function listLibraryNovelRefreshTargets(
@@ -237,10 +242,12 @@ const SELECT_NOVEL_DETAIL_FIELDS = `
 `;
 
 function mapNovelDetail(row: RawNovelDetail): NovelDetailRecord {
+  const isLocal = !!row.isLocal;
   return {
     ...row,
+    cover: isLocal ? displayLocalCover(row.cover) : row.cover,
     inLibrary: !!row.inLibrary,
-    isLocal: !!row.isLocal,
+    isLocal,
   };
 }
 
@@ -317,7 +324,9 @@ export interface InsertNovelInput {
   inLibrary?: boolean;
 }
 
-export async function insertNovel(input: InsertNovelInput): Promise<void> {
+export async function insertNovelIfAbsent(
+  input: InsertNovelInput,
+): Promise<void> {
   const db = await getDb();
   const inLibrary = (input.inLibrary ?? true) ? 1 : 0;
   await db.execute(
@@ -380,7 +389,18 @@ function nullableText(value: string | null | undefined): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-export async function createLocalNovel(
+function nullableLocalCover(value: string | null | undefined): string | null {
+  const trimmed = nullableText(value);
+  if (!trimmed) return null;
+  if (isLocalCoverSource(trimmed)) return trimmed;
+  return null;
+}
+
+function displayLocalCover(value: string | null): string | null {
+  return isLocalCoverSource(value) ? value : null;
+}
+
+export async function upsertLocalNovelMetadata(
   input: LocalNovelMetadataInput & { path: string },
 ): Promise<number> {
   const db = await getDb();
@@ -407,7 +427,7 @@ export async function createLocalNovel(
       LOCAL_PLUGIN_ID,
       input.path,
       name,
-      nullableText(input.cover),
+      nullableLocalCover(input.cover),
       nullableText(input.summary),
       nullableText(input.author),
       nullableText(input.artist),
@@ -460,7 +480,7 @@ export async function updateLocalNovelMetadata(
     [
       novelId,
       name,
-      nullableText(input.cover),
+      nullableLocalCover(input.cover),
       nullableText(input.summary),
       nullableText(input.author),
       nullableText(input.artist),
@@ -544,7 +564,7 @@ export async function upsertLocalNovelChapters(
       chapterCount: chapters.length,
     };
   } catch (error) {
-    await db.execute("ROLLBACK");
+    await db.execute("ROLLBACK").catch(() => undefined);
     throw error;
   }
 }
@@ -607,7 +627,7 @@ export async function reorderLocalNovelChapters(
     );
     await db.execute("COMMIT");
   } catch (error) {
-    await db.execute("ROLLBACK");
+    await db.execute("ROLLBACK").catch(() => undefined);
     throw error;
   }
 }
@@ -649,7 +669,7 @@ export async function upsertLocalNovel(
         LOCAL_PLUGIN_ID,
         input.path,
         input.name,
-        input.cover ?? null,
+        nullableLocalCover(input.cover),
         input.summary ?? null,
         input.author ?? null,
         input.artist ?? null,
@@ -719,7 +739,7 @@ export async function upsertLocalNovel(
       chapterCount: input.chapters.length,
     };
   } catch (error) {
-    await db.execute("ROLLBACK");
+    await db.execute("ROLLBACK").catch(() => undefined);
     throw error;
   }
 }

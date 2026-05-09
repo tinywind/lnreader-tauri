@@ -45,6 +45,7 @@ import {
 import { PageFrame, StateView } from "../components/AppFrame";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
+import { LocalCoverPicker } from "../components/LocalCoverPicker";
 import { TextButton } from "../components/TextButton";
 import {
   clearChapterContent,
@@ -1767,15 +1768,16 @@ export function NovelDetailPage() {
                 value={localMetadataForm.genres ?? ""}
               />
             </Group>
-            <TextInput
-              label={t("library.localNovel.cover")}
-              onChange={(event) =>
+            <LocalCoverPicker
+              alt={localMetadataForm.name || t("library.localNovel.name")}
+              disabled={updateLocalMetadata.isPending}
+              onChange={(cover) =>
                 setLocalMetadataForm((current) => ({
                   ...current,
-                  cover: event.currentTarget.value,
+                  cover,
                 }))
               }
-              value={localMetadataForm.cover ?? ""}
+              value={localMetadataForm.cover}
             />
             <Textarea
               autosize

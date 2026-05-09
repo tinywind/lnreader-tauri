@@ -732,6 +732,10 @@ a {
   word-break: break-word;
 }
 
+.lnr-local-cover-picker-input {
+  display: none;
+}
+
 .lnr-console-progress {
   background: var(--lnr-design-rule);
   border-radius: 0.125rem;

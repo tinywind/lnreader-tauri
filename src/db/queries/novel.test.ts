@@ -8,10 +8,9 @@ import { getDb } from "../client";
 import { UNCATEGORIZED_CATEGORY_ID } from "./category";
 import {
   countNovels,
-  createLocalNovel,
   findLocalNovelByPath,
   getNovelById,
-  insertNovel,
+  insertNovelIfAbsent,
   listLibraryNovelRefreshTargets,
   listLibraryNovels,
   reorderLocalNovelChapters,
@@ -19,9 +18,11 @@ import {
   updateLocalNovelMetadata,
   upsertLocalNovel,
   upsertLocalNovelChapters,
+  upsertLocalNovelMetadata,
 } from "./novel";
 
 const mockedGetDb = vi.mocked(getDb);
+const LOCAL_COVER = "data:image/png;base64,AQID";
 
 interface MockedDb {
   select: ReturnType<typeof vi.fn>;
@@ -91,6 +92,33 @@ describe("listLibraryNovels", () => {
         lastUpdatedAt: 1_700_000_000,
       },
     ]);
+  });
+
+  it("does not expose remote covers for local novels", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([
+      {
+        id: 1,
+        pluginId: "local",
+        path: "p1",
+        name: "Sample A",
+        cover: "https://example.test/cover.jpg",
+        author: "Writer A",
+        inLibrary: 1,
+        isLocal: 1,
+        totalChapters: 10,
+        chaptersDownloaded: 10,
+        chaptersUnread: 0,
+        readingProgress: 100,
+        lastReadAt: 1000,
+        lastUpdatedAt: 1_700_000_000,
+      },
+    ]);
+
+    const rows = await listLibraryNovels();
+
+    expect(rows[0]?.cover).toBeNull();
+    expect(rows[0]?.isLocal).toBe(true);
   });
 
   it("appends a case-insensitive name LIKE clause when search is provided", async () => {
@@ -259,12 +287,12 @@ describe("countNovels", () => {
   });
 });
 
-describe("insertNovel", () => {
+describe("insertNovelIfAbsent", () => {
   it("uses INSERT OR IGNORE with the 5 expected params in order", async () => {
     const db = stubDb();
     db.execute.mockResolvedValueOnce(undefined);
 
-    await insertNovel({
+    await insertNovelIfAbsent({
       pluginId: "local",
       path: "p1",
       name: "Sample",
@@ -281,7 +309,7 @@ describe("insertNovel", () => {
     const db = stubDb();
     db.execute.mockResolvedValueOnce(undefined);
 
-    await insertNovel({
+    await insertNovelIfAbsent({
       pluginId: "boxnovel",
       path: "/n/abc",
       name: "Title",
@@ -388,13 +416,13 @@ describe("findLocalNovelByPath", () => {
   });
 });
 
-describe("createLocalNovel", () => {
+describe("upsertLocalNovelMetadata", () => {
   it("creates a local library novel without chapters", async () => {
     const db = stubDb();
     db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
     db.select.mockResolvedValueOnce([{ id: 77 }]);
 
-    const novelId = await createLocalNovel({
+    const novelId = await upsertLocalNovelMetadata({
       path: "local:manual:abc",
       name: "Manual Book",
       cover: "",
@@ -430,8 +458,22 @@ describe("createLocalNovel", () => {
     stubDb();
 
     await expect(
-      createLocalNovel({ path: "local:manual:abc", name: " " }),
+      upsertLocalNovelMetadata({ path: "local:manual:abc", name: " " }),
     ).rejects.toThrow("local novel: name is required");
+  });
+
+  it("discards remote cover sources", async () => {
+    const db = stubDb();
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
+    db.select.mockResolvedValueOnce([{ id: 77 }]);
+
+    await upsertLocalNovelMetadata({
+      path: "local:manual:abc",
+      name: "Manual Book",
+      cover: "https://example.test/cover.jpg",
+    });
+
+    expect(db.execute.mock.calls[0]?.[1]?.[3]).toBeNull();
   });
 });
 
@@ -443,7 +485,7 @@ describe("updateLocalNovelMetadata", () => {
 
     await updateLocalNovelMetadata(12, {
       name: "Manual Book",
-      cover: "file:///cover.jpg",
+      cover: LOCAL_COVER,
       summary: "",
       author: "Writer",
       artist: "Artist",
@@ -463,7 +505,7 @@ describe("updateLocalNovelMetadata", () => {
     expect(params).toEqual([
       12,
       "Manual Book",
-      "file:///cover.jpg",
+      LOCAL_COVER,
       null,
       "Writer",
       "Artist",
@@ -483,6 +525,19 @@ describe("updateLocalNovelMetadata", () => {
       }),
     ).rejects.toThrow("local novel: target novel is not local");
     expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  it("discards remote cover sources", async () => {
+    const db = stubDb();
+    db.select.mockResolvedValueOnce([{ id: 12 }]);
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
+
+    await updateLocalNovelMetadata(12, {
+      name: "Manual Book",
+      cover: "https://example.test/cover.jpg",
+    });
+
+    expect(db.execute.mock.calls[0]?.[1]?.[2]).toBeNull();
   });
 });
 
@@ -539,6 +594,19 @@ describe("upsertLocalNovelChapters", () => {
       chapterCount: 1,
     });
   });
+
+  it("preserves the mutation error when rollback fails", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("rollback failed"));
+    db.select.mockResolvedValueOnce([]);
+
+    await expect(upsertLocalNovelChapters(42, [])).rejects.toThrow(
+      "local novel: target novel is not local",
+    );
+    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+  });
 });
 
 describe("reorderLocalNovelChapters", () => {
@@ -575,6 +643,21 @@ describe("reorderLocalNovelChapters", () => {
     expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
     expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
   });
+
+  it("preserves the mutation error when rollback fails", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("rollback failed"));
+    db.select
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+
+    await expect(reorderLocalNovelChapters(42, [9, 9])).rejects.toThrow(
+      "local novel: reorder ids must match existing chapters",
+    );
+    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+  });
 });
 
 describe("upsertLocalNovel", () => {
@@ -590,7 +673,7 @@ describe("upsertLocalNovel", () => {
     const result = await upsertLocalNovel({
       path: "/books/sample.epub",
       name: "Local Book",
-      cover: "file:///covers/sample.jpg",
+      cover: LOCAL_COVER,
       summary: "Imported locally.",
       author: "Writer",
       artist: "Artist",
@@ -623,7 +706,7 @@ describe("upsertLocalNovel", () => {
       "local",
       "/books/sample.epub",
       "Local Book",
-      "file:///covers/sample.jpg",
+      LOCAL_COVER,
       "Imported locally.",
       "Writer",
       "Artist",
@@ -680,6 +763,44 @@ describe("upsertLocalNovel", () => {
     ).rejects.toThrow("local import: failed to resolve local novel id");
 
     expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+  });
+
+  it("preserves the mutation error when rollback fails", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockRejectedValueOnce(new Error("rollback failed"));
+    db.select.mockResolvedValueOnce([]);
+
+    await expect(
+      upsertLocalNovel({
+        path: "/books/missing.epub",
+        name: "Missing",
+        chapters: [],
+      }),
+    ).rejects.toThrow("local import: failed to resolve local novel id");
+    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+  });
+
+  it("discards remote cover sources", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce(undefined);
+    db.select.mockResolvedValueOnce([{ id: 42 }]);
+
+    await upsertLocalNovel({
+      path: "/books/sample.epub",
+      name: "Local Book",
+      cover: "https://example.test/cover.jpg",
+      chapters: [],
+    });
+
+    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
+    expect(db.execute.mock.calls[1]?.[1]?.[3]).toBeNull();
+    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("COMMIT");
   });
 });
 
