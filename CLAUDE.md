@@ -29,6 +29,7 @@ https://github.com/lnreader/lnreader/tree/639a2538
 
 - `README.md` - public overview, current status, and common commands.
 - `CLAUDE.md` - repo rules for agents and contributors.
+- `docs/release-compatibility.md` - app data and backup compatibility policy.
 - `docs/plugins/contract.md` - plugin runtime compatibility reference.
 
 Do not recreate removed planning snapshots unless the user explicitly asks for
@@ -58,6 +59,17 @@ Release notes:
 - Do not track keystores, signing properties, passwords, or generated APKs.
 - Repository secrets, not files in the worktree, provide release signing inputs.
 
+Compatibility notes:
+
+- Norea-owned data and backup compatibility is guaranteed only inside the active
+  release line.
+- Stable releases (`1.0.0` and later) keep compatibility only within the same
+  major version.
+- Pre-release development builds (`0.x.y`) keep compatibility only within the
+  same minor version.
+- Data, backup, migration, import/export, or local-file changes must follow
+  `docs/release-compatibility.md`.
+
 ## Repo Layout
 
 ```text
@@ -65,7 +77,10 @@ norea/
   README.md
   CLAUDE.md
   docs/
+    development.md
+    release-compatibility.md
     plugins/contract.md
+    test-support/
   src/
   src-tauri/
   assets/
@@ -129,6 +144,7 @@ When verification is allowed, choose the smallest relevant loop:
 | Rust host | `cargo check`, `cargo test --lib` from `src-tauri` |
 | Desktop native integration | `pnpm tauri build --debug` |
 | Android APK/release workflow | `pnpm android:apk:release` plus device smoke when behavior is Android-only |
+| Data, backup, migration, or local-file behavior | Relevant unit tests plus compatibility review against `docs/release-compatibility.md` |
 | Docs only | Link/reference scan and `git diff --check` when requested |
 
 ## Git Workflow

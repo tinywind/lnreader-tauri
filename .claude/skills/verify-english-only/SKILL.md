@@ -10,7 +10,7 @@ Use after editing source, docs, comments, logs, TODOs, or imported upstream refe
 ## Scope
 
 - Include `src/**`, `src-tauri/src/**`, root Markdown docs, `docs/**`, and hand-written config.
-- Exclude `strings/languages/**`, generated Android output, `node_modules`, `dist`, `build`, `target`, and `.tmp`.
+- Exclude `strings/languages/**`, `assets/**`, generated Android output, `node_modules`, `dist`, `build`, `target`, and `.tmp`.
 
 ## Checks
 

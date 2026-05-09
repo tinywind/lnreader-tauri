@@ -54,6 +54,7 @@ Thumbs.db
 .claude/tmp/
 .claude/cache/
 .claude/logs/
+.claude/reports/
 
 # Local Serena
 .serena/

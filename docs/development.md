@@ -10,7 +10,11 @@ workflow in one place.
   manager version.
 - GitHub workflows define supported build tooling and release artifact jobs.
 - `CLAUDE.md` defines repository rules for agents and contributors.
+- `docs/release-compatibility.md` defines app data and backup compatibility
+  policy.
 - `docs/plugins/contract.md` defines the source plugin compatibility contract.
+- `docs/test-support/fixture-plugin-smoke.md` defines manual fixture coverage
+  for HTML, plain text, PDF, and chapter media downloads.
 
 ## Build and Test Environment
 
@@ -21,7 +25,9 @@ Use the same major versions as CI when possible.
 | Node.js | 22 LTS | Frontend build, tests, and Tauri CLI |
 | pnpm | 10.27.0 | Package manager, pinned by `packageManager` |
 | Rust | stable | Tauri host and native plugins |
-| Java | JDK 17 | Android Gradle builds |
+| Java | JDK 17, preferably Temurin through SDKMAN locally | Android Gradle builds |
+| Android Gradle Plugin | 8.13.2 | Android project build plugin |
+| Kotlin Gradle Plugin | 2.0.21 | Kotlin build plugin compatible with current Tauri Android scripts |
 | Android SDK platform | `android-36` | Android APK builds |
 | Android build tools | `36.0.0` | APK signing and build tools |
 | Android NDK | `27.1.12297006` | Rust Android targets |
@@ -79,6 +85,37 @@ pnpm android:apk:release
 
 This builds arm64 APKs for current physical devices and x86_64 APKs for
 emulators or WSA.
+
+Local Android builds need Java, Android SDK packages, and Rust Android targets
+available in the same shell. SDKMAN is the preferred local JDK path. Install
+the Android command line tools under `$ANDROID_HOME/cmdline-tools/latest` before
+running `sdkmanager`. If the exact Temurin patch below is no longer listed,
+choose the current Temurin 17 entry from `sdk list java`.
+
+```bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+sdk install java 17.0.19-tem
+sdk use java 17.0.19-tem
+
+export JAVA_HOME="$HOME/.sdkman/candidates/java/current"
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
+export ANDROID_NDK_HOME="$NDK_HOME"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+yes | sdkmanager --licenses
+sdkmanager --install \
+  "platform-tools" \
+  "platforms;android-36" \
+  "build-tools;36.0.0" \
+  "ndk;27.1.12297006"
+rustup target add aarch64-linux-android x86_64-linux-android
+```
+
+If multiple side-by-side NDK versions are installed, keep `NDK_HOME` and
+`ANDROID_NDK_HOME` explicit so local builds use the intended version instead of
+whatever Tauri discovers first.
 
 ## Release Artifact Workflows
 
@@ -156,6 +193,7 @@ machine's LAN IP or `10.0.2.2` for the Android emulator.
 | Android project shell | `src-tauri/gen/android/` |
 | Database schema and migrations | `src/db/`, `drizzle/` |
 | Plugin runtime | `src/lib/plugins/`, `src/lib/http.ts`, `src-tauri/src/scraper.rs` |
+| Local import and local novel data | `src/lib/local-import.ts`, `src/db/queries/novel.ts` |
 | i18n strings | `strings/languages/` |
 
 ## Contribution Rules

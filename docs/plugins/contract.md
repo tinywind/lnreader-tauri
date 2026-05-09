@@ -372,7 +372,9 @@ The host should tolerate plugins that:
 2. Install one simple plugin.
 3. Call `popularNovels(1)` and expect at least one `NovelItem`.
 4. Call `parseNovel(item.path)` and expect at least one chapter.
-5. Call `parseChapter(chapter.path)` and expect HTML.
+5. Call `parseChapter(chapter.path)` and expect content that matches the
+   chapter's `contentType`: reader-ready HTML for `"html"`, plain text for
+   `"text"`, or a PDF payload/resource string for `"pdf"`.
 6. For protected sites, open the site browser overlay first, then repeat the
    fetch path.
 

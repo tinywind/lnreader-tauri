@@ -10,7 +10,7 @@ Use after editing TypeScript that touches DB rows, plugin metadata/results, down
 ## Rules
 
 - `src/db/schema.ts` exports are canonical for direct persisted DB row and insert shapes. Prefer `$inferSelect` and `$inferInsert` for direct table rows and insert payloads.
-- Raw SQL result interfaces are allowed for joins, aggregates, aliases, and UI-specific view rows. They must still map back to schema-owned columns.
+- Raw SQL result interfaces are allowed for joins, aggregates, aliases, and UI-specific view rows. They must still map back to schema-owned columns. Do not flag `db.select<T>()` row interfaces solely because they restate schema columns when the SQL aliases names or coerces the raw result shape.
 - Backup format types in `src/lib/backup/format.ts` are canonical for backup artifacts; do not restate those manifest records elsewhere.
 - Do not create local interfaces that restate direct persisted entities such as Novel, Chapter, Repository, InstalledPlugin, or repository cache rows unless they are UI-only view models or raw SQL alias rows.
 - Plugin-facing types should come from the existing plugin contract/runtime modules.

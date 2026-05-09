@@ -22,6 +22,9 @@ but it is a separate app with its own data, backup, and source system.
 
 - Browse and search installed reading sources.
 - Add novels to your library and organize them with categories.
+- Import local `.txt`, `.html`, `.epub`, and `.pdf` files.
+- Create local novel homes, add chapter files later, reorder local chapters, and
+  manage local metadata with locally uploaded cover images.
 - Read in paged or scrolling mode.
 - Change themes, font size, text color, tap zones, and keyboard navigation.
 - Track reading progress, history, unread chapters, and downloaded chapters.
@@ -39,7 +42,8 @@ Current limits:
 - Some protected sources may ask you to open the in-app site browser once before
   search or downloads work.
 - Android background downloads still need more device testing.
-- There is no in-app updater yet. Check GitHub for newer builds.
+- There is no automatic updater yet. Use Settings -> About to check and
+  download newer builds manually.
 
 ## Download
 
@@ -103,7 +107,22 @@ the source site's terms.
 
 Use Settings -> Backup to export or import your local library data. Backups
 include your library, progress, categories, source settings, and downloaded
-chapter content.
+chapter content, including cached chapter media used by downloaded HTML
+chapters.
+
+## Version Compatibility
+
+Norea keeps app data and backup compatibility inside each active release line.
+Stable releases (`1.0.0` and later) guarantee compatibility only within the same
+major version. During pre-release development (`0.x.y`), compatibility is
+guaranteed only within the same minor version.
+
+For example, `0.1.x` data is supported by later `0.1.x` releases, but `0.2.0`
+may introduce incompatible data changes. Export a backup before moving across a
+major version, or across a minor version while Norea is still `0.x`.
+
+Maintainer details live in
+[docs/release-compatibility.md](./docs/release-compatibility.md).
 
 ## For Developers
 

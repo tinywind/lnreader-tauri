@@ -31,7 +31,7 @@ Return findings first. For each finding include:
 - changed diff behavior
 - concrete fix
 
-If no findings exist, state that explicitly and list residual risks.
+If no findings exist, state that explicitly and list residual risks. Because this is a diff-based skill, a clean result must not be described as proof that the whole codebase has no fixed-size UI issues.
 
 ## Useful Commands
 

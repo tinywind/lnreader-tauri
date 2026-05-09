@@ -10,7 +10,7 @@ Use after changing UI text, notifications, dialogs, reader/settings labels, back
 ## Scope
 
 - `src/**/*.{ts,tsx}`
-- `strings/languages/**`
+- Active locale files under `strings/languages/<locale>/app.json`. Do not flag legacy or upstream seed locale files such as `strings/languages/en/strings.json` unless the app imports them.
 - Rust IPC errors only when they can surface to users.
 
 ## Checks
