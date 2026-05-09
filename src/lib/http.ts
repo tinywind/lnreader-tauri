@@ -99,7 +99,7 @@ function requestTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(1, Math.round(numeric));
 }
 
-function decodeBase64Body(bodyBase64: string): Uint8Array {
+function decodeBase64Body(bodyBase64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(bodyBase64);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -110,7 +110,7 @@ function decodeBase64Body(bodyBase64: string): Uint8Array {
 
 function bodyFromWire(result: FetchResultWire): BodyInit {
   if (result.bodyBase64 !== undefined) {
-    return decodeBase64Body(result.bodyBase64);
+    return new Blob([decodeBase64Body(result.bodyBase64)]);
   }
   return result.body ?? "";
 }
