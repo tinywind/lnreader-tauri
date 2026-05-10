@@ -470,19 +470,20 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     val id = payload.getString("id")
     val url = payload.getString("url")
     val contextUrl = payload.optString("contextUrl").takeIf { it.isNotBlank() }
+    val fetchContextUrl = fetchContextUrl(url, contextUrl)
     val init = payload.optJSONObject("init") ?: JSONObject()
     val timeoutMs = payload.optLong("timeoutMs", 60_000L).coerceAtLeast(1L)
     val webView = scraper(state, payloadUserAgent(payload))
     state.activeFetchId = id
     logState(
       state,
-      "runFetch start id=$id url=$url contextUrl=$contextUrl timeoutMs=$timeoutMs init=${fetchInitForLog(init)}",
+      "runFetch start id=$id url=$url contextUrl=$contextUrl fetchContextUrl=$fetchContextUrl timeoutMs=$timeoutMs init=${fetchInitForLog(init)}",
       url,
     )
 
-    prepareContext(state, webView, id, contextUrl) {
+    prepareContext(state, webView, id, fetchContextUrl, url) {
       if (state.activeFetchId != id) return@prepareContext
-      logState(state, "runFetch prepared id=$id url=$url contextUrl=$contextUrl", url)
+      logState(state, "runFetch prepared id=$id url=$url fetchContextUrl=$fetchContextUrl", url)
       setTimeout(
         state,
         id,
@@ -539,6 +540,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView: WebView,
     id: String,
     contextUrl: String?,
+    fallbackContextUrl: String?,
     ready: () -> Unit,
   ) {
     if (contextUrl == null || sameOrigin(state.currentUrl, contextUrl)) {
@@ -553,6 +555,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     logState(state, "prepareContext navigate id=$id contextUrl=$contextUrl", contextUrl)
 
     var finished = false
+    var fallbackAttempted = false
     val timeout = Runnable {
       if (finished) return@Runnable
       finished = true
@@ -563,8 +566,27 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     }
     state.activeTimeout = timeout
     mainHandler.postDelayed(timeout, 15_000L)
-    webView.webViewClient = makeClient(state) {
+    webView.webViewClient = makeClient(state) { finishedUrl ->
       if (finished) return@makeClient
+      if (!sameOrigin(finishedUrl, contextUrl)) {
+        val fallbackUrl = fallbackContextUrl?.takeIf { it != contextUrl }
+        if (!fallbackAttempted && fallbackUrl != null) {
+          fallbackAttempted = true
+          logState(
+            state,
+            "prepareContext fallback id=$id contextUrl=$contextUrl finishedUrl=$finishedUrl fallbackUrl=$fallbackUrl",
+            fallbackUrl,
+          )
+          webView.loadUrl(fallbackUrl)
+          return@makeClient
+        }
+        logState(
+          state,
+          "prepareContext waiting origin id=$id contextUrl=$contextUrl finishedUrl=$finishedUrl",
+          contextUrl,
+        )
+        return@makeClient
+      }
       finished = true
       clearTimeout(state)
       webView.webViewClient = makeClient(state, null)
@@ -574,18 +596,45 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView.loadUrl(contextUrl)
   }
 
+  private fun fetchContextUrl(url: String, contextUrl: String?): String? {
+    val requestUri = Uri.parse(url)
+    val requestOrigin = originUrl(requestUri) ?: return contextUrl
+    if (contextUrl == null) return requestOrigin
+    val configuredContextUri = Uri.parse(contextUrl)
+    return if (sameOrigin(requestUri, configuredContextUri)) {
+      contextUrl
+    } else {
+      requestOrigin
+    }
+  }
+
+  private fun originUrl(uri: Uri): String? {
+    val scheme = uri.scheme ?: return null
+    val host = uri.host ?: return null
+    val defaultPort = effectivePortForScheme(scheme)
+    val port = uri.port
+    val portPart = if (port != -1 && port != defaultPort) ":$port" else ""
+    return "$scheme://$host$portPart"
+  }
+
   private fun sameOrigin(left: String?, right: String): Boolean {
     if (left == null) return false
-    val leftUri = Uri.parse(left)
-    val rightUri = Uri.parse(right)
+    return sameOrigin(Uri.parse(left), Uri.parse(right))
+  }
+
+  private fun sameOrigin(leftUri: Uri, rightUri: Uri): Boolean {
     return leftUri.scheme == rightUri.scheme &&
-      leftUri.host == rightUri.host &&
+      leftUri.host.equals(rightUri.host, ignoreCase = true) &&
       effectivePort(leftUri) == effectivePort(rightUri)
   }
 
   private fun effectivePort(uri: Uri): Int {
     if (uri.port != -1) return uri.port
-    return when (uri.scheme) {
+    return effectivePortForScheme(uri.scheme)
+  }
+
+  private fun effectivePortForScheme(scheme: String?): Int {
+    return when (scheme) {
       "http" -> 80
       "https" -> 443
       else -> -1
