@@ -43,7 +43,7 @@ import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { useBrowseStore } from "../store/browse";
 import "../styles/browse.css";
 
-const PREVIEW_RESULT_COUNT = 5;
+const PREVIEW_RESULT_COUNT = 20;
 const activeSearchControllers = new Map<string, Set<AbortController>>();
 const activeSearchControllerPluginIds = new Map<AbortController, Set<string>>();
 const activeSearchPluginIds = new Map<string, Set<string>>();

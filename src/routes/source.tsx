@@ -52,7 +52,7 @@ import { useTranslation } from "../i18n";
 import { sourceRoute } from "../router";
 import "../styles/browse.css";
 
-type ListingMode = "popular" | "latest";
+type SourceFilterMode = "keyword" | "filters";
 
 interface ListingPage {
   items: NovelItem[];
@@ -197,9 +197,11 @@ export function SourcePage() {
 
   const plugin = pluginManager.getPlugin(pluginId);
 
-  const [mode, setMode] = useState<ListingMode>("popular");
   const [page, setPage] = useState(1);
   const [loadedPages, setLoadedPages] = useState<ListingPage[]>([]);
+  const [filterMode, setFilterMode] = useState<SourceFilterMode>(() =>
+    query.trim().length > 0 ? "keyword" : "filters",
+  );
   const [search, setSearch] = useState(query);
   const [submittedSearch, setSubmittedSearch] = useState(query);
 
@@ -222,14 +224,20 @@ export function SourcePage() {
   useEffect(() => {
     setSearch(query);
     setSubmittedSearch(query);
+    setFilterMode(query.trim().length > 0 ? "keyword" : "filters");
   }, [query]);
 
   const trimmedSearch = submittedSearch.trim();
-  const isSearchMode = trimmedSearch.length > 0;
+  const isKeywordMode = filterMode === "keyword";
+  const isFilterMode = filterMode === "filters";
+  const hasKeywordSearch = isKeywordMode && trimmedSearch.length > 0;
+  const shouldLoadListing = isFilterMode || hasKeywordSearch;
+  const popularModeLabel = t("source.popular");
+  const activeFilterScope = JSON.stringify(activeFilters);
   const listingScopeKey = [
-    mode,
-    trimmedSearch,
-    JSON.stringify(activeFilters),
+    filterMode,
+    isKeywordMode ? trimmedSearch : "",
+    isFilterMode ? activeFilterScope : "",
     pluginId,
   ].join("|");
 
@@ -243,36 +251,30 @@ export function SourcePage() {
   }, [listingScopeKey]);
 
   const listing = useQuery({
-    enabled: !!plugin && pluginId.length > 0,
+    enabled: !!plugin && pluginId.length > 0 && shouldLoadListing,
     queryKey: [
       "plugin",
       "source",
       pluginId,
-      mode,
-      trimmedSearch,
-      activeFilters,
+      listingScopeKey,
       page,
     ] as const,
     queryFn: async () => {
-      if (!plugin) {
+      if (!plugin || !shouldLoadListing) {
         return {
           items: [],
           page,
           scopeKey: listingScopeKey,
         } satisfies ListingPage;
       }
-      const taskKind = isSearchMode
-        ? "source.search"
-        : mode === "latest"
-          ? "source.listLatest"
-          : "source.listPopular";
-      const title = isSearchMode
+      const taskKind = isKeywordMode ? "source.search" : "source.listPopular";
+      const title = isKeywordMode
         ? t("tasks.task.sourceSearch", {
             query: trimmedSearch,
             source: plugin.name,
           })
         : t("tasks.task.sourceList", {
-            mode: mode === "popular" ? t("source.popular") : t("source.latest"),
+            mode: popularModeLabel,
             source: plugin.name,
           });
       const items = await enqueueSourceTask<NovelItem[]>({
@@ -280,18 +282,24 @@ export function SourcePage() {
         kind: taskKind,
         priority: "interactive",
         title,
-        subject: { path: `${mode}:${page}` },
-        dedupeKey: `source.list:${plugin.id}:${mode}:${trimmedSearch}:${JSON.stringify(activeFilters)}:${page}`,
+        subject: {
+          path: isKeywordMode
+            ? `keyword:${trimmedSearch}:${page}`
+            : `popular:${page}`,
+        },
+        dedupeKey: isKeywordMode
+          ? `source.search:${plugin.id}:${trimmedSearch}:${page}`
+          : `source.list:${plugin.id}:popular:${activeFilterScope}:${page}`,
         run: async (context) => {
           const runtimePlugin = pluginManager.getPluginForExecutor(
             plugin.id,
             context.executor ?? "immediate",
           );
-          if (isSearchMode) {
+          if (isKeywordMode) {
             return runtimePlugin.searchNovels(trimmedSearch, page);
           }
           return runtimePlugin.popularNovels(page, {
-            showLatestNovels: mode === "latest",
+            showLatestNovels: false,
             filters: activeFilters as never,
           });
         },
@@ -379,6 +387,7 @@ export function SourcePage() {
   const hasPluginSettings = hasPluginInputs(plugin);
   const activeFilterCount = countActiveFilters(activeFilters);
   const hasNextPage =
+    shouldLoadListing &&
     !listing.isFetching &&
     !!listing.data &&
     listing.data.page === page &&
@@ -391,9 +400,8 @@ export function SourcePage() {
     : listing.isFetching
       ? "active"
       : "done";
-  const modeLabel = mode === "popular" ? t("source.popular") : t("source.latest");
   const backToGlobalSearch = from === "browse-search";
-  const activeFilterLabels = sourceFilters
+  const activeFilterLabels = isFilterMode && sourceFilters
     ? getActiveFilterLabels(sourceFilters, activeFilters)
     : [];
 
@@ -449,25 +457,35 @@ export function SourcePage() {
           <ConsolePanel title={t("source.controls")}>
             <Stack gap="sm" p="sm">
               <SegmentedToggle
-                value={mode}
-                onChange={(value) => setMode(value as ListingMode)}
+                value={filterMode}
+                onChange={(value) => setFilterMode(value as SourceFilterMode)}
                 data={[
-                  { value: "popular", label: t("source.popular") },
-                  { value: "latest", label: t("source.latest") },
+                  {
+                    value: "keyword",
+                    label: t("source.filterMode.keyword"),
+                  },
+                  {
+                    value: "filters",
+                    label: t("source.filterMode.filters"),
+                  },
                 ]}
-                disabled={isSearchMode}
               />
 
-              <SearchBar
-                value={search}
-                onChange={setSearch}
-                onSubmit={() => setSubmittedSearch(search)}
-                placeholder={t("source.searchPlaceholder", {
-                  name: plugin.name,
-                })}
-              />
+              {isKeywordMode ? (
+                <SearchBar
+                  value={search}
+                  onChange={setSearch}
+                  onSubmit={() => {
+                    setFilterMode("keyword");
+                    setSubmittedSearch(search);
+                  }}
+                  placeholder={t("source.searchPlaceholder", {
+                    name: plugin.name,
+                  })}
+                />
+              ) : null}
 
-              {filterCount > 0 ? (
+              {isFilterMode && filterCount > 0 ? (
                 <div className="lnr-source-filter-row">
                   <TextButton
                     className="lnr-source-filter-trigger"
@@ -477,7 +495,6 @@ export function SourcePage() {
                       setPendingFilters(activeFilters);
                       setFilterDrawerOpen(true);
                     }}
-                    disabled={isSearchMode}
                   >
                     {t("source.filtersButton", {
                       active: activeFilterCount,
@@ -514,10 +531,10 @@ export function SourcePage() {
                   />
                   <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>
                   <ConsoleChip>v{plugin.version}</ConsoleChip>
-                  {isSearchMode ? (
+                  {isKeywordMode ? (
                     <ConsoleChip active>{t("source.searchMode")}</ConsoleChip>
                   ) : (
-                    <ConsoleChip active>{modeLabel}</ConsoleChip>
+                    <ConsoleChip active>{popularModeLabel}</ConsoleChip>
                   )}
                 </Group>
                 <Box style={{ minWidth: 0 }}>
@@ -552,11 +569,17 @@ export function SourcePage() {
         <section className="lnr-source-results-panel">
           <ConsoleSectionHeader
             eyebrow={
-              isSearchMode
+              isKeywordMode
                 ? t("source.searchEyebrow")
                 : t("source.catalogEyebrow")
             }
-            title={isSearchMode ? `"${trimmedSearch}"` : modeLabel}
+            title={
+              isKeywordMode
+                ? hasKeywordSearch
+                  ? `"${trimmedSearch}"`
+                  : t("source.filterMode.keyword")
+                : popularModeLabel
+            }
             count={t("source.loadedCount", { count: accumulated.length })}
             actions={
               showLoadMoreButton ? (
@@ -574,17 +597,19 @@ export function SourcePage() {
             }
           />
 
-          {listing.isLoading && page === 1 ? (
+          {isKeywordMode && !hasKeywordSearch ? (
+            <StateView color="blue" title={t("source.keywordPrompt")} />
+          ) : listing.isLoading && page === 1 ? (
             <StateView
               title={
                 <Group gap="sm">
                   <Loader size="sm" />
-                  {isSearchMode
+                  {isKeywordMode
                     ? t("source.searching", {
                         name: plugin.name,
                         query: trimmedSearch,
                       })
-                    : t("source.loadingMode", { mode: modeLabel })}
+                    : t("source.loadingMode", { mode: popularModeLabel })}
                 </Group>
               }
             />
@@ -635,13 +660,21 @@ export function SourcePage() {
       <ConsoleStatusStrip>
         <span>{plugin.name}</span>
         <span>
-          {isSearchMode
-            ? t("source.status.search", { query: trimmedSearch })
-            : t("source.status.mode", { mode: modeLabel })}
+          {isKeywordMode
+            ? hasKeywordSearch
+              ? t("source.status.search", { query: trimmedSearch })
+              : t("source.status.mode", {
+                  mode: t("source.filterMode.keyword"),
+                })
+            : t("source.status.mode", { mode: popularModeLabel })}
         </span>
         <span>{t("source.status.page", { page })}</span>
         <span>{t("source.status.loadedNovels", { count: accumulated.length })}</span>
-        <span>{t("source.status.activeFilters", { count: activeFilterCount })}</span>
+        <span>
+          {t("source.status.activeFilters", {
+            count: isFilterMode ? activeFilterCount : 0,
+          })}
+        </span>
       </ConsoleStatusStrip>
 
       {sourceFilters && (
@@ -676,6 +709,7 @@ export function SourcePage() {
                 </TextButton>
                 <TextButton
                   onClick={() => {
+                    setFilterMode("filters");
                     setActiveFilters(pendingFilters);
                     writeSourceFilters(plugin, pendingFilters);
                     setFilterDrawerOpen(false);
