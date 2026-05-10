@@ -71,6 +71,7 @@ interface WorkflowArtifactSelection {
 }
 
 interface AssetPreference {
+  exactName?: string;
   extensions?: string[];
   token: string;
 }
@@ -156,9 +157,9 @@ export async function checkDevUpdate(
     const devRelease = await fetchGithubJson<GitHubRelease>(
       `${GITHUB_API_BASE}/releases/tags/dev`,
     );
-    const asset = selectReleaseAsset(devRelease.assets, buildInfo.platform);
+    const asset = selectReleaseAssetByName(devRelease.assets, artifact.name);
     if (!asset) {
-      throw new Error(`No dev release asset matches ${artifact.name}.`);
+      throw new Error(`No dev release asset named ${artifact.name}.`);
     }
 
     return {
@@ -266,6 +267,16 @@ function selectReleaseAsset(
   return null;
 }
 
+function selectReleaseAssetByName(
+  assets: readonly GitHubReleaseAsset[],
+  name: string,
+): GitHubReleaseAsset | null {
+  const lowerName = name.toLowerCase();
+  return (
+    assets.find((item) => item.name.toLowerCase() === lowerName) ?? null
+  );
+}
+
 function selectWorkflowArtifact(
   artifacts: readonly GitHubArtifact[],
   platform: string,
@@ -308,9 +319,21 @@ function assetPreferences(platform: string): AssetPreference[] {
         { token: "norea-linux-arm64", extensions: [".rpm"] },
       ];
     case "android-arm64":
-      return [{ token: "norea-arm64", extensions: [".apk"] }];
+      return [
+        {
+          exactName: "norea-arm64.apk",
+          token: "norea-arm64",
+          extensions: [".apk"],
+        },
+      ];
     case "android-x86_64":
-      return [{ token: "norea-x86_64", extensions: [".apk"] }];
+      return [
+        {
+          exactName: "norea-x86_64.apk",
+          token: "norea-x86_64",
+          extensions: [".apk"],
+        },
+      ];
     default:
       return [{ token: platform }];
   }
@@ -318,6 +341,9 @@ function assetPreferences(platform: string): AssetPreference[] {
 
 function matchesPreference(name: string, preference: AssetPreference): boolean {
   const lowerName = name.toLowerCase();
+  if (preference.exactName) {
+    return lowerName === preference.exactName.toLowerCase();
+  }
   if (!lowerName.includes(preference.token.toLowerCase())) {
     return false;
   }

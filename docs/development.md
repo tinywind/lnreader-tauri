@@ -126,7 +126,7 @@ artifact names and release-upload behavior used by maintainers.
 | --- | --- |
 | Windows Release Bundles | `norea-windows-x64-nsis`, `norea-windows-x64-msi`, `norea-windows-arm64-nsis`, `norea-windows-arm64-msi`, plus matching checksum artifacts |
 | Linux Release Bundles | `norea-linux-x64-appimage`, `norea-linux-x64-deb`, `norea-linux-x64-rpm`, `norea-linux-arm64-appimage`, `norea-linux-arm64-deb`, `norea-linux-arm64-rpm`, plus matching checksum artifacts |
-| Android Release APKs | `norea-arm64-signed-release-apk`, `norea-x86_64-signed-release-apk`, and `norea-signed-release-apk-checksums` |
+| Android Release APKs | `norea-arm64.apk`, `norea-x86_64.apk`, and `norea-android-checksums` |
 
 Pushes to `main` create workflow artifacts retained for 30 days. Version tags
 matching `v*` also upload collected bundles to the matching GitHub Release.

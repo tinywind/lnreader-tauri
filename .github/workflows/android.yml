@@ -226,4 +226,15 @@ jobs:
               gh release view dev >/dev/null
           fi
 
+          gh release view dev --json assets --jq '.assets[].name' |
+            while IFS= read -r asset_name; do
+              case "$asset_name" in
+                norea-arm64.apk|norea-x86_64.apk)
+                  ;;
+                norea-arm64*apk*|norea-x86_64*apk*|norea-signed-release-apk-checksums)
+                  gh release delete-asset dev "$asset_name" --yes || true
+                  ;;
+              esac
+            done
+
           gh release upload dev "$RELEASE_SIGNED_APK_DIR"/* --clobber

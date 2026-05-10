@@ -67,8 +67,8 @@ For a newer tester build from the current `main` branch, use GitHub Actions:
 | Windows ARM64 | `norea-windows-arm64-nsis` or `norea-windows-arm64-msi` |
 | Linux x64 | `norea-linux-x64-appimage`, `norea-linux-x64-deb`, or `norea-linux-x64-rpm` |
 | Linux ARM64 | `norea-linux-arm64-appimage`, `norea-linux-arm64-deb`, or `norea-linux-arm64-rpm` |
-| Android phone or tablet | `norea-arm64-signed-release-apk` |
-| Android emulator or WSA | `norea-x86_64-signed-release-apk` |
+| Android phone or tablet | `norea-arm64.apk` |
+| Android emulator or WSA | `norea-x86_64.apk` |
 
 Workflow artifacts are tester downloads and are kept for 30 days. If an
 artifact is expired, use a newer successful run or the latest release.
