@@ -54,6 +54,17 @@ import "../styles/browse.css";
 
 type ListingMode = "popular" | "latest";
 
+interface ListingPage {
+  items: NovelItem[];
+  page: number;
+  scopeKey: string;
+}
+
+interface AccumulatedNovel {
+  item: NovelItem;
+  key: string;
+}
+
 function countActiveFilters(filters: ResolvedFilterValues): number {
   return Object.values(filters).filter((entry) => {
     const value = entry.value;
@@ -188,7 +199,7 @@ export function SourcePage() {
 
   const [mode, setMode] = useState<ListingMode>("popular");
   const [page, setPage] = useState(1);
-  const [accumulated, setAccumulated] = useState<NovelItem[]>([]);
+  const [loadedPages, setLoadedPages] = useState<ListingPage[]>([]);
   const [search, setSearch] = useState(query);
   const [submittedSearch, setSubmittedSearch] = useState(query);
 
@@ -215,16 +226,21 @@ export function SourcePage() {
 
   const trimmedSearch = submittedSearch.trim();
   const isSearchMode = trimmedSearch.length > 0;
+  const listingScopeKey = [
+    mode,
+    trimmedSearch,
+    JSON.stringify(activeFilters),
+    pluginId,
+  ].join("|");
 
   const lastKey = useRef("");
   useEffect(() => {
-    const key = `${mode}|${trimmedSearch}|${JSON.stringify(activeFilters)}|${pluginId}`;
-    if (key !== lastKey.current) {
-      lastKey.current = key;
+    if (listingScopeKey !== lastKey.current) {
+      lastKey.current = listingScopeKey;
       setPage(1);
-      setAccumulated([]);
+      setLoadedPages([]);
     }
-  }, [mode, trimmedSearch, activeFilters, pluginId]);
+  }, [listingScopeKey]);
 
   const listing = useQuery({
     enabled: !!plugin && pluginId.length > 0,
@@ -238,7 +254,13 @@ export function SourcePage() {
       page,
     ] as const,
     queryFn: async () => {
-      if (!plugin) return [] as NovelItem[];
+      if (!plugin) {
+        return {
+          items: [],
+          page,
+          scopeKey: listingScopeKey,
+        } satisfies ListingPage;
+      }
       const taskKind = isSearchMode
         ? "source.search"
         : mode === "latest"
@@ -253,7 +275,7 @@ export function SourcePage() {
             mode: mode === "popular" ? t("source.popular") : t("source.latest"),
             source: plugin.name,
           });
-      return enqueueSourceTask<NovelItem[]>({
+      const items = await enqueueSourceTask<NovelItem[]>({
         plugin,
         kind: taskKind,
         priority: "interactive",
@@ -274,6 +296,7 @@ export function SourcePage() {
           });
         },
       }).promise;
+      return { items, page, scopeKey: listingScopeKey };
     },
   });
 
@@ -287,12 +310,33 @@ export function SourcePage() {
   }
 
   useEffect(() => {
-    if (listing.data) {
-      setAccumulated((prev) =>
-        page === 1 ? listing.data : [...prev, ...listing.data],
-      );
+    const data = listing.data;
+    if (!data || data.page !== page || data.scopeKey !== listingScopeKey) {
+      return;
     }
-  }, [listing.data, page]);
+    setLoadedPages((prev) => {
+      const next =
+        data.page === 1
+          ? [data]
+          : [...prev.filter((entry) => entry.page !== data.page), data];
+      return next.sort((a, b) => a.page - b.page);
+    });
+  }, [listing.data, listingScopeKey, page]);
+
+  const accumulated = useMemo(
+    () => loadedPages.flatMap((entry) => entry.items),
+    [loadedPages],
+  );
+  const accumulatedNovels = useMemo<AccumulatedNovel[]>(
+    () =>
+      loadedPages.flatMap((entry) =>
+        entry.items.map((item, index) => ({
+          item,
+          key: `${entry.scopeKey}:${entry.page}:${index}:${item.path}`,
+        })),
+      ),
+    [loadedPages],
+  );
 
   const open = useMutation({
     mutationFn: async (item: NovelItem) => {
@@ -335,7 +379,11 @@ export function SourcePage() {
   const hasPluginSettings = hasPluginInputs(plugin);
   const activeFilterCount = countActiveFilters(activeFilters);
   const hasNextPage =
-    !listing.isFetching && !!listing.data && listing.data.length > 0;
+    !listing.isFetching &&
+    !!listing.data &&
+    listing.data.page === page &&
+    listing.data.scopeKey === listingScopeKey &&
+    listing.data.items.length > 0;
   const showLoadMoreButton =
     hasNextPage || (listing.isFetching && page > 1);
   const sourceStatus: "active" | "done" | "error" = listing.error
@@ -557,9 +605,9 @@ export function SourcePage() {
             />
           ) : (
             <div className="lnr-source-grid">
-              {accumulated.map((item) => (
+              {accumulatedNovels.map(({ item, key }) => (
                 <SourceNovelButton
-                  key={item.path}
+                  key={key}
                   item={item}
                   disabled={open.isPending}
                   onOpen={(novel) => {
