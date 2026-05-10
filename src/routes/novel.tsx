@@ -1896,6 +1896,10 @@ export function NovelDetailPage() {
       />
 
       <Drawer
+        classNames={{
+          body: "lnr-reader-settings-drawer-body",
+          content: "lnr-reader-settings-drawer-content",
+        }}
         opened={readerSettingsOpen}
         onClose={() => setReaderSettingsOpen(false)}
         position="right"

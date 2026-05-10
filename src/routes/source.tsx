@@ -764,6 +764,10 @@ export function SourcePage() {
         </Drawer>
       ) : null}
       <Drawer
+        classNames={{
+          body: "lnr-reader-settings-drawer-body",
+          content: "lnr-reader-settings-drawer-content",
+        }}
         opened={readerSettingsDrawerOpen}
         onClose={() => setReaderSettingsDrawerOpen(false)}
         title={t("readerSettings.source.title", { name: plugin.name })}

@@ -280,12 +280,6 @@ export function ReaderSettingsPanel({
       : targetSettingsEnabled
         ? t("readerSettings.scope.activeBadge")
         : t("readerSettings.scope.inactiveBadge");
-  const editingScopeLabel =
-    targetKind === "source"
-      ? t("readerSettings.scope.appliedSource", { name: scopeDisplayName })
-      : targetKind === "novel"
-        ? t("readerSettings.scope.appliedNovel", { name: scopeDisplayName })
-        : t("readerSettings.scope.appliedGlobal");
   const appliedScopeLabel =
     targetKind === "novel" && novelSettingsEnabled
       ? t("readerSettings.scope.appliedNovel", { name: scopeDisplayName })
@@ -515,27 +509,6 @@ export function ReaderSettingsPanel({
           <span className="lnr-reader-settings-scope-description">
             {scopeDescription}
           </span>
-          <div className="lnr-reader-settings-scope-status">
-            <span className="lnr-reader-settings-scope-status-row">
-              <span className="lnr-reader-settings-scope-status-label">
-                {t("readerSettings.scope.editingLabel")}
-              </span>
-              <span className="lnr-reader-settings-scope-status-value">
-                {editingScopeLabel}
-              </span>
-            </span>
-            <span
-              className="lnr-reader-settings-scope-status-row"
-              data-current="true"
-            >
-              <span className="lnr-reader-settings-scope-status-label">
-                {t("readerSettings.scope.appliedLabel")}
-              </span>
-              <span className="lnr-reader-settings-scope-status-value">
-                {appliedScopeLabel}
-              </span>
-            </span>
-          </div>
         </div>
         <span className="lnr-reader-settings-scope-badge">
           {scopeBadge}
@@ -575,17 +548,13 @@ export function ReaderSettingsPanel({
             })}
           </span>
         </div>
-      ) : null}
-      <fieldset
-        aria-disabled={settingsLocked}
-        className="lnr-reader-settings-controls"
-        disabled={settingsLocked}
-      >
-        <Tabs
-          className="lnr-reader-settings-tabs"
-          defaultValue="reading"
-          keepMounted={false}
-        >
+      ) : (
+        <fieldset className="lnr-reader-settings-controls">
+          <Tabs
+            className="lnr-reader-settings-tabs"
+            defaultValue="reading"
+            keepMounted={false}
+          >
       <Tabs.List className="lnr-reader-settings-tab-list">
         <Tabs.Tab value="reading">
           {t("readerSettings.reading.title")}
@@ -1041,8 +1010,9 @@ export function ReaderSettingsPanel({
           </SettingsSection>
         </Stack>
       </Tabs.Panel>
-        </Tabs>
-      </fieldset>
+          </Tabs>
+        </fieldset>
+      )}
     </Stack>
   );
 }
