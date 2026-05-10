@@ -30,9 +30,12 @@ import {
   getEffectiveReaderAppearanceSettings,
   getEffectiveReaderGeneralSettings,
   useReaderStore,
+  type ReaderAppearanceSettings,
   type ReaderCustomCssPresetId,
+  type ReaderGeneralSettings,
   type ReaderHtmlImagePagingMode,
   type ReaderPdfPageFitMode,
+  type ReaderSettingsOverride,
   type ReaderTapAction,
   type ReaderTapPreset,
   type ReaderTapPresetId,
@@ -69,8 +72,19 @@ type ReaderCustomCssPresetSelectValue =
   | "custom"
   | "none";
 
+export type ReaderSettingsPanelTarget =
+  | { kind: "global"; label?: string }
+  | { kind: "source"; sourceId: string; label?: string }
+  | {
+      kind: "novel";
+      novelId: number;
+      sourceId?: string | null;
+      label?: string;
+    };
+
 interface ReaderSettingsPanelProps {
   inlineAutomation?: boolean;
+  target?: ReaderSettingsPanelTarget;
   novelId?: number | null;
 }
 
@@ -102,20 +116,68 @@ const HTML_IMAGE_PAGING_OPTIONS: Array<{
   },
 ];
 
+function getReaderGeneralSettingsForEditor(
+  base: ReaderGeneralSettings,
+  override: ReaderSettingsOverride | undefined,
+): ReaderGeneralSettings {
+  return {
+    ...base,
+    ...(override?.general ?? {}),
+  };
+}
+
+function getReaderAppearanceSettingsForEditor(
+  base: ReaderAppearanceSettings,
+  override: ReaderSettingsOverride | undefined,
+): ReaderAppearanceSettings {
+  return {
+    ...base,
+    ...(override?.appearance ?? {}),
+    customThemes: base.customThemes,
+  };
+}
+
 export function ReaderSettingsPanel({
   inlineAutomation = false,
+  target,
   novelId = null,
 }: ReaderSettingsPanelProps = {}) {
   const { t } = useTranslation();
-  const scopedNovelId =
+  const legacyNovelId =
     typeof novelId === "number" && novelId > 0 ? novelId : null;
+  const resolvedTarget: ReaderSettingsPanelTarget =
+    target ??
+    (legacyNovelId
+      ? { kind: "novel", novelId: legacyNovelId }
+      : { kind: "global" });
+  const targetKind = resolvedTarget.kind;
+  const scopedSourceId =
+    targetKind === "source"
+      ? resolvedTarget.sourceId
+      : targetKind === "novel"
+        ? (resolvedTarget.sourceId ?? null)
+        : null;
+  const scopedNovelId =
+    targetKind === "novel" && resolvedTarget.novelId > 0
+      ? resolvedTarget.novelId
+      : null;
   const globalGeneral = useReaderStore((state) => state.general);
   const globalAppearance = useReaderStore((state) => state.appearance);
+  const sourceSettingsOverride = useReaderStore((state) =>
+    scopedSourceId ? state.readerSettingsBySource[scopedSourceId] : undefined,
+  );
   const novelSettingsOverride = useReaderStore((state) =>
     scopedNovelId ? state.readerSettingsByNovel[scopedNovelId] : undefined,
   );
   const setGeneral = useReaderStore((state) => state.setGeneral);
   const setAppearance = useReaderStore((state) => state.setAppearance);
+  const setSourceReaderSettingsEnabled = useReaderStore(
+    (state) => state.setSourceReaderSettingsEnabled,
+  );
+  const setSourceGeneral = useReaderStore((state) => state.setSourceGeneral);
+  const setSourceAppearance = useReaderStore(
+    (state) => state.setSourceAppearance,
+  );
   const setNovelReaderSettingsEnabled = useReaderStore(
     (state) => state.setNovelReaderSettingsEnabled,
   );
@@ -124,36 +186,81 @@ export function ReaderSettingsPanel({
     (state) => state.setNovelAppearance,
   );
   const applyTheme = useReaderStore((state) => state.applyTheme);
+  const applySourceTheme = useReaderStore((state) => state.applySourceTheme);
   const applyNovelTheme = useReaderStore((state) => state.applyNovelTheme);
   const saveCustomTheme = useReaderStore((state) => state.saveCustomTheme);
   const resetReaderSettings = useReaderStore(
     (state) => state.resetReaderSettings,
   );
+  const resetSourceReaderSettings = useReaderStore(
+    (state) => state.resetSourceReaderSettings,
+  );
   const resetNovelReaderSettings = useReaderStore(
     (state) => state.resetNovelReaderSettings,
   );
-  const novelSettingsEnabled =
-    scopedNovelId !== null && novelSettingsOverride !== undefined;
-  const general = useMemo(
+  const targetOverride =
+    targetKind === "source" ? sourceSettingsOverride : novelSettingsOverride;
+  const targetSettingsEnabled =
+    targetKind === "global" || Boolean(targetOverride?.enabled);
+  const baseGeneral = useMemo(
     () =>
-      novelSettingsEnabled
+      targetKind === "novel"
         ? getEffectiveReaderGeneralSettings(
             globalGeneral,
-            novelSettingsOverride,
+            sourceSettingsOverride,
           )
         : globalGeneral,
-    [globalGeneral, novelSettingsEnabled, novelSettingsOverride],
+    [globalGeneral, sourceSettingsOverride, targetKind],
+  );
+  const baseAppearance = useMemo(
+    () =>
+      targetKind === "novel"
+        ? getEffectiveReaderAppearanceSettings(
+            globalAppearance,
+            sourceSettingsOverride,
+          )
+        : globalAppearance,
+    [globalAppearance, sourceSettingsOverride, targetKind],
+  );
+  const general = useMemo(
+    () =>
+      targetKind === "global"
+        ? globalGeneral
+        : getReaderGeneralSettingsForEditor(baseGeneral, targetOverride),
+    [baseGeneral, globalGeneral, targetKind, targetOverride],
   );
   const appearance = useMemo(
     () =>
-      novelSettingsEnabled
-        ? getEffectiveReaderAppearanceSettings(
-            globalAppearance,
-            novelSettingsOverride,
-          )
-        : globalAppearance,
-    [globalAppearance, novelSettingsEnabled, novelSettingsOverride],
+      targetKind === "global"
+        ? globalAppearance
+        : getReaderAppearanceSettingsForEditor(baseAppearance, targetOverride),
+    [baseAppearance, globalAppearance, targetKind, targetOverride],
   );
+  const scopeDisplayName =
+    resolvedTarget.label?.trim() ||
+    (targetKind === "source"
+      ? (scopedSourceId ?? t("readerSettings.scope.sourceFallback"))
+      : targetKind === "novel"
+        ? t("readerSettings.scope.novelFallback")
+        : t("readerSettings.scope.globalName"));
+  const scopeTitle =
+    targetKind === "source"
+      ? t("readerSettings.scope.sourceTitle", { name: scopeDisplayName })
+      : targetKind === "novel"
+        ? t("readerSettings.scope.novelTitle", { name: scopeDisplayName })
+        : t("readerSettings.scope.globalTitle");
+  const scopeDescription =
+    targetKind === "source"
+      ? t("readerSettings.scope.sourceDescription")
+      : targetKind === "novel"
+        ? t("readerSettings.scope.novelDescription")
+        : t("readerSettings.scope.globalDescription");
+  const scopeBadge =
+    targetKind === "global"
+      ? t("readerSettings.scope.globalBadge")
+      : targetSettingsEnabled
+        ? t("readerSettings.scope.activeBadge")
+        : t("readerSettings.scope.inactiveBadge");
 
   const readerThemes = useMemo(
     () => [...READER_PRESET_THEMES, ...appearance.customThemes],
@@ -200,51 +307,80 @@ export function ReaderSettingsPanel({
     setActiveAppearance({ themeId: id });
   }
 
-  function setActiveGeneral(
-    settings: Parameters<typeof setGeneral>[0],
-  ): void {
-    if (scopedNovelId !== null && novelSettingsEnabled) {
-      setNovelGeneral(scopedNovelId, settings);
+  function setActiveGeneral(settings: Partial<ReaderGeneralSettings>): void {
+    if (targetKind === "source") {
+      if (scopedSourceId) setSourceGeneral(scopedSourceId, settings);
+      return;
+    }
+    if (targetKind === "novel") {
+      if (scopedNovelId !== null) {
+        setNovelGeneral(scopedNovelId, settings, baseGeneral);
+      }
       return;
     }
     setGeneral(settings);
   }
 
   function setActiveAppearance(
-    settings: Parameters<typeof setAppearance>[0],
+    settings: Partial<ReaderAppearanceSettings>,
   ): void {
-    if (scopedNovelId !== null && novelSettingsEnabled) {
-      setNovelAppearance(scopedNovelId, settings);
+    if (targetKind === "source") {
+      if (scopedSourceId) setSourceAppearance(scopedSourceId, settings);
+      return;
+    }
+    if (targetKind === "novel") {
+      if (scopedNovelId !== null) {
+        setNovelAppearance(scopedNovelId, settings, baseAppearance);
+      }
       return;
     }
     setAppearance(settings);
   }
 
   function applyActiveTheme(theme: Parameters<typeof applyTheme>[0]): void {
-    if (scopedNovelId !== null && novelSettingsEnabled) {
-      applyNovelTheme(scopedNovelId, theme);
+    if (targetKind === "source") {
+      if (scopedSourceId) applySourceTheme(scopedSourceId, theme);
+      return;
+    }
+    if (targetKind === "novel") {
+      if (scopedNovelId !== null) {
+        applyNovelTheme(scopedNovelId, theme, baseAppearance);
+      }
       return;
     }
     applyTheme(theme);
   }
 
   function resetActiveReaderSettings(): void {
-    if (scopedNovelId !== null && novelSettingsEnabled) {
-      resetNovelReaderSettings(scopedNovelId);
+    if (targetKind === "source") {
+      if (scopedSourceId) resetSourceReaderSettings(scopedSourceId);
+      return;
+    }
+    if (targetKind === "novel") {
+      if (scopedNovelId !== null) {
+        resetNovelReaderSettings(scopedNovelId);
+      }
       return;
     }
     resetReaderSettings();
   }
 
-  function handleNovelSettingsScopeChange(enabled: boolean): void {
-    if (scopedNovelId === null) return;
-    setNovelReaderSettingsEnabled(scopedNovelId, enabled);
+  function handleTargetSettingsEnabledChange(enabled: boolean): void {
+    if (targetKind === "source") {
+      if (scopedSourceId) {
+        setSourceReaderSettingsEnabled(scopedSourceId, enabled);
+      }
+      return;
+    }
+    if (targetKind === "novel" && scopedNovelId !== null) {
+      setNovelReaderSettingsEnabled(scopedNovelId, enabled);
+    }
   }
 
   function handleApplyTapZonePreset(presetId: ReaderTapPresetId): void {
     const preset = READER_TAP_PRESETS.find((entry) => entry.id === presetId);
     if (!preset) return;
-    setGeneral({
+    setActiveGeneral({
       tapZonePresetId: preset.id,
       tapZones: preset.zones,
     });
@@ -277,26 +413,26 @@ export function ReaderSettingsPanel({
         description={t("readerSettings.autoScroll.description")}
       >
         <Switch
-          checked={!general.pageReader && globalGeneral.autoScroll}
+          checked={!general.pageReader && general.autoScroll}
           disabled={general.pageReader}
           onChange={(event) =>
-            setGeneral({ autoScroll: event.currentTarget.checked })
+            setActiveGeneral({ autoScroll: event.currentTarget.checked })
           }
         />
       </SettingsFieldRow>
-      {!general.pageReader && globalGeneral.autoScroll ? (
+      {!general.pageReader && general.autoScroll ? (
         <>
           <SettingsFieldRow
             label={t("readerSettings.autoScrollInterval")}
             description={t("readerSettings.autoScrollInterval.description")}
           >
             <NumberInput
-              value={globalGeneral.autoScrollInterval}
+              value={general.autoScrollInterval}
               min={16}
               max={500}
               onChange={(value) => {
                 if (typeof value === "number") {
-                  setGeneral({ autoScrollInterval: value });
+                  setActiveGeneral({ autoScrollInterval: value });
                 }
               }}
             />
@@ -306,13 +442,13 @@ export function ReaderSettingsPanel({
             description={t("readerSettings.autoScrollOffset.description")}
           >
             <NumberInput
-              value={globalGeneral.autoScrollOffset}
+              value={general.autoScrollOffset}
               min={0.25}
               max={12}
               step={0.25}
               onChange={(value) => {
                 if (typeof value === "number") {
-                  setGeneral({ autoScrollOffset: value });
+                  setActiveGeneral({ autoScrollOffset: value });
                 }
               }}
             />
@@ -324,20 +460,41 @@ export function ReaderSettingsPanel({
 
   return (
     <Stack gap="md">
-      {scopedNovelId !== null ? (
+      <div
+        className="lnr-reader-settings-scope-card"
+        data-enabled={targetSettingsEnabled}
+        data-scope={targetKind}
+      >
+        <div className="lnr-reader-settings-scope-main">
+          <span className="lnr-reader-settings-scope-title">
+            {scopeTitle}
+          </span>
+          <span className="lnr-reader-settings-scope-description">
+            {scopeDescription}
+          </span>
+        </div>
+        <span className="lnr-reader-settings-scope-badge">
+          {scopeBadge}
+        </span>
+      </div>
+      {targetKind !== "global" ? (
         <SettingsSection title={t("readerSettings.scope.title")}>
           <SettingsFieldRow
-            label={t("readerSettings.novelScope")}
+            label={t(
+              targetKind === "source"
+                ? "readerSettings.sourceScope"
+                : "readerSettings.novelScope",
+            )}
             description={t(
-              novelSettingsEnabled
-                ? "readerSettings.novelScope.enabledDescription"
-                : "readerSettings.novelScope.disabledDescription",
+              targetKind === "source"
+                ? "readerSettings.sourceScope.description"
+                : "readerSettings.novelScope.description",
             )}
           >
             <Switch
-              checked={novelSettingsEnabled}
+              checked={targetSettingsEnabled}
               onChange={(event) =>
-                handleNovelSettingsScopeChange(event.currentTarget.checked)
+                handleTargetSettingsEnabledChange(event.currentTarget.checked)
               }
             />
           </SettingsFieldRow>
@@ -447,9 +604,9 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.fullPageReader.description")}
         >
           <Switch
-            checked={globalGeneral.fullPageReader}
+            checked={general.fullPageReader}
             onChange={(event) =>
-              setGeneral({
+              setActiveGeneral({
                 fullPageReader: event.currentTarget.checked,
               })
             }
@@ -460,9 +617,9 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.keepScreenOn.description")}
         >
           <Switch
-            checked={globalGeneral.keepScreenOn}
+            checked={general.keepScreenOn}
             onChange={(event) =>
-              setGeneral({ keepScreenOn: event.currentTarget.checked })
+              setActiveGeneral({ keepScreenOn: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
@@ -611,9 +768,9 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.swipeGestures.description")}
         >
           <Switch
-            checked={globalGeneral.swipeGestures}
+            checked={general.swipeGestures}
             onChange={(event) =>
-              setGeneral({ swipeGestures: event.currentTarget.checked })
+              setActiveGeneral({ swipeGestures: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
@@ -622,13 +779,13 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.tapControls.description")}
         >
           <Switch
-            checked={globalGeneral.tapToScroll}
+            checked={general.tapToScroll}
             onChange={(event) =>
-              setGeneral({ tapToScroll: event.currentTarget.checked })
+              setActiveGeneral({ tapToScroll: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
-        {globalGeneral.tapToScroll ? (
+        {general.tapToScroll ? (
           <SettingsFieldRow
             label={t("readerSettings.tapPreset")}
             description={t("readerSettings.tapPreset.description")}
@@ -641,7 +798,7 @@ export function ReaderSettingsPanel({
                     key={preset.id}
                     index={index}
                     preset={preset}
-                    selected={preset.id === globalGeneral.tapZonePresetId}
+                    selected={preset.id === general.tapZonePresetId}
                     onApply={handleApplyTapZonePreset}
                   />
                 ))}
@@ -669,21 +826,21 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.seekbar.description")}
         >
           <Switch
-            checked={globalGeneral.showSeekbar}
+            checked={general.showSeekbar}
             onChange={(event) =>
-              setGeneral({ showSeekbar: event.currentTarget.checked })
+              setActiveGeneral({ showSeekbar: event.currentTarget.checked })
             }
           />
         </SettingsFieldRow>
-        {globalGeneral.showSeekbar ? (
+        {general.showSeekbar ? (
           <SettingsFieldRow
             label={t("readerSettings.verticalSeekbar")}
             description={t("readerSettings.verticalSeekbar.description")}
           >
             <Switch
-              checked={globalGeneral.verticalSeekbar}
+              checked={general.verticalSeekbar}
               onChange={(event) =>
-                setGeneral({
+                setActiveGeneral({
                   verticalSeekbar: event.currentTarget.checked,
                 })
               }
@@ -695,9 +852,9 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.scrollPercentage.description")}
         >
           <Switch
-            checked={globalGeneral.showScrollPercentage}
+            checked={general.showScrollPercentage}
             onChange={(event) =>
-              setGeneral({
+              setActiveGeneral({
                 showScrollPercentage: event.currentTarget.checked,
               })
             }
@@ -708,9 +865,9 @@ export function ReaderSettingsPanel({
           description={t("readerSettings.batteryTimeFooter.description")}
         >
           <Switch
-            checked={globalGeneral.showBatteryAndTime}
+            checked={general.showBatteryAndTime}
             onChange={(event) =>
-              setGeneral({
+              setActiveGeneral({
                 showBatteryAndTime: event.currentTarget.checked,
               })
             }

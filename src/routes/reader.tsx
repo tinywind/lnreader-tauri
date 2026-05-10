@@ -217,14 +217,27 @@ function CloseIcon() {
 
 function ReaderSettingsOverlay({
   novelId,
+  novelName,
   onClose,
   onOpenSettingsPage,
+  sourceId,
 }: {
   novelId?: number;
+  novelName?: string;
   onClose: () => void;
   onOpenSettingsPage: () => void;
+  sourceId?: string | null;
 }) {
   const { t } = useTranslation();
+  const settingsTarget =
+    novelId && novelId > 0
+      ? {
+          kind: "novel" as const,
+          novelId,
+          sourceId,
+          label: novelName,
+        }
+      : { kind: "global" as const };
 
   return (
     <div
@@ -265,7 +278,10 @@ function ReaderSettingsOverlay({
           </div>
         </header>
         <div className="lnr-reader-settings-scroll">
-          <ReaderSettingsPanel inlineAutomation novelId={novelId} />
+          <ReaderSettingsPanel
+            inlineAutomation
+            target={settingsTarget}
+          />
         </div>
       </section>
     </div>
@@ -428,9 +444,19 @@ export function ReaderPage() {
     },
   });
   const currentNovelId = chapterQuery.data?.novelId ?? 0;
+  const currentNovelQuery = useQuery({
+    queryKey: ["novel", "detail", currentNovelId],
+    queryFn: () => getNovelById(currentNovelId),
+    enabled: currentNovelId > 0,
+  });
+  const currentNovel = currentNovelQuery.data ?? null;
+  const currentSourceId = currentNovel?.pluginId ?? null;
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const globalReaderGeneral = useReaderStore((state) => state.general);
   const globalReaderAppearance = useReaderStore((state) => state.appearance);
+  const sourceReaderSettingsOverride = useReaderStore((state) =>
+    currentSourceId ? state.readerSettingsBySource[currentSourceId] : undefined,
+  );
   const novelReaderSettingsOverride = useReaderStore((state) =>
     currentNovelId > 0
       ? state.readerSettingsByNovel[currentNovelId]
@@ -440,17 +466,27 @@ export function ReaderPage() {
     () =>
       getEffectiveReaderGeneralSettings(
         globalReaderGeneral,
+        sourceReaderSettingsOverride,
         novelReaderSettingsOverride,
       ),
-    [globalReaderGeneral, novelReaderSettingsOverride],
+    [
+      globalReaderGeneral,
+      sourceReaderSettingsOverride,
+      novelReaderSettingsOverride,
+    ],
   );
   const effectiveReaderAppearance = useMemo(
     () =>
       getEffectiveReaderAppearanceSettings(
         globalReaderAppearance,
+        sourceReaderSettingsOverride,
         novelReaderSettingsOverride,
       ),
-    [globalReaderAppearance, novelReaderSettingsOverride],
+    [
+      globalReaderAppearance,
+      sourceReaderSettingsOverride,
+      novelReaderSettingsOverride,
+    ],
   );
   const fullPageReader = effectiveReaderGeneral.fullPageReader;
   const setFullPageReaderChromeVisible = useReaderStore(
@@ -1029,8 +1065,10 @@ export function ReaderPage() {
       {readerSettingsOpen ? (
         <ReaderSettingsOverlay
           novelId={chapterNovelId}
+          novelName={currentNovel?.name}
           onClose={closeReaderSettingsPanel}
           onOpenSettingsPage={openReaderSettingsPage}
+          sourceId={currentSourceId}
         />
       ) : null}
       <ReaderBottomStrip

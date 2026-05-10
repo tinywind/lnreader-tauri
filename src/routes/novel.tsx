@@ -27,6 +27,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  Drawer,
   Group,
   Loader,
   Modal,
@@ -50,6 +51,7 @@ import {
   PlayFromStartGlyph,
   PlayGlyph,
   PlusGlyph,
+  SettingsGlyph,
 } from "../components/ActionGlyphs";
 import {
   ConsoleChip,
@@ -62,6 +64,7 @@ import { PageFrame, StateView } from "../components/AppFrame";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
 import { LocalCoverPicker } from "../components/LocalCoverPicker";
+import { ReaderSettingsPanel } from "../components/ReaderSettingsPanel";
 import { TextButton } from "../components/TextButton";
 import {
   clearChapterContent,
@@ -1092,6 +1095,7 @@ interface NovelWorkspaceProps {
   onAddLocalChapters: () => void;
   onBatchDownload: (chapters: ChapterListRow[]) => void;
   onEditLocalMetadata: () => void;
+  onOpenReaderSettings: () => void;
   onOpenSource: () => void;
   onRead: (chapter: ChapterListRow) => void;
   onToggleLibrary: () => void;
@@ -1109,6 +1113,7 @@ function NovelWorkspace({
   onAddLocalChapters,
   onBatchDownload,
   onEditLocalMetadata,
+  onOpenReaderSettings,
   onOpenSource,
   onRead,
   onToggleLibrary,
@@ -1224,6 +1229,12 @@ function NovelWorkspace({
           options={batchDownloadOptions}
         />
       )}
+      <NovelActionButton
+        label={t("novel.readerSettings")}
+        onClick={onOpenReaderSettings}
+      >
+        <SettingsGlyph />
+      </NovelActionButton>
       <NovelActionButton
         active={novel.inLibrary}
         disabled={toggleBusy}
@@ -1373,6 +1384,7 @@ export function NovelDetailPage() {
     null,
   );
   const [localMetadataOpen, setLocalMetadataOpen] = useState(false);
+  const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [localMetadataForm, setLocalMetadataForm] =
     useState<LocalNovelMetadataInput>(EMPTY_LOCAL_NOVEL_FORM);
 
@@ -1791,6 +1803,7 @@ export function NovelDetailPage() {
             onAddLocalChapters={openLocalChapterInput}
             onBatchDownload={downloadChapters}
             onEditLocalMetadata={openLocalMetadataEditor}
+            onOpenReaderSettings={() => setReaderSettingsOpen(true)}
             onRead={openChapter}
             onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
             onToggleLibrary={() => toggle.mutate()}
@@ -1875,6 +1888,23 @@ export function NovelDetailPage() {
         onChange={handleLocalChapterFilesSelected}
         type="file"
       />
+
+      <Drawer
+        opened={readerSettingsOpen}
+        onClose={() => setReaderSettingsOpen(false)}
+        position="right"
+        size="lg"
+        title={t("readerSettings.novel.title", { name: novel.name })}
+      >
+        <ReaderSettingsPanel
+          target={{
+            kind: "novel",
+            novelId: novel.id,
+            sourceId: novel.pluginId,
+            label: novel.name,
+          }}
+        />
+      </Drawer>
 
       <Modal
         opened={novel.isLocal && localMetadataOpen}

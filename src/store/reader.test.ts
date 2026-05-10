@@ -203,7 +203,8 @@ describe("useReaderStore", () => {
 
     const override = useReaderStore.getState().readerSettingsByNovel[novelId];
     expect(override).toEqual({
-      general: { pageReader: true, bionicReading: true },
+      enabled: true,
+      general: { pageReader: true, keepScreenOn: true, bionicReading: true },
       appearance: { textSize: 22 },
     });
 
@@ -216,9 +217,7 @@ describe("useReaderStore", () => {
       override,
     );
     expect(effectiveGeneral.pageReader).toBe(true);
-    expect(effectiveGeneral.keepScreenOn).toBe(
-      READER_GENERAL_DEFAULTS.keepScreenOn,
-    );
+    expect(effectiveGeneral.keepScreenOn).toBe(true);
     expect(effectiveGeneral.bionicReading).toBe(true);
     expect(effectiveAppearance.textSize).toBe(22);
     expect(effectiveAppearance.customThemes).toBe(
@@ -226,15 +225,53 @@ describe("useReaderStore", () => {
     );
   });
 
-  it("removes novel-specific reader settings when the scope is disabled", () => {
+  it("keeps disabled novel-specific settings without applying them", () => {
     const novelId = 7;
     useReaderStore.getState().setNovelReaderSettingsEnabled(novelId, true);
     useReaderStore.getState().setNovelAppearance(novelId, { textSize: 22 });
     useReaderStore.getState().setNovelReaderSettingsEnabled(novelId, false);
 
+    const override = useReaderStore.getState().readerSettingsByNovel[novelId];
+    expect(override).toEqual({
+      enabled: false,
+      appearance: { textSize: 22 },
+    });
     expect(
-      useReaderStore.getState().readerSettingsByNovel[novelId],
-    ).toBeUndefined();
+      getEffectiveReaderAppearanceSettings(
+        READER_APPEARANCE_DEFAULTS,
+        override,
+      ).textSize,
+    ).toBe(READER_APPEARANCE_DEFAULTS.textSize);
+  });
+
+  it("applies source settings before novel settings", () => {
+    const novelId = 7;
+    const sourceId = "source-a";
+    const state = useReaderStore.getState();
+
+    state.setSourceReaderSettingsEnabled(sourceId, true);
+    state.setSourceAppearance(sourceId, { textSize: 20, lineHeight: 1.6 });
+    const sourceOverride = useReaderStore.getState().readerSettingsBySource[
+      sourceId
+    ];
+    const sourceAppearance = getEffectiveReaderAppearanceSettings(
+      READER_APPEARANCE_DEFAULTS,
+      sourceOverride,
+    );
+
+    state.setNovelReaderSettingsEnabled(novelId, true);
+    state.setNovelAppearance(novelId, { textSize: 24 }, sourceAppearance);
+    const novelOverride = useReaderStore.getState().readerSettingsByNovel[
+      novelId
+    ];
+    const effectiveAppearance = getEffectiveReaderAppearanceSettings(
+      READER_APPEARANCE_DEFAULTS,
+      sourceOverride,
+      novelOverride,
+    );
+
+    expect(effectiveAppearance.textSize).toBe(24);
+    expect(effectiveAppearance.lineHeight).toBe(1.6);
   });
 
   it("setLastReadChapter records the chapter id under the novel id", () => {

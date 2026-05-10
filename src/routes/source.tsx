@@ -16,6 +16,7 @@ import {
   ChevronDownGlyph,
   ExternalLinkGlyph,
   SettingsGlyph,
+  SourceGlyph,
 } from "../components/ActionGlyphs";
 import { SegmentedToggle } from "../components/SegmentedToggle";
 import { TextButton } from "../components/TextButton";
@@ -33,6 +34,7 @@ import {
 } from "../components/PluginFilters";
 import { IconButton } from "../components/IconButton";
 import { PluginSettingsEditor } from "../components/PluginSettingsEditor";
+import { ReaderSettingsPanel } from "../components/ReaderSettingsPanel";
 import { SearchBar } from "../components/SearchBar";
 import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { importNovelFromSource } from "../lib/plugins/import-novel";
@@ -208,6 +210,8 @@ export function SourcePage() {
 
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
+  const [readerSettingsDrawerOpen, setReaderSettingsDrawerOpen] =
+    useState(false);
   const initialFilters = useMemo<ResolvedFilterValues>(
     () => (plugin?.filters ? readSourceFilters(plugin, plugin.filters) : {}),
     [plugin],
@@ -446,6 +450,14 @@ export function SourcePage() {
                 <SettingsGlyph />
               </IconButton>
             ) : null}
+            <IconButton
+              label={t("readerSettings.source.open", { name: plugin.name })}
+              size="lg"
+              variant="subtle"
+              onClick={() => setReaderSettingsDrawerOpen(true)}
+            >
+              <SourceGlyph />
+            </IconButton>
             <Badge variant="light">{plugin.lang}</Badge>
             <Badge variant="light" color="gray">
               v{plugin.version}
@@ -745,6 +757,21 @@ export function SourcePage() {
           />
         </Drawer>
       ) : null}
+      <Drawer
+        opened={readerSettingsDrawerOpen}
+        onClose={() => setReaderSettingsDrawerOpen(false)}
+        title={t("readerSettings.source.title", { name: plugin.name })}
+        position="right"
+        size="lg"
+      >
+        <ReaderSettingsPanel
+          target={{
+            kind: "source",
+            sourceId: plugin.id,
+            label: plugin.name,
+          }}
+        />
+      </Drawer>
     </PageFrame>
   );
 }
