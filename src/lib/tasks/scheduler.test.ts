@@ -123,6 +123,53 @@ describe("TaskScheduler", () => {
     await Promise.all(tasks.map((task) => task.promise));
   });
 
+  it("dispatches pool source work in source queue order", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 2,
+      sourceQueuesPaused: true,
+    });
+    const order: string[] = [];
+
+    const first = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "First source",
+      priority: "background",
+      source: { id: "first", name: "First" },
+      run: async (context) => {
+        order.push(`first:${context.executor}:start`);
+      },
+    });
+    const second = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Second source",
+      priority: "user",
+      source: { id: "second", name: "Second" },
+      run: async (context) => {
+        order.push(`second:${context.executor}:start`);
+      },
+    });
+    const third = scheduler.enqueueSource({
+      kind: "chapter.download",
+      title: "Third source",
+      priority: "normal",
+      source: { id: "third", name: "Third" },
+      run: async (context) => {
+        order.push(`third:${context.executor}:start`);
+      },
+    });
+
+    expect(scheduler.moveSourceQueue("third", "top")).toBe(true);
+    expect(scheduler.resumeSourceQueue()).toBe(true);
+
+    await Promise.all([first.promise, second.promise, third.promise]);
+
+    expect(order).toEqual([
+      "third:pool:0:start",
+      "first:pool:1:start",
+      "second:pool:0:start",
+    ]);
+  });
+
   it("serializes different sources that share a base domain", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,

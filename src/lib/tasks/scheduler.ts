@@ -23,9 +23,8 @@
  * Dispatcher loop:
  * 1. Drain main app work.
  * 2. Drain the immediate executor with UI-responsive eligible work only.
- * 3. For each free pool executor, select one eligible candidate from each
- *    source queue, then choose by priority, domain affinity, fairness, and
- *    creation time.
+ * 3. For each free pool executor, walk source queues in the user-visible
+ *    order and assign the first eligible queued task from each source.
  * 4. Mark a task running only after assigning an executor. Pass that executor
  *    id through TaskRunContext so plugin fetch/extract calls use the same
  *    WebView for the task lifetime.
@@ -139,9 +138,22 @@ export interface TaskRecord {
 
 export type TaskMoveTarget = "top" | "up" | "down" | "bottom";
 
+export type TaskQueueSortMode =
+  | "oldest"
+  | "newest"
+  | "priority"
+  | "title";
+
+export type SourceQueueSortMode =
+  | "sourceName"
+  | "oldestTask"
+  | "newestTask"
+  | "queuedCount";
+
 export interface TaskSnapshot {
   pausedSourceIds: string[];
   records: TaskRecord[];
+  sourceQueueOrder: string[];
   sourceQueuesPaused: boolean;
   running: number;
   queued: number;
@@ -351,6 +363,7 @@ export class TaskScheduler {
     ReturnType<typeof setTimeout>
   >();
   private readonly sourceCooldownUntilByKey = new Map<string, number>();
+  private readonly sourceQueueOrder: string[] = [];
   private readonly sourceQueues = new Map<string, string[]>();
   private sourceForegroundConcurrency: number;
   private readonly sourceBackgroundConcurrency: number;
@@ -365,6 +378,7 @@ export class TaskScheduler {
   private snapshot: TaskSnapshot = {
     pausedSourceIds: [],
     records: [],
+    sourceQueueOrder: [],
     sourceQueuesPaused: false,
     running: 0,
     queued: 0,
@@ -507,6 +521,7 @@ export class TaskScheduler {
       this.mainQueue.push(id);
     } else {
       const sourceId = spec.source!.id;
+      this.ensureSourceQueueOrder(sourceId);
       const queue = this.sourceQueues.get(sourceId) ?? [];
       queue.push(id);
       this.sourceQueues.set(sourceId, queue);
@@ -584,6 +599,109 @@ export class TaskScheduler {
       queueIndex: nextIndex,
       target,
     });
+    this.publishSnapshot();
+    this.drain();
+    return true;
+  }
+
+  moveQueuedTaskBefore(id: string, beforeId: string | null): boolean {
+    const entry = this.entries.get(id);
+    if (!entry || entry.record.status !== "queued") return false;
+    const queue = this.queueForEntry(entry);
+    if (!queue) return false;
+
+    const currentIndex = queue.indexOf(id);
+    if (currentIndex < 0) return false;
+
+    let nextIndex = queue.length - 1;
+    if (beforeId !== null) {
+      const beforeEntry = this.entries.get(beforeId);
+      if (
+        !beforeEntry ||
+        beforeEntry.record.status !== "queued" ||
+        this.queueForEntry(beforeEntry) !== queue
+      ) {
+        return false;
+      }
+      nextIndex = queue.indexOf(beforeId);
+      if (nextIndex < 0) return false;
+      if (currentIndex < nextIndex) nextIndex -= 1;
+    }
+
+    if (nextIndex === currentIndex) return false;
+    queue.splice(currentIndex, 1);
+    queue.splice(nextIndex, 0, id);
+    this.debug("queued task reordered", entry, {
+      beforeId,
+      queueIndex: nextIndex,
+    });
+    this.publishSnapshot();
+    this.drain();
+    return true;
+  }
+
+  moveSourceQueue(sourceId: string, target: TaskMoveTarget): boolean {
+    const currentIndex = this.sourceQueueOrder.indexOf(sourceId);
+    if (currentIndex < 0) return false;
+    const nextIndex = this.moveTargetIndex(
+      currentIndex,
+      this.sourceQueueOrder.length,
+      target,
+    );
+    if (nextIndex === currentIndex) return false;
+    this.sourceQueueOrder.splice(currentIndex, 1);
+    this.sourceQueueOrder.splice(nextIndex, 0, sourceId);
+    this.debug("source queue moved", undefined, { sourceId, target });
+    this.publishSnapshot();
+    this.drain();
+    return true;
+  }
+
+  moveSourceQueueBefore(
+    sourceId: string,
+    beforeSourceId: string | null,
+  ): boolean {
+    const currentIndex = this.sourceQueueOrder.indexOf(sourceId);
+    if (currentIndex < 0) return false;
+
+    let nextIndex = this.sourceQueueOrder.length - 1;
+    if (beforeSourceId !== null) {
+      nextIndex = this.sourceQueueOrder.indexOf(beforeSourceId);
+      if (nextIndex < 0) return false;
+      if (currentIndex < nextIndex) nextIndex -= 1;
+    }
+
+    if (nextIndex === currentIndex) return false;
+    this.sourceQueueOrder.splice(currentIndex, 1);
+    this.sourceQueueOrder.splice(nextIndex, 0, sourceId);
+    this.debug("source queue reordered", undefined, {
+      beforeSourceId,
+      sourceId,
+    });
+    this.publishSnapshot();
+    this.drain();
+    return true;
+  }
+
+  sortQueuedTasks(mode: TaskQueueSortMode): boolean {
+    let changed = this.sortQueue(this.mainQueue, mode);
+    for (const queue of this.sourceQueues.values()) {
+      changed = this.sortQueue(queue, mode) || changed;
+    }
+    if (!changed) return false;
+    this.debug("queued tasks sorted", undefined, { mode });
+    this.publishSnapshot();
+    this.drain();
+    return true;
+  }
+
+  sortSourceQueues(mode: SourceQueueSortMode): boolean {
+    const before = this.sourceQueueOrder.join("\u0000");
+    this.sourceQueueOrder.sort((left, right) =>
+      this.compareSourceQueueOrder(left, right, mode),
+    );
+    if (this.sourceQueueOrder.join("\u0000") === before) return false;
+    this.debug("source queues sorted", undefined, { mode });
     this.publishSnapshot();
     this.drain();
     return true;
@@ -779,20 +897,30 @@ export class TaskScheduler {
   }
 
   private drainSourcePool(): void {
-    for (const executorId of this.freePoolExecutorIds()) {
-      const next = this.pickSourceTask((entry) => {
-        if (shouldUseImmediateExecutor(entry)) return false;
-        if (!this.canUseExecutorForSourceDomain(entry, executorId)) return false;
-        if (
-          isBackgroundPriority(entry.record.priority) &&
-          this.activeBackgroundCount >= this.sourceBackgroundConcurrency
-        ) {
-          return false;
-        }
-        return true;
-      });
-      if (!next) continue;
-      this.startSource(next, executorId);
+    const freeExecutorIds = this.freePoolExecutorIds();
+    if (freeExecutorIds.length === 0) return;
+
+    for (const sourceId of this.orderedSourceQueueIds()) {
+      if (freeExecutorIds.length === 0) return;
+
+      for (let index = 0; index < freeExecutorIds.length; index += 1) {
+        const executorId = freeExecutorIds[index]!;
+        const next = this.pickSourceTaskFromQueue(sourceId, (entry) => {
+          if (shouldUseImmediateExecutor(entry)) return false;
+          if (!this.canUseExecutorForSourceDomain(entry, executorId)) return false;
+          if (
+            isBackgroundPriority(entry.record.priority) &&
+            this.activeBackgroundCount >= this.sourceBackgroundConcurrency
+          ) {
+            return false;
+          }
+          return true;
+        });
+        if (!next) continue;
+        freeExecutorIds.splice(index, 1);
+        this.startSource(next, executorId);
+        break;
+      }
     }
   }
 
@@ -916,6 +1044,38 @@ export class TaskScheduler {
 
     candidates.sort((a, b) => this.compareTaskOrder(a, b));
     return candidates[0] ?? null;
+  }
+
+  private pickSourceTaskFromQueue(
+    sourceId: string,
+    predicate: (entry: TaskEntry) => boolean,
+    options: {
+      allowPaused?: boolean;
+      allowActiveSource?: boolean;
+    } = {},
+  ): TaskEntry | null {
+    const queue = this.sourceQueues.get(sourceId);
+    if (!queue) return null;
+
+    for (const id of queue) {
+      const entry = this.entries.get(id);
+      if (!entry || entry.record.status !== "queued" || !entry.record.source) {
+        continue;
+      }
+      if (!this.canStartSourceTask(entry, options)) continue;
+      if (!options.allowPaused && this.isSourceTaskPaused(entry)) continue;
+      const cooldownDelay = this.sourceCooldownDelay(entry);
+      if (cooldownDelay > 0) {
+        this.scheduleSourceCooldownDrain(
+          entry.spec.sourceCooldownKey!,
+          cooldownDelay,
+        );
+        continue;
+      }
+      if (predicate(entry)) return entry;
+    }
+
+    return null;
   }
 
   private isSourceTaskPaused(entry: TaskEntry): boolean {
@@ -1306,9 +1466,23 @@ export class TaskScheduler {
         ...queuePositions.get(entry.record.id),
       }))
       .sort((a, b) => b.createdAt - a.createdAt);
+    const sourceIdsInRecords = new Set(
+      records
+        .map((task) => task.source?.id)
+        .filter((sourceId): sourceId is string => typeof sourceId === "string"),
+    );
+    const sourceQueueOrder = [
+      ...this.sourceQueueOrder.filter((sourceId) =>
+        sourceIdsInRecords.has(sourceId),
+      ),
+      ...[...sourceIdsInRecords]
+        .filter((sourceId) => !this.sourceQueueOrder.includes(sourceId))
+        .sort(),
+    ];
     return {
       pausedSourceIds: [...this.pausedSourceIds].sort(),
       records,
+      sourceQueueOrder,
       sourceQueuesPaused: this.sourceQueuesPaused,
       running: records.filter((task) => task.status === "running").length,
       queued: records.filter((task) => task.status === "queued").length,
@@ -1353,6 +1527,38 @@ export class TaskScheduler {
     return this.sourceQueues.get(sourceId) ?? null;
   }
 
+  private ensureSourceQueueOrder(sourceId: string): void {
+    if (!this.sourceQueueOrder.includes(sourceId)) {
+      this.sourceQueueOrder.push(sourceId);
+    }
+  }
+
+  private pruneSourceQueueOrder(sourceId: string | undefined): void {
+    if (!sourceId) return;
+    for (const entry of this.entries.values()) {
+      if (entry.record.source?.id === sourceId) return;
+    }
+    const index = this.sourceQueueOrder.indexOf(sourceId);
+    if (index >= 0) this.sourceQueueOrder.splice(index, 1);
+  }
+
+  private orderedSourceQueueIds(): string[] {
+    const activeSourceIds = new Set<string>();
+    for (const entry of this.entries.values()) {
+      const sourceId = entry.record.source?.id;
+      if (
+        sourceId &&
+        (entry.record.status === "queued" || entry.record.status === "running")
+      ) {
+        activeSourceIds.add(sourceId);
+        this.ensureSourceQueueOrder(sourceId);
+      }
+    }
+    return this.sourceQueueOrder.filter((sourceId) =>
+      activeSourceIds.has(sourceId),
+    );
+  }
+
   private moveTargetIndex(
     currentIndex: number,
     queueLength: number,
@@ -1368,6 +1574,107 @@ export class TaskScheduler {
       case "bottom":
         return queueLength - 1;
     }
+  }
+
+  private sortQueue(queue: string[], mode: TaskQueueSortMode): boolean {
+    const before = queue.join("\u0000");
+    queue.sort((leftId, rightId) => {
+      const left = this.entries.get(leftId);
+      const right = this.entries.get(rightId);
+      if (!left || !right) return 0;
+      return this.compareQueuedTaskOrder(left, right, mode);
+    });
+    return queue.join("\u0000") !== before;
+  }
+
+  private compareQueuedTaskOrder(
+    left: TaskEntry,
+    right: TaskEntry,
+    mode: TaskQueueSortMode,
+  ): number {
+    switch (mode) {
+      case "oldest":
+        return left.record.createdAt - right.record.createdAt;
+      case "newest":
+        return right.record.createdAt - left.record.createdAt;
+      case "priority": {
+        const priority =
+          priorityRank(left.record.priority) -
+          priorityRank(right.record.priority);
+        return priority !== 0
+          ? priority
+          : left.record.createdAt - right.record.createdAt;
+      }
+      case "title": {
+        const title = left.record.title.localeCompare(
+          right.record.title,
+          undefined,
+          { sensitivity: "base" },
+        );
+        return title !== 0
+          ? title
+          : left.record.createdAt - right.record.createdAt;
+      }
+    }
+  }
+
+  private compareSourceQueueOrder(
+    leftSourceId: string,
+    rightSourceId: string,
+    mode: SourceQueueSortMode,
+  ): number {
+    const left = this.sourceQueueStats(leftSourceId);
+    const right = this.sourceQueueStats(rightSourceId);
+    switch (mode) {
+      case "sourceName": {
+        const name = left.name.localeCompare(right.name, undefined, {
+          sensitivity: "base",
+        });
+        return name !== 0 ? name : leftSourceId.localeCompare(rightSourceId);
+      }
+      case "oldestTask":
+        return left.oldestCreatedAt - right.oldestCreatedAt;
+      case "newestTask":
+        return right.newestCreatedAt - left.newestCreatedAt;
+      case "queuedCount": {
+        const count = right.activeCount - left.activeCount;
+        return count !== 0 ? count : left.name.localeCompare(right.name);
+      }
+    }
+  }
+
+  private sourceQueueStats(sourceId: string): {
+    activeCount: number;
+    name: string;
+    newestCreatedAt: number;
+    oldestCreatedAt: number;
+  } {
+    let activeCount = 0;
+    let name = sourceId;
+    let newestCreatedAt = 0;
+    let oldestCreatedAt = Number.POSITIVE_INFINITY;
+
+    for (const entry of this.entries.values()) {
+      if (entry.record.source?.id !== sourceId) continue;
+      name = entry.record.source.name || sourceId;
+      if (
+        entry.record.status !== "queued" &&
+        entry.record.status !== "running"
+      ) {
+        continue;
+      }
+      activeCount += 1;
+      newestCreatedAt = Math.max(newestCreatedAt, entry.record.createdAt);
+      oldestCreatedAt = Math.min(oldestCreatedAt, entry.record.createdAt);
+    }
+
+    return {
+      activeCount,
+      name,
+      newestCreatedAt,
+      oldestCreatedAt:
+        oldestCreatedAt === Number.POSITIVE_INFINITY ? 0 : oldestCreatedAt,
+    };
   }
 
   private trimHistory(): void {
@@ -1391,7 +1698,9 @@ export class TaskScheduler {
       clearTimeout(timer);
       this.cleanupTimers.delete(entry.record.id);
     }
+    const sourceId = entry.record.source?.id;
     this.entries.delete(entry.record.id);
+    this.pruneSourceQueueOrder(sourceId);
     if (
       entry.dedupeKey &&
       this.latestByDedupeKey.get(entry.dedupeKey) === entry.record.id

@@ -1,12 +1,35 @@
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Progress, Text } from "@mantine/core";
+import { useState, type CSSProperties } from "react";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
 import {
   ArrowDownGlyph,
   ArrowUpGlyph,
+  ChevronDownGlyph,
+  ChevronUpGlyph,
   CloseGlyph,
+  DragHandleGlyph,
   PauseGlyph,
   PlayGlyph,
   RetryGlyph,
+  SortGlyph,
   TrashGlyph,
 } from "../components/ActionGlyphs";
 import { ConsoleStatusDot } from "../components/ConsolePrimitives";
@@ -15,8 +38,10 @@ import { useTranslation, type TranslationKey } from "../i18n";
 import { useTaskSnapshot } from "../lib/tasks/hooks";
 import {
   taskScheduler,
+  type SourceQueueSortMode,
   type TaskMoveTarget,
   type TaskPriority,
+  type TaskQueueSortMode,
   type TaskRecord,
   type TaskSnapshot,
   type TaskStatus,
@@ -24,6 +49,58 @@ import {
 import "../styles/tasks.css";
 
 const ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running"]);
+
+type SourceTaskGroup = {
+  sourceId: string;
+  sourceName: string;
+  tasks: TaskRecord[];
+};
+
+type SortableGroupState = {
+  attributes: DraggableAttributes;
+  isDragging: boolean;
+  listeners?: DraggableSyntheticListeners;
+  setNodeRef: (element: HTMLElement | null) => void;
+  style: CSSProperties;
+};
+
+const SOURCE_DND_PREFIX = "source:";
+const TASK_DND_PREFIX = "task:";
+
+function sourceDndId(sourceId: string): string {
+  return `${SOURCE_DND_PREFIX}${sourceId}`;
+}
+
+function taskDndId(taskId: string): string {
+  return `${TASK_DND_PREFIX}${taskId}`;
+}
+
+function parseSourceDndId(id: unknown): string | null {
+  const value = String(id);
+  return value.startsWith(SOURCE_DND_PREFIX)
+    ? value.slice(SOURCE_DND_PREFIX.length)
+    : null;
+}
+
+function parseTaskDndId(id: unknown): string | null {
+  const value = String(id);
+  return value.startsWith(TASK_DND_PREFIX)
+    ? value.slice(TASK_DND_PREFIX.length)
+    : null;
+}
+
+function beforeIdForMove(
+  orderedIds: string[],
+  activeId: string,
+  overId: string,
+): string | null {
+  const activeIndex = orderedIds.indexOf(activeId);
+  const overIndex = orderedIds.indexOf(overId);
+  if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) {
+    return activeId;
+  }
+  return activeIndex < overIndex ? orderedIds[overIndex + 1] ?? null : overId;
+}
 
 function isActiveTask(task: TaskRecord): boolean {
   return ACTIVE_STATUSES.has(task.status);
@@ -155,6 +232,98 @@ function progressLabel(task: TaskRecord): string | null {
   return `${progress.current}/${progress.total}`;
 }
 
+function DragHandle({
+  attributes,
+  draggable,
+  label,
+  listeners,
+}: {
+  attributes?: DraggableAttributes;
+  draggable: boolean;
+  label: string;
+  listeners?: DraggableSyntheticListeners;
+}) {
+  return (
+    <span
+      {...attributes}
+      {...listeners}
+      aria-disabled={!draggable}
+      aria-label={label}
+      className="lnr-task-drag-handle"
+      data-disabled={draggable ? undefined : "true"}
+      role="button"
+      tabIndex={draggable ? 0 : -1}
+      title={label}
+    >
+      <DragHandleGlyph />
+    </span>
+  );
+}
+
+function TaskSortMenu() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const sortTasks = (mode: TaskQueueSortMode) => {
+    taskScheduler.sortQueuedTasks(mode);
+    setOpen(false);
+  };
+  const sortSources = (mode: SourceQueueSortMode) => {
+    taskScheduler.sortSourceQueues(mode);
+    setOpen(false);
+  };
+
+  return (
+    <div className="lnr-task-sort-menu">
+      <IconButton
+        active={open}
+        aria-expanded={open}
+        label={t("tasks.sort")}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <SortGlyph />
+      </IconButton>
+      {open ? (
+        <div className="lnr-task-sort-popover" role="menu">
+          <div className="lnr-task-sort-section">
+            <span className="lnr-task-sort-heading">
+              {t("tasks.sortTasks")}
+            </span>
+            <button type="button" onClick={() => sortTasks("oldest")}>
+              {t("tasks.sortTasksOldest")}
+            </button>
+            <button type="button" onClick={() => sortTasks("newest")}>
+              {t("tasks.sortTasksNewest")}
+            </button>
+            <button type="button" onClick={() => sortTasks("priority")}>
+              {t("tasks.sortTasksPriority")}
+            </button>
+            <button type="button" onClick={() => sortTasks("title")}>
+              {t("tasks.sortTasksTitle")}
+            </button>
+          </div>
+          <div className="lnr-task-sort-section">
+            <span className="lnr-task-sort-heading">
+              {t("tasks.sortSources")}
+            </span>
+            <button type="button" onClick={() => sortSources("sourceName")}>
+              {t("tasks.sortSourcesName")}
+            </button>
+            <button type="button" onClick={() => sortSources("oldestTask")}>
+              {t("tasks.sortSourcesOldest")}
+            </button>
+            <button type="button" onClick={() => sortSources("newestTask")}>
+              {t("tasks.sortSourcesNewest")}
+            </button>
+            <button type="button" onClick={() => sortSources("queuedCount")}>
+              {t("tasks.sortSourcesCount")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function hasBlockingSourceTask(
   task: TaskRecord,
   records: TaskRecord[],
@@ -209,9 +378,36 @@ function TaskRow({
   const move = (target: TaskMoveTarget) => {
     taskScheduler.moveQueuedTask(task.id, target);
   };
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({
+    id: taskDndId(task.id),
+    disabled: !canMove,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
 
   return (
-    <div className="lnr-task-row" data-status={task.status}>
+    <div
+      ref={setNodeRef}
+      className="lnr-task-row"
+      data-dragging={isDragging ? "true" : undefined}
+      data-status={task.status}
+      style={style}
+    >
+      <DragHandle
+        attributes={canMove ? attributes : undefined}
+        draggable={canMove}
+        label={t("tasks.dragTask")}
+        listeners={canMove ? listeners : undefined}
+      />
       <ConsoleStatusDot
         status={statusTone(task.status)}
         label={t(taskStatusKey(task.status))}
@@ -316,13 +512,19 @@ function SummaryPill({
 }
 
 function TaskGroup({
+  collapsed,
+  onToggleCollapsed,
   snapshot,
+  sourceSortable,
   sourceId,
   sourcePaused,
   tasks,
   title,
 }: {
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   snapshot: TaskSnapshot;
+  sourceSortable?: SortableGroupState;
   sourceId?: string;
   sourcePaused?: boolean;
   tasks: TaskRecord[];
@@ -330,10 +532,31 @@ function TaskGroup({
 }) {
   const { t } = useTranslation();
   const hasCancellableTasks = hasCancellableActiveTask(tasks);
+  const canDragSource = Boolean(
+    sourceId && snapshot.sourceQueueOrder.length > 1,
+  );
+  const sourceCollapsed = Boolean(sourceId && collapsed);
 
   return (
-    <section className="lnr-task-group">
-      <header className="lnr-task-group-header">
+    <section
+      ref={sourceSortable?.setNodeRef}
+      className="lnr-task-group"
+      data-collapsed={sourceCollapsed ? "true" : undefined}
+      data-dragging={sourceSortable?.isDragging ? "true" : undefined}
+      style={sourceSortable?.style}
+    >
+      <header
+        className="lnr-task-group-header"
+        data-has-drag={sourceId ? "true" : undefined}
+      >
+        {sourceId ? (
+          <DragHandle
+            attributes={canDragSource ? sourceSortable?.attributes : undefined}
+            draggable={canDragSource}
+            label={t("tasks.dragSource")}
+            listeners={canDragSource ? sourceSortable?.listeners : undefined}
+          />
+        ) : null}
         <div className="lnr-task-group-copy">
           <Text className="lnr-task-group-title" lineClamp={1}>
             {title}
@@ -343,6 +566,17 @@ function TaskGroup({
           </span>
         </div>
         <div className="lnr-task-group-actions">
+          {sourceId ? (
+            <IconButton
+              active={sourceCollapsed}
+              label={
+                sourceCollapsed ? t("tasks.expand") : t("tasks.collapse")
+              }
+              onClick={onToggleCollapsed}
+            >
+              {sourceCollapsed ? <ChevronDownGlyph /> : <ChevronUpGlyph />}
+            </IconButton>
+          ) : null}
           {sourceId && !snapshot.sourceQueuesPaused ? (
             <IconButton
               active={sourcePaused}
@@ -375,23 +609,91 @@ function TaskGroup({
           ) : null}
         </div>
       </header>
-      <div className="lnr-task-rows">
-        {tasks.map((task) => (
-          <TaskRow
-            blockingSourceTask={hasBlockingSourceTask(task, snapshot.records)}
-            key={task.id}
-            snapshot={snapshot}
-            task={task}
-          />
-        ))}
-      </div>
+      {sourceCollapsed ? null : (
+        <SortableContext
+          items={tasks.map((task) => taskDndId(task.id))}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="lnr-task-rows">
+            {tasks.map((task) => (
+              <TaskRow
+                blockingSourceTask={hasBlockingSourceTask(
+                  task,
+                  snapshot.records,
+                )}
+                key={task.id}
+                snapshot={snapshot}
+                task={task}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      )}
     </section>
+  );
+}
+
+function SortableSourceTaskGroup({
+  collapsed,
+  group,
+  onToggleCollapsed,
+  snapshot,
+}: {
+  collapsed: boolean;
+  group: SourceTaskGroup;
+  onToggleCollapsed: () => void;
+  snapshot: TaskSnapshot;
+}) {
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({
+    id: sourceDndId(group.sourceId),
+    disabled: snapshot.sourceQueueOrder.length <= 1,
+  });
+  const sourceSortable: SortableGroupState = {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    style: {
+      transform: CSS.Transform.toString(transform),
+      transition,
+    },
+  };
+
+  return (
+    <TaskGroup
+      collapsed={collapsed}
+      onToggleCollapsed={onToggleCollapsed}
+      snapshot={snapshot}
+      sourceId={group.sourceId}
+      sourcePaused={snapshot.pausedSourceIds.includes(group.sourceId)}
+      sourceSortable={sourceSortable}
+      tasks={group.tasks}
+      title={group.sourceName}
+    />
   );
 }
 
 export function TasksPage() {
   const { t } = useTranslation();
   const snapshot = useTaskSnapshot();
+  const [collapsedSourceIds, setCollapsedSourceIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
   const tasks = [...snapshot.records].sort(compareTaskQueueOrder);
   const mainTasks = tasks.filter((task) => task.lane === "main");
   const sourceTasks = tasks.filter((task) => task.lane === "source");
@@ -402,29 +704,96 @@ export function TasksPage() {
     succeeded: tasks.filter((task) => task.status === "succeeded").length,
   };
   const hasCancellableTasks = hasCancellableActiveTask(tasks);
-  const sourceGroups = [
-    ...new Set(sourceTasks.map((task) => task.source?.id)),
-  ]
-    .filter((sourceId): sourceId is string => typeof sourceId === "string")
-    .map((sourceId) => {
-      const groupTasks = sourceTasks.filter(
-        (task) => task.source?.id === sourceId,
-      );
-      return {
+  const sourceGroupsById = new Map<string, SourceTaskGroup>();
+  for (const task of sourceTasks) {
+    const sourceId = task.source?.id;
+    if (!sourceId) continue;
+    const group = sourceGroupsById.get(sourceId);
+    if (group) {
+      group.tasks.push(task);
+    } else {
+      sourceGroupsById.set(sourceId, {
         sourceId,
-        sourceName: groupTasks[0]?.source?.name ?? sourceId,
-        tasks: groupTasks,
-      };
-    })
-    .sort((left, right) => {
-      const sourceName = left.sourceName.localeCompare(
-        right.sourceName,
-        undefined,
-        { sensitivity: "base" },
-      );
-      if (sourceName !== 0) return sourceName;
-      return left.sourceId.localeCompare(right.sourceId);
+        sourceName: task.source?.name ?? sourceId,
+        tasks: [task],
+      });
+    }
+  }
+  const sourceOrder = [
+    ...snapshot.sourceQueueOrder.filter((sourceId) =>
+      sourceGroupsById.has(sourceId),
+    ),
+    ...[...sourceGroupsById.keys()]
+      .filter((sourceId) => !snapshot.sourceQueueOrder.includes(sourceId))
+      .sort((left, right) => {
+        const leftGroup = sourceGroupsById.get(left);
+        const rightGroup = sourceGroupsById.get(right);
+        const sourceName = (leftGroup?.sourceName ?? left).localeCompare(
+          rightGroup?.sourceName ?? right,
+          undefined,
+          { sensitivity: "base" },
+        );
+        if (sourceName !== 0) return sourceName;
+        return left.localeCompare(right);
+      }),
+  ];
+  const sourceGroups = sourceOrder
+    .map((sourceId) => sourceGroupsById.get(sourceId))
+    .filter((group): group is SourceTaskGroup => Boolean(group));
+  const toggleSourceCollapsed = (sourceId: string) => {
+    setCollapsedSourceIds((current) => {
+      const next = new Set(current);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
     });
+  };
+  const handleDragEnd = (event: DragEndEvent) => {
+    const overId = event.over?.id;
+    if (!overId) return;
+
+    const activeSourceId = parseSourceDndId(event.active.id);
+    const overSourceId = parseSourceDndId(overId);
+    if (activeSourceId && overSourceId) {
+      const sourceIds = sourceGroups.map((group) => group.sourceId);
+      taskScheduler.moveSourceQueueBefore(
+        activeSourceId,
+        beforeIdForMove(sourceIds, activeSourceId, overSourceId),
+      );
+      return;
+    }
+
+    const activeTaskId = parseTaskDndId(event.active.id);
+    const overTaskId = parseTaskDndId(overId);
+    if (!activeTaskId || !overTaskId) return;
+
+    const activeTask = snapshot.records.find((task) => task.id === activeTaskId);
+    const overTask = snapshot.records.find((task) => task.id === overTaskId);
+    if (
+      !activeTask ||
+      !overTask ||
+      activeTask.status !== "queued" ||
+      overTask.status !== "queued" ||
+      taskQueueKey(activeTask) !== taskQueueKey(overTask)
+    ) {
+      return;
+    }
+
+    const queueTaskIds = tasks
+      .filter(
+        (task) =>
+          task.status === "queued" &&
+          taskQueueKey(task) === taskQueueKey(activeTask),
+      )
+      .map((task) => task.id);
+    taskScheduler.moveQueuedTaskBefore(
+      activeTaskId,
+      beforeIdForMove(queueTaskIds, activeTaskId, overTaskId),
+    );
+  };
 
   return (
     <PageFrame className="lnr-tasks-page" size="wide">
@@ -437,6 +806,7 @@ export function TasksPage() {
         }
         actions={
           <div className="lnr-task-header-actions">
+            <TaskSortMenu />
             <IconButton
               active={snapshot.sourceQueuesPaused}
               disabled={sourceTasks.length === 0}
@@ -498,25 +868,37 @@ export function TasksPage() {
           message={t("tasks.empty.message")}
         />
       ) : (
-        <div className="lnr-task-shell">
-          {mainTasks.length > 0 ? (
-            <TaskGroup
-              snapshot={snapshot}
-              tasks={mainTasks}
-              title={t("tasks.mainQueue")}
-            />
-          ) : null}
-          {sourceGroups.map((group) => (
-            <TaskGroup
-              key={group.sourceId}
-              snapshot={snapshot}
-              sourceId={group.sourceId}
-              sourcePaused={snapshot.pausedSourceIds.includes(group.sourceId)}
-              tasks={group.tasks}
-              title={group.sourceName}
-            />
-          ))}
-        </div>
+        <DndContext
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          sensors={sensors}
+        >
+          <div className="lnr-task-shell">
+            {mainTasks.length > 0 ? (
+              <TaskGroup
+                snapshot={snapshot}
+                tasks={mainTasks}
+                title={t("tasks.mainQueue")}
+              />
+            ) : null}
+            <SortableContext
+              items={sourceGroups.map((group) => sourceDndId(group.sourceId))}
+              strategy={verticalListSortingStrategy}
+            >
+              {sourceGroups.map((group) => (
+                <SortableSourceTaskGroup
+                  collapsed={collapsedSourceIds.has(group.sourceId)}
+                  group={group}
+                  key={group.sourceId}
+                  onToggleCollapsed={() =>
+                    toggleSourceCollapsed(group.sourceId)
+                  }
+                  snapshot={snapshot}
+                />
+              ))}
+            </SortableContext>
+          </div>
+        </DndContext>
       )}
     </PageFrame>
   );

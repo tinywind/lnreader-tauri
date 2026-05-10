@@ -110,6 +110,19 @@ export function DetailsGlyph({ className }: ActionGlyphProps) {
   );
 }
 
+export function DragHandleGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="9" cy="7" r="1" />
+      <circle cx="15" cy="7" r="1" />
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="9" cy="17" r="1" />
+      <circle cx="15" cy="17" r="1" />
+    </svg>
+  );
+}
+
 export function ExternalLinkGlyph({ className }: ActionGlyphProps) {
   return (
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
@@ -250,6 +263,18 @@ export function SourceGlyph({ className }: ActionGlyphProps) {
       <path d="M5 5h9a4 4 0 0 1 4 4v10H9a4 4 0 0 0-4 4z" />
       <path d="M9 10h5" />
       <path d="M9 14h4" />
+    </svg>
+  );
+}
+
+export function SortGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 7h10" />
+      <path d="M4 12h7" />
+      <path d="M4 17h4" />
+      <path d="M17 5v14" />
+      <path d="m14 16 3 3 3-3" />
     </svg>
   );
 }

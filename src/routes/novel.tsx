@@ -8,6 +8,22 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
@@ -28,6 +44,7 @@ import {
   DetailsGlyph,
   DownloadGlyph,
   DownloadedGlyph,
+  DragHandleGlyph,
   LibraryAddGlyph,
   LibraryAddedGlyph,
   PlayFromStartGlyph,
@@ -91,6 +108,7 @@ const FINISHED_PROGRESS = 100;
 const CHAPTER_ROW_HEIGHT = 54;
 const CHAPTER_LIST_OVERSCAN = 8;
 const CHAPTER_LIST_VISIBLE_ROWS = 14;
+const CHAPTER_DND_PREFIX = "chapter:";
 const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
 const EMPTY_CHAPTERS: ChapterListRow[] = [];
 const EMPTY_LOCAL_NOVEL_FORM: LocalNovelMetadataInput = {
@@ -140,6 +158,30 @@ function normalizeDateText(value: string): string {
 
 function formatChapterPosition(position: number): string {
   return `#${String(position).padStart(2, "0")}`;
+}
+
+function chapterDndId(chapterId: number): string {
+  return `${CHAPTER_DND_PREFIX}${chapterId}`;
+}
+
+function parseChapterDndId(id: unknown): number | null {
+  const value = String(id);
+  if (!value.startsWith(CHAPTER_DND_PREFIX)) return null;
+  const chapterId = Number(value.slice(CHAPTER_DND_PREFIX.length));
+  return Number.isInteger(chapterId) ? chapterId : null;
+}
+
+function beforeChapterIdForMove(
+  orderedIds: number[],
+  activeId: number,
+  overId: number,
+): number | null {
+  const activeIndex = orderedIds.indexOf(activeId);
+  const overIndex = orderedIds.indexOf(overId);
+  if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) {
+    return activeId;
+  }
+  return activeIndex < overIndex ? orderedIds[overIndex + 1] ?? null : overId;
 }
 
 function splitGenres(genres: string | null): string[] {
@@ -404,6 +446,23 @@ function ChapterListItem({
   onMoveUp,
 }: ChapterListItemProps) {
   const { t } = useTranslation();
+  const canDrag = (canMoveUp || canMoveDown) && !reorderBusy;
+  const hasReorderControls = canMoveUp || canMoveDown;
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({
+    id: chapterDndId(chapter.id),
+    disabled: !canDrag,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   const isQueued = status?.kind === "queued";
   const isRunning = status?.kind === "running";
   const failedMessage = status?.kind === "failed" ? status.error : null;
@@ -458,6 +517,7 @@ function ChapterListItem({
 
   return (
     <div
+      ref={setNodeRef}
       className={`lnr-novel-chapter-row${
         isCurrent ? " lnr-novel-chapter-row--current" : ""
       }`}
@@ -465,14 +525,39 @@ function ChapterListItem({
       tabIndex={0}
       aria-busy={opening || isRunning}
       aria-label={t("novel.openChapter", { name: chapter.name })}
+      data-dragging={isDragging ? "true" : undefined}
+      data-has-drag={hasReorderControls ? "true" : undefined}
       data-opening={opening}
       onClick={onOpen}
       onKeyDown={(event) => {
+        if (
+          event.target instanceof HTMLElement &&
+          event.target.closest(".lnr-novel-chapter-drag-handle")
+        ) {
+          return;
+        }
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         onOpen();
       }}
+      style={style}
     >
+      {hasReorderControls ? (
+        <span
+          {...(canDrag ? attributes : undefined)}
+          {...(canDrag ? listeners : undefined)}
+          aria-disabled={!canDrag}
+          aria-label={t("novel.local.dragChapter")}
+          className="lnr-novel-chapter-drag-handle"
+          data-disabled={canDrag ? undefined : "true"}
+          onClick={(event) => event.stopPropagation()}
+          role="button"
+          tabIndex={canDrag ? 0 : -1}
+          title={t("novel.local.dragChapter")}
+        >
+          <DragHandleGlyph />
+        </span>
+      ) : null}
       <div className="lnr-novel-chapter-position">
         <span>{formatChapterPosition(chapter.position)}</span>
         {isCurrent ? (
@@ -605,6 +690,7 @@ interface VirtualChapterListProps {
   onDownload: (chapter: ChapterListRow) => void;
   onMoveChapter: (chapterId: number, direction: -1 | 1) => void;
   onOpen: (chapter: ChapterListRow) => void;
+  onReorderChapter: (chapterId: number, beforeChapterId: number | null) => void;
 }
 
 function VirtualChapterList({
@@ -621,8 +707,17 @@ function VirtualChapterList({
   onDownload,
   onMoveChapter,
   onOpen,
+  onReorderChapter,
 }: VirtualChapterListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
   const fontScalePercent = useAppearanceStore(
     (state) => state.fontScalePercent,
   );
@@ -675,54 +770,84 @@ function VirtualChapterList({
     setScrollTop((current) => Math.min(current, maxScrollTop));
   }, [totalHeight, viewportHeight]);
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    if (!canReorderChapters || reorderPending) return;
+    const overId = event.over?.id;
+    if (!overId) return;
+
+    const activeChapterId = parseChapterDndId(event.active.id);
+    const overChapterId = parseChapterDndId(overId);
+    if (activeChapterId === null || overChapterId === null) return;
+
+    const chapterIds = chapters.map((chapter) => chapter.id);
+    const beforeChapterId = beforeChapterIdForMove(
+      chapterIds,
+      activeChapterId,
+      overChapterId,
+    );
+    if (beforeChapterId === activeChapterId) return;
+    onReorderChapter(activeChapterId, beforeChapterId);
+  };
+
   return (
-    <div
-      className="lnr-novel-chapter-list"
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      ref={viewportRef}
-      style={
-        {
-          "--lnr-novel-chapter-list-height": `${listHeight}px`,
-        } as CSSProperties
-      }
+    <DndContext
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+      sensors={sensors}
     >
-      <div
-        className="lnr-novel-chapter-list-spacer"
-        style={{ height: totalHeight }}
+      <SortableContext
+        items={chapters.map((chapter) => chapterDndId(chapter.id))}
+        strategy={verticalListSortingStrategy}
       >
         <div
-          className="lnr-novel-chapter-list-window"
-          style={{ transform: `translateY(${offsetY}px)` }}
+          className="lnr-novel-chapter-list"
+          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          ref={viewportRef}
+          style={
+            {
+              "--lnr-novel-chapter-list-height": `${listHeight}px`,
+            } as CSSProperties
+          }
         >
-          {visibleChapters.map((chapter, index) => {
-            const displayIndex = startIndex + index;
-            return (
-              <ChapterListItem
-                key={chapter.id}
-                chapter={chapter}
-                canDeleteDownload={canDeleteDownloads}
-                canMoveDown={
-                  canReorderChapters && displayIndex < chapters.length - 1
-                }
-                canMoveUp={canReorderChapters && displayIndex > 0}
-                isCurrent={chapter.id === lastReadChapterId}
-                status={statuses.get(chapter.id)}
-                deleteBusy={
-                  deletePending && deleteBusyChapterId === chapter.id
-                }
-                opening={openingChapterId === chapter.id}
-                reorderBusy={reorderPending}
-                onOpen={() => onOpen(chapter)}
-                onDownload={() => onDownload(chapter)}
-                onDeleteDownload={() => onDeleteDownload(chapter.id)}
-                onMoveDown={() => onMoveChapter(chapter.id, 1)}
-                onMoveUp={() => onMoveChapter(chapter.id, -1)}
-              />
-            );
-          })}
+          <div
+            className="lnr-novel-chapter-list-spacer"
+            style={{ height: totalHeight }}
+          >
+            <div
+              className="lnr-novel-chapter-list-window"
+              style={{ transform: `translateY(${offsetY}px)` }}
+            >
+              {visibleChapters.map((chapter, index) => {
+                const displayIndex = startIndex + index;
+                return (
+                  <ChapterListItem
+                    key={chapter.id}
+                    chapter={chapter}
+                    canDeleteDownload={canDeleteDownloads}
+                    canMoveDown={
+                      canReorderChapters && displayIndex < chapters.length - 1
+                    }
+                    canMoveUp={canReorderChapters && displayIndex > 0}
+                    isCurrent={chapter.id === lastReadChapterId}
+                    status={statuses.get(chapter.id)}
+                    deleteBusy={
+                      deletePending && deleteBusyChapterId === chapter.id
+                    }
+                    opening={openingChapterId === chapter.id}
+                    reorderBusy={reorderPending}
+                    onOpen={() => onOpen(chapter)}
+                    onDownload={() => onDownload(chapter)}
+                    onDeleteDownload={() => onDeleteDownload(chapter.id)}
+                    onMoveDown={() => onMoveChapter(chapter.id, 1)}
+                    onMoveUp={() => onMoveChapter(chapter.id, -1)}
+                  />
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      </SortableContext>
+    </DndContext>
   );
 }
 
@@ -1563,9 +1688,38 @@ export function NovelDetailPage() {
       return;
     }
 
+    const beforeChapterId =
+      direction > 0
+        ? displayOrder[nextIndex + 1]?.id ?? null
+        : displayOrder[nextIndex]?.id ?? null;
+    reorderLocalChapter(chapterId, beforeChapterId);
+  }
+
+  function reorderLocalChapter(
+    chapterId: number,
+    beforeChapterId: number | null,
+  ): void {
+    const novel = novelQuery.data;
+    if (!novel?.isLocal || reorderLocalChapters.isPending) return;
+
+    const displayOrder = [...chapters];
+    const currentIndex = displayOrder.findIndex(
+      (chapter) => chapter.id === chapterId,
+    );
+    if (currentIndex < 0) return;
+
     const [chapter] = displayOrder.splice(currentIndex, 1);
     if (!chapter) return;
-    displayOrder.splice(nextIndex, 0, chapter);
+
+    if (beforeChapterId === null) {
+      displayOrder.push(chapter);
+    } else {
+      const beforeIndex = displayOrder.findIndex(
+        (candidate) => candidate.id === beforeChapterId,
+      );
+      if (beforeIndex < 0) return;
+      displayOrder.splice(beforeIndex, 0, chapter);
+    }
 
     const readingOrder =
       defaultChapterSort === "desc"
@@ -1707,6 +1861,7 @@ export function NovelDetailPage() {
               }}
               onDownload={downloadChapter}
               onMoveChapter={moveLocalChapter}
+              onReorderChapter={reorderLocalChapter}
               onDeleteDownload={(chapterId) => {
                 if (novel.isLocal) return;
                 clearDownload.mutate(chapterId);
