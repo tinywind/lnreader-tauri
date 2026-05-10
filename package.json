@@ -9,7 +9,7 @@
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri-channel.mjs",
     "android:apk:release": "tauri android build --apk --split-per-abi --target aarch64 --target x86_64",
     "android:apk:aarch64": "tauri android build --apk --split-per-abi --target aarch64",
     "android:apk:x86_64": "tauri android build --apk --split-per-abi --target x86_64",

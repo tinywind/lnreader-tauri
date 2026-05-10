@@ -1,0 +1,30 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Norea Debug",
+  "identifier": "io.github.tinywind.norea.debug",
+  "app": {
+    "windows": [
+      {
+        "title": "Norea Debug",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 480,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  },
+  "bundle": {
+    "icon": [
+      "icons-debug/32x32.png",
+      "icons-debug/128x128.png",
+      "icons-debug/128x128@2x.png",
+      "icons-debug/icon.icns",
+      "icons-debug/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

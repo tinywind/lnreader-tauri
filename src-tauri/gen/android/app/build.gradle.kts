@@ -23,12 +23,30 @@ val releaseKeystoreFile =
 val releaseKeyAlias = envOrNull("ANDROID_RELEASE_KEY_ALIAS") ?: "androiddebugkey"
 val releaseStorePassword = envOrNull("ANDROID_RELEASE_STORE_PASSWORD") ?: "android"
 val releaseKeyPassword = envOrNull("ANDROID_RELEASE_KEY_PASSWORD") ?: "android"
+val buildChannel = envOrNull("NOREA_BUILD_CHANNEL") ?: "release"
+
+fun applyLauncherPlaceholders(
+    placeholders: MutableMap<String, Any>,
+    appName: String,
+    appIcon: String,
+    appRoundIcon: String,
+) {
+    placeholders["appName"] = appName
+    placeholders["appIcon"] = appIcon
+    placeholders["appRoundIcon"] = appRoundIcon
+    placeholders["usesCleartextTraffic"] = "true"
+}
 
 android {
     compileSdk = 36
     namespace = "io.github.tinywind.norea"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "true"
+        applyLauncherPlaceholders(
+            manifestPlaceholders,
+            "Norea",
+            "@mipmap/ic_launcher",
+            "@mipmap/ic_launcher_round",
+        )
         applicationId = "io.github.tinywind.norea"
         minSdk = 24
         targetSdk = 36
@@ -46,12 +64,25 @@ android {
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
-            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            applyLauncherPlaceholders(
+                manifestPlaceholders,
+                "Norea Debug",
+                "@drawable/ic_launcher_debug",
+                "@drawable/ic_launcher_debug",
+            )
             isDebuggable = true
             isJniDebuggable = false
             isMinifyEnabled = false
         }
         getByName("release") {
+            if (buildChannel == "dev") {
+                applyLauncherPlaceholders(
+                    manifestPlaceholders,
+                    "Norea",
+                    "@drawable/ic_launcher_dev",
+                    "@drawable/ic_launcher_dev",
+                )
+            }
             signingConfig = signingConfigs.getByName("releaseApk")
             isJniDebuggable = false
             isMinifyEnabled = true
