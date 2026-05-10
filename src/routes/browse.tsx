@@ -18,6 +18,7 @@ import {
   CheckGlyph,
   ClockGlyph,
   DetailsGlyph,
+  EditGlyph,
   ExternalLinkGlyph,
   PlusGlyph,
   RefreshGlyph,
@@ -302,6 +303,9 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   const installedPlugins = installed.data ?? [];
   const activeRepository = repos.data?.[0] ?? null;
   const hasRepository = activeRepository !== null;
+  const repositoryDialogTitle = hasRepository
+    ? t("browse.changeRepository")
+    : t("browse.setRepository");
   const availableEntries = hasRepository
     ? (available.data?.entries ?? [])
     : [];
@@ -363,7 +367,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
       }
       await enqueueMainTask({
         kind: "repository.add",
-        title: t("browse.setRepository"),
+        title: repositoryDialogTitle,
         subject: { url: trimmed },
         run: async () => {
           await upsertRepository({ url: trimmed });
@@ -560,6 +564,12 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
             <RepositoriesSection
               query={repos}
               onAdd={() => {
+                addRepoMutation.reset();
+                setUrl("");
+                setAddOpen(true);
+              }}
+              onEdit={() => {
+                addRepoMutation.reset();
                 setUrl(activeRepository?.url ?? "");
                 setAddOpen(true);
               }}
@@ -617,7 +627,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
           setAddOpen(false);
           addRepoMutation.reset();
         }}
-        title={t("browse.setRepository")}
+        title={repositoryDialogTitle}
       >
         <Stack gap="sm">
           <TextInput
@@ -689,6 +699,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
 interface RepositoriesSectionProps {
   query: ReturnType<typeof useQuery<PluginRepository[]>>;
   onAdd: () => void;
+  onEdit: () => void;
   onRefresh: () => void;
   onRemove: (id: number) => void;
   refreshing: boolean;
@@ -738,6 +749,7 @@ function PluginSettingsSection({
 function RepositoriesSection({
   query,
   onAdd,
+  onEdit,
   onRefresh,
   onRemove,
   refreshing,
@@ -801,6 +813,14 @@ function RepositoriesSection({
                   onClick={onRefresh}
                 >
                   <RefreshGlyph />
+                </IconButton>
+                <IconButton
+                  label={t("common.edit")}
+                  size="lg"
+                  variant="subtle"
+                  onClick={onEdit}
+                >
+                  <EditGlyph />
                 </IconButton>
                 <IconButton
                   label={t("common.remove")}

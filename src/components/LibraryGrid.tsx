@@ -2,6 +2,7 @@ import {
   useRef,
   type CSSProperties,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import type { LibraryNovel } from "../db/queries/novel";
@@ -119,6 +120,7 @@ function LibraryInteractiveItem({
 }: LibraryItemProps) {
   const longPressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
+  const suppressNextClick = useRef(false);
 
   const cancelTimer = () => {
     if (longPressTimer.current !== null) {
@@ -129,9 +131,11 @@ function LibraryInteractiveItem({
 
   const handlePointerDown = () => {
     longPressed.current = false;
+    suppressNextClick.current = false;
     if (!onLongPress) return;
     longPressTimer.current = window.setTimeout(() => {
       longPressed.current = true;
+      suppressNextClick.current = true;
       onLongPress(novelId);
       longPressTimer.current = null;
     }, LONG_PRESS_MS);
@@ -139,7 +143,16 @@ function LibraryInteractiveItem({
 
   const handlePointerUp = () => {
     cancelTimer();
-    if (!longPressed.current) onActivate?.(novelId);
+  };
+
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (suppressNextClick.current || longPressed.current) {
+      event.preventDefault();
+      suppressNextClick.current = false;
+      longPressed.current = false;
+      return;
+    }
+    onActivate?.(novelId);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -152,6 +165,7 @@ function LibraryInteractiveItem({
     <div
       className={className}
       data-selected={selected}
+      onClick={handleClick}
       onKeyDown={handleKeyDown}
       onPointerCancel={cancelTimer}
       onPointerDown={handlePointerDown}

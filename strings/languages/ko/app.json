@@ -2,6 +2,7 @@
   "common.actionFailed": "작업 실패",
   "common.loadFailed": "불러오기 실패",
   "common.cancel": "취소",
+  "common.edit": "편집",
   "common.clear": "지우기",
   "common.reset": "초기화",
   "common.save": "저장",

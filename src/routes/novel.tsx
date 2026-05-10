@@ -107,7 +107,7 @@ import "../styles/novel.css";
 const FINISHED_PROGRESS = 100;
 const CHAPTER_ROW_HEIGHT = 54;
 const CHAPTER_LIST_OVERSCAN = 8;
-const CHAPTER_LIST_VISIBLE_ROWS = 14;
+const CHAPTER_LIST_FALLBACK_ROWS = 14;
 const CHAPTER_DND_PREFIX = "chapter:";
 const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
 const EMPTY_CHAPTERS: ChapterListRow[] = [];
@@ -725,7 +725,7 @@ function VirtualChapterList({
     CHAPTER_ROW_HEIGHT * (normalizeFontScalePercent(fontScalePercent) / 100);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(
-    chapterRowHeight * CHAPTER_LIST_VISIBLE_ROWS,
+    chapterRowHeight * CHAPTER_LIST_FALLBACK_ROWS,
   );
   const totalHeight = chapters.length * chapterRowHeight;
   const startIndex = Math.max(
@@ -739,8 +739,6 @@ function VirtualChapterList({
   );
   const visibleChapters = chapters.slice(startIndex, endIndex);
   const offsetY = startIndex * chapterRowHeight;
-  const listHeight = Math.min(chapters.length, CHAPTER_LIST_VISIBLE_ROWS) *
-    chapterRowHeight;
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
@@ -803,11 +801,6 @@ function VirtualChapterList({
           className="lnr-novel-chapter-list"
           onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
           ref={viewportRef}
-          style={
-            {
-              "--lnr-novel-chapter-list-height": `${listHeight}px`,
-            } as CSSProperties
-          }
         >
           <div
             className="lnr-novel-chapter-list-spacer"
@@ -1786,89 +1779,91 @@ export function NovelDetailPage() {
   return (
     <>
       <PageFrame className="lnr-novel-page" size="wide">
-        <NovelWorkspace
-          novel={novel}
-          chapters={chapters}
-          downloadStatuses={statuses}
-          lastReadChapterId={lastReadChapterId}
-          localChapterAdding={addLocalChapters.isPending}
-          onBack={goBack}
-          onAddLocalChapters={openLocalChapterInput}
-          onBatchDownload={downloadChapters}
-          onEditLocalMetadata={openLocalMetadataEditor}
-          onRead={openChapter}
-          onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
-          onToggleLibrary={() => toggle.mutate()}
-          sourceUrl={sourceUrl}
-          toggleBusy={toggle.isPending}
-        />
-
-        <ConsolePanel className="lnr-novel-chapters-panel">
-          <ConsoleSectionHeader
-            eyebrow={t("novel.chapterIndex")}
-            title={t("novel.chapters")}
-            count={t("novel.chapterCount", {
-              total: chapters.length,
-              cached: chapterStats.downloaded,
-              unread: chapterStats.unread,
-            })}
+        <div className="lnr-novel-layout">
+          <NovelWorkspace
+            novel={novel}
+            chapters={chapters}
+            downloadStatuses={statuses}
+            lastReadChapterId={lastReadChapterId}
+            localChapterAdding={addLocalChapters.isPending}
+            onBack={goBack}
+            onAddLocalChapters={openLocalChapterInput}
+            onBatchDownload={downloadChapters}
+            onEditLocalMetadata={openLocalMetadataEditor}
+            onRead={openChapter}
+            onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
+            onToggleLibrary={() => toggle.mutate()}
+            sourceUrl={sourceUrl}
+            toggleBusy={toggle.isPending}
           />
 
-          {localChapterError ? (
-            <Text c="red" className="lnr-novel-local-error" size="sm">
-              {localChapterError}
-            </Text>
-          ) : null}
+          <ConsolePanel className="lnr-novel-chapters-panel">
+            <ConsoleSectionHeader
+              eyebrow={t("novel.chapterIndex")}
+              title={t("novel.chapters")}
+              count={t("novel.chapterCount", {
+                total: chapters.length,
+                cached: chapterStats.downloaded,
+                unread: chapterStats.unread,
+              })}
+            />
 
-          {chaptersQuery.isLoading ? (
-            <StateView
-              color="blue"
-              title={t("novel.loadingChapters")}
-              message={t("novel.loadingChaptersMessage")}
-            />
-          ) : chapters.length === 0 ? (
-            <StateView
-              color="blue"
-              title={t("novel.noChapters")}
-              message={t("novel.noChaptersMessage")}
-              action={
-                novel.isLocal
-                  ? {
-                      icon: addLocalChapters.isPending ? (
-                        <Loader size={14} />
-                      ) : (
-                        <PlusGlyph />
-                      ),
-                      label: t("novel.local.addChapters"),
-                      onClick: openLocalChapterInput,
-                    }
-                  : undefined
-              }
-            />
-          ) : (
-            <VirtualChapterList
-              chapters={chapters}
-              canDeleteDownloads={!novel.isLocal}
-              canReorderChapters={novel.isLocal}
-              deleteBusyChapterId={clearDownload.variables}
-              deletePending={clearDownload.isPending}
-              lastReadChapterId={lastReadChapterId}
-              openingChapterId={openingChapterId}
-              reorderPending={reorderLocalChapters.isPending}
-              statuses={statuses}
-              onOpen={(chapter) => {
-                void openChapter(chapter);
-              }}
-              onDownload={downloadChapter}
-              onMoveChapter={moveLocalChapter}
-              onReorderChapter={reorderLocalChapter}
-              onDeleteDownload={(chapterId) => {
-                if (novel.isLocal) return;
-                clearDownload.mutate(chapterId);
-              }}
-            />
-          )}
-        </ConsolePanel>
+            {localChapterError ? (
+              <Text c="red" className="lnr-novel-local-error" size="sm">
+                {localChapterError}
+              </Text>
+            ) : null}
+
+            {chaptersQuery.isLoading ? (
+              <StateView
+                color="blue"
+                title={t("novel.loadingChapters")}
+                message={t("novel.loadingChaptersMessage")}
+              />
+            ) : chapters.length === 0 ? (
+              <StateView
+                color="blue"
+                title={t("novel.noChapters")}
+                message={t("novel.noChaptersMessage")}
+                action={
+                  novel.isLocal
+                    ? {
+                        icon: addLocalChapters.isPending ? (
+                          <Loader size={14} />
+                        ) : (
+                          <PlusGlyph />
+                        ),
+                        label: t("novel.local.addChapters"),
+                        onClick: openLocalChapterInput,
+                      }
+                    : undefined
+                }
+              />
+            ) : (
+              <VirtualChapterList
+                chapters={chapters}
+                canDeleteDownloads={!novel.isLocal}
+                canReorderChapters={novel.isLocal}
+                deleteBusyChapterId={clearDownload.variables}
+                deletePending={clearDownload.isPending}
+                lastReadChapterId={lastReadChapterId}
+                openingChapterId={openingChapterId}
+                reorderPending={reorderLocalChapters.isPending}
+                statuses={statuses}
+                onOpen={(chapter) => {
+                  void openChapter(chapter);
+                }}
+                onDownload={downloadChapter}
+                onMoveChapter={moveLocalChapter}
+                onReorderChapter={reorderLocalChapter}
+                onDeleteDownload={(chapterId) => {
+                  if (novel.isLocal) return;
+                  clearDownload.mutate(chapterId);
+                }}
+              />
+            )}
+          </ConsolePanel>
+        </div>
       </PageFrame>
 
       <input

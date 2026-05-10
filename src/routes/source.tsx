@@ -581,20 +581,6 @@ export function SourcePage() {
                 : popularModeLabel
             }
             count={t("source.loadedCount", { count: accumulated.length })}
-            actions={
-              showLoadMoreButton ? (
-                <IconButton
-                  label={t("common.loadMore")}
-                  variant="default"
-                  size="lg"
-                  onClick={() => setPage((p) => p + 1)}
-                  loading={listing.isFetching && page > 1}
-                  disabled={!hasNextPage}
-                >
-                  <ChevronDownGlyph />
-                </IconButton>
-              ) : null
-            }
           />
 
           {isKeywordMode && !hasKeywordSearch ? (
@@ -629,18 +615,35 @@ export function SourcePage() {
               title={t("source.noResults")}
             />
           ) : (
-            <div className="lnr-source-grid">
-              {accumulatedNovels.map(({ item, key }) => (
-                <SourceNovelButton
-                  key={key}
-                  item={item}
-                  disabled={open.isPending}
-                  onOpen={(novel) => {
-                    if (!open.isPending) open.mutate(novel);
-                  }}
-                />
-              ))}
-            </div>
+            <>
+              <div className="lnr-source-grid">
+                {accumulatedNovels.map(({ item, key }) => (
+                  <SourceNovelButton
+                    key={key}
+                    item={item}
+                    disabled={open.isPending}
+                    onOpen={(novel) => {
+                      if (!open.isPending) open.mutate(novel);
+                    }}
+                  />
+                ))}
+              </div>
+              {showLoadMoreButton ? (
+                <div className="lnr-source-load-more">
+                  <IconButton
+                    className="lnr-source-load-more-action"
+                    label={t("common.loadMore")}
+                    variant="default"
+                    size="lg"
+                    onClick={() => setPage((p) => p + 1)}
+                    loading={listing.isFetching && page > 1}
+                    disabled={!hasNextPage}
+                  >
+                    <ChevronDownGlyph />
+                  </IconButton>
+                </div>
+              ) : null}
+            </>
           )}
 
           {open.error ? (
