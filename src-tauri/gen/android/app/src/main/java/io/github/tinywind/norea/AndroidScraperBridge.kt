@@ -481,9 +481,14 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
       url,
     )
 
-    prepareContext(state, webView, id, fetchContextUrl, url) {
+    prepareContext(state, webView, id, fetchContextUrl, url) { preparedFetchUrl ->
       if (state.activeFetchId != id) return@prepareContext
-      logState(state, "runFetch prepared id=$id url=$url fetchContextUrl=$fetchContextUrl", url)
+      val fetchUrl = fetchUrlAfterPreparedContext(url, preparedFetchUrl, init)
+      logState(
+        state,
+        "runFetch prepared id=$id url=$url fetchContextUrl=$fetchContextUrl preparedFetchUrl=$preparedFetchUrl fetchUrl=$fetchUrl",
+        fetchUrl,
+      )
       setTimeout(
         state,
         id,
@@ -491,7 +496,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
         "scraper: browser fetch to $url timed out after ${timeoutMs}ms",
       )
       val request = JSONObject()
-        .put("url", url)
+        .put("url", fetchUrl)
         .put("init", init)
       webView.evaluateJavascript(buildFetchScript(id, request), null)
     }
@@ -541,7 +546,7 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     id: String,
     contextUrl: String?,
     fallbackContextUrl: String?,
-    ready: () -> Unit,
+    ready: (String?) -> Unit,
   ) {
     if (contextUrl == null || sameOrigin(state.currentUrl, contextUrl)) {
       logState(
@@ -549,13 +554,14 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
         "prepareContext skipped id=$id contextUrl=$contextUrl sameOrigin=${contextUrl != null}",
         contextUrl,
       )
-      ready()
+      ready(null)
       return
     }
     logState(state, "prepareContext navigate id=$id contextUrl=$contextUrl", contextUrl)
 
     var finished = false
     var fallbackAttempted = false
+    var activeFallbackUrl: String? = null
     val timeout = Runnable {
       if (finished) return@Runnable
       finished = true
@@ -572,12 +578,25 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
         val fallbackUrl = fallbackContextUrl?.takeIf { it != contextUrl }
         if (!fallbackAttempted && fallbackUrl != null) {
           fallbackAttempted = true
+          activeFallbackUrl = fallbackUrl
           logState(
             state,
             "prepareContext fallback id=$id contextUrl=$contextUrl finishedUrl=$finishedUrl fallbackUrl=$fallbackUrl",
             fallbackUrl,
           )
           webView.loadUrl(fallbackUrl)
+          return@makeClient
+        }
+        if (fallbackAttempted && activeFallbackUrl != null && isHttpUrl(finishedUrl)) {
+          finished = true
+          clearTimeout(state)
+          webView.webViewClient = makeClient(state, null)
+          logState(
+            state,
+            "prepareContext ready fallback id=$id contextUrl=$contextUrl finishedUrl=$finishedUrl",
+            finishedUrl,
+          )
+          ready(finishedUrl)
           return@makeClient
         }
         logState(
@@ -591,9 +610,31 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
       clearTimeout(state)
       webView.webViewClient = makeClient(state, null)
       logState(state, "prepareContext ready id=$id contextUrl=$contextUrl", contextUrl)
-      ready()
+      ready(null)
     }
     webView.loadUrl(contextUrl)
+  }
+
+  private fun fetchUrlAfterPreparedContext(
+    url: String,
+    preparedFetchUrl: String?,
+    init: JSONObject,
+  ): String {
+    if (preparedFetchUrl == null || !isSafeFetchMethod(init) || !isHttpUrl(preparedFetchUrl)) {
+      return url
+    }
+    return preparedFetchUrl
+  }
+
+  private fun isSafeFetchMethod(init: JSONObject): Boolean {
+    val method = init.optString("method", "GET").ifBlank { "GET" }
+    return method.equals("GET", ignoreCase = true) ||
+      method.equals("HEAD", ignoreCase = true)
+  }
+
+  private fun isHttpUrl(url: String): Boolean {
+    val uri = Uri.parse(url)
+    return uri.scheme == "http" || uri.scheme == "https"
   }
 
   private fun fetchContextUrl(url: String, contextUrl: String?): String? {

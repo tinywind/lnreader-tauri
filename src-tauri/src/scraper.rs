@@ -73,21 +73,23 @@ static FETCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// Polyfill + before-content hook injected at scraper webview creation.
 /// The script runs before any page script in every navigation, so
 /// callers (e.g. `webview_extract`) can pass an arbitrary
-/// before-content script via the URL fragment and receive results
+/// before-content script via `window.name` and receive results
 /// asynchronously via `window.ReactNativeWebView.postMessage`.
 ///
 /// Bridge wiring:
-/// - `__lnr_script__=ENCODED` fragment: decoded + eval'd before any
+/// - `window.name=__lnr_script__=ENCODED` or the legacy
+///   `__lnr_script__=ENCODED` fragment: decoded + eval'd before any
 ///   page script runs (e.g. patches `Element.prototype.attachShadow`).
-/// - `ReactNativeWebView.postMessage(payload)` polyfill: writes the
-///   payload to `location.hash` as `#__lnr_result__=ENCODED`. The host
-///   polls `Webview::url()` to pick up the result.
+/// - `ReactNativeWebView.postMessage(payload)` polyfill: stores the
+///   payload in page state and also mirrors it to `location.hash` as a
+///   fallback marker for older WebView hosts.
 #[cfg(all(desktop, target_os = "windows"))]
 const SCRAPER_INIT_SCRIPT: &str = r##"
 (function () {
   window.ReactNativeWebView = window.ReactNativeWebView || {};
   window.ReactNativeWebView.postMessage = function (payload) {
     try {
+      window.__lnrExtractResult = String(payload);
       var encoded = encodeURIComponent(String(payload));
       var marker = "#__lnr_result__=" + encoded;
       try {
@@ -99,14 +101,25 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
   };
   try {
     var hash = location.hash || "";
-    var prefix = "#__lnr_script__=";
-    var idx = hash.indexOf(prefix);
+    var name = window.name || "";
+    var prefix = "__lnr_script__=";
+    var hashPrefix = "#" + prefix;
+    var idx = hash.indexOf(hashPrefix);
+    var encoded = "";
+    var fromHash = false;
     if (idx !== -1) {
-      var encoded = hash.substring(idx + prefix.length);
+      encoded = hash.substring(idx + hashPrefix.length);
+      fromHash = true;
+    } else if (name.indexOf(prefix) === 0) {
+      encoded = name.substring(prefix.length);
+    }
+    if (encoded) {
       var script = decodeURIComponent(encoded);
-      try {
-        history.replaceState(null, "", location.pathname + location.search);
-      } catch (e) {}
+      if (fromHash) {
+        try {
+          history.replaceState(null, "", location.pathname + location.search);
+        } catch (e) {}
+      }
       try {
         (0, eval)(script);
       } catch (e) {
@@ -126,6 +139,7 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
   window.ReactNativeWebView = window.ReactNativeWebView || {};
   window.ReactNativeWebView.postMessage = function (payload) {
     try {
+      window.__lnrExtractResult = String(payload);
       var encoded = encodeURIComponent(String(payload));
       var marker = "#__lnr_result__=" + encoded;
       try {
@@ -137,14 +151,25 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
   };
   try {
     var hash = location.hash || "";
-    var prefix = "#__lnr_script__=";
-    var idx = hash.indexOf(prefix);
+    var name = window.name || "";
+    var prefix = "__lnr_script__=";
+    var hashPrefix = "#" + prefix;
+    var idx = hash.indexOf(hashPrefix);
+    var encoded = "";
+    var fromHash = false;
     if (idx !== -1) {
-      var encoded = hash.substring(idx + prefix.length);
+      encoded = hash.substring(idx + hashPrefix.length);
+      fromHash = true;
+    } else if (name.indexOf(prefix) === 0) {
+      encoded = name.substring(prefix.length);
+    }
+    if (encoded) {
       var script = decodeURIComponent(encoded);
-      try {
-        history.replaceState(null, "", location.pathname + location.search);
-      } catch (e) {}
+      if (fromHash) {
+        try {
+          history.replaceState(null, "", location.pathname + location.search);
+        } catch (e) {}
+      }
       try {
         (0, eval)(script);
       } catch (e) {
@@ -1515,6 +1540,74 @@ fn clear_webview_extract_result_marker(scraper: &ScraperWebview, current_url: &s
     let _ = scraper.eval(script);
 }
 
+#[cfg(desktop)]
+async fn take_webview_extract_result(scraper: &ScraperWebview) -> Option<String> {
+    eval_json::<Option<String>>(
+        scraper,
+        r#"(function () {
+  if (typeof window.__lnrExtractResult !== "string") return null;
+  var result = window.__lnrExtractResult;
+  window.__lnrExtractResult = null;
+  return result;
+})()"#
+            .to_string(),
+    )
+    .await
+    .ok()
+    .flatten()
+}
+
+#[cfg(desktop)]
+fn install_webview_extract_before_script(
+    scraper: &ScraperWebview,
+    before_script: Option<&str>,
+) -> Result<(), String> {
+    let script = match before_script {
+        Some(before_script) => {
+            let before_script_json = serde_json::to_string(before_script)
+                .map_err(|err| format!("webview_extract: serialize before script: {err}"))?;
+            format!(
+                r#"(function () {{
+  try {{ window.__lnrExtractResult = null; }} catch (error) {{}}
+  try {{
+    window.name = "__lnr_script__=" + encodeURIComponent({before_script_json});
+  }} catch (error) {{}}
+}})();"#
+            )
+        }
+        None => r#"(function () {
+  try { window.__lnrExtractResult = null; } catch (error) {}
+  try {
+    if ((window.name || "").indexOf("__lnr_script__=") === 0) {
+      window.name = "";
+    }
+  } catch (error) {}
+})();"#
+            .to_string(),
+    };
+    scraper
+        .eval(script)
+        .map_err(|err| format!("webview_extract: install before script: {err}"))
+}
+
+#[cfg(desktop)]
+fn clear_webview_extract_result(scraper: &ScraperWebview, current_url: Option<&str>) {
+    let _ = scraper.eval(
+        r#"(function () {
+  try { window.__lnrExtractResult = null; } catch (error) {}
+  try {
+    if ((window.name || "").indexOf("__lnr_script__=") === 0) {
+      window.name = "";
+    }
+  } catch (error) {}
+})()"#
+        .to_string(),
+    );
+    if let Some(current_url) = current_url {
+        clear_webview_extract_result_marker(scraper, current_url);
+    }
+}
+
 /// Issue an HTTP request through the scraper WebView's own browser
 /// `fetch()`, preserving Cloudflare/browser-network behavior.
 #[cfg(desktop)]
@@ -1698,23 +1791,6 @@ pub async fn scraper_cancel_executor(
     Err(SCRAPER_UNAVAILABLE.to_string())
 }
 
-/// RFC 3986 percent-encode every byte that is not in the unreserved
-/// set. Used to embed an arbitrary script string inside a URL
-/// fragment without breaking parsing.
-#[cfg(desktop)]
-fn percent_encode_uri_component(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.as_bytes() {
-        let c = *byte as char;
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-            out.push(c);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 /// Inverse of `encodeURIComponent`. Strict on malformed escapes so the
 /// caller can surface the failure rather than silently dropping data.
 #[cfg(desktop)]
@@ -1783,21 +1859,8 @@ pub async fn webview_extract(
         vec![("request", url.clone())],
     );
 
-    // Embed the before-content script in the URL fragment. The
-    // browser does not send the fragment to the server, and the
-    // initialization script picks it up before any page script runs.
-    let target_url_str = match before_script.as_deref().filter(|s| !s.is_empty()) {
-        Some(script) => {
-            let encoded = percent_encode_uri_component(script);
-            // The fragment is consumed by SCRAPER_INIT_SCRIPT before the
-            // page sees it, so a `?cb=...#...` URL stays well-formed
-            // because we prepend a fresh `#`. If the caller's URL
-            // already had a fragment, that fragment is dropped.
-            let base = url.split('#').next().unwrap_or(&url);
-            format!("{base}#__lnr_script__={encoded}")
-        }
-        None => url.clone(),
-    };
+    let before_script = before_script.as_deref().filter(|script| !script.is_empty());
+    let target_url_str = url.clone();
 
     let parsed: Url = target_url_str.parse().map_err(|err| {
         format!("webview_extract: invalid url '{target_url_str}': {err}")
@@ -1812,6 +1875,7 @@ pub async fn webview_extract(
     for attempt in 1..=max_attempts {
         prepare_extract_context(&scraper, &parsed).await?;
         wait_for_scraper_bridge_ready(&scraper, "extract", Duration::from_secs(5)).await;
+        install_webview_extract_before_script(&scraper, before_script)?;
 
         log::trace!(
             "[scraper:extract] navigate queue={queue} url={url} target_url={target_url_str} attempt={attempt}"
@@ -1824,20 +1888,26 @@ pub async fn webview_extract(
         let start = Instant::now();
         while start.elapsed() < timeout {
             tokio::time::sleep(poll_interval).await;
-            let current = match scraper.url() {
-                Ok(u) => u.to_string(),
-                Err(_) => continue,
-            };
-            if let Some(idx) = current.find(result_marker) {
-                let encoded = &current[idx + result_marker.len()..];
-                let decoded = decode_uri_component(encoded).map_err(|err| {
-                    format!("webview_extract: decode result: {err}")
-                })?;
+            let mut extract_result = take_webview_extract_result(&scraper)
+                .await
+                .map(|decoded| (decoded, None::<String>));
+            if extract_result.is_none() {
+                if let Ok(current) = scraper.url().map(|url| url.to_string()) {
+                    if let Some(idx) = current.find(result_marker) {
+                        let encoded = &current[idx + result_marker.len()..];
+                        let decoded = decode_uri_component(encoded).map_err(|err| {
+                            format!("webview_extract: decode result: {err}")
+                        })?;
+                        extract_result = Some((decoded, Some(current)));
+                    }
+                }
+            }
+            if let Some((decoded, current_url)) = extract_result {
                 if !retried_after_browser_challenge
                     && looks_like_browser_challenge_extract_result(&decoded)
                 {
                     retried_after_browser_challenge = true;
-                    clear_webview_extract_result_marker(&scraper, &current);
+                    clear_webview_extract_result(&scraper, current_url.as_deref());
                     let remaining = timeout.checked_sub(start.elapsed()).unwrap_or_default();
                     let wait_budget = remaining.min(Duration::from_secs(20));
                     if wait_budget > Duration::from_millis(0)
@@ -1857,6 +1927,7 @@ pub async fn webview_extract(
                             Duration::from_secs(5),
                         )
                         .await;
+                        install_webview_extract_before_script(&scraper, before_script)?;
                         log::debug!(
                             "[scraper:extract] retry after browser challenge queue={queue} url={url}"
                         );
@@ -1866,32 +1937,33 @@ pub async fn webview_extract(
                         continue;
                     }
                 }
-                // Clear the result marker without leaving the source origin.
-                // Parking on about:blank forces the next fetch to prepare the
-                // source context again.
-                clear_webview_extract_result_marker(&scraper, &current);
+                // Clear result state without leaving the source origin. Navigating
+                // away would force the next fetch to prepare the source context again.
+                clear_webview_extract_result(&scraper, current_url.as_deref());
+                let current_for_log = current_url.as_deref().unwrap_or("<script-result>");
+                let result_len = decoded.len();
                 log::trace!(
-                    "[scraper:extract] complete queue={queue} url={url} current_url={current} result_len={}",
-                    decoded.len()
+                    "[scraper:extract] complete queue={queue} url={url} current_url={current} result_len={result_len}",
+                    current = current_for_log,
                 );
-                log_scraper_cookies(
-                    &scraper,
-                    &queue,
-                    "after_webview_extract",
-                    vec![("request", url.clone()), ("current", current)],
-                );
+                let mut cookie_targets = vec![("request", url.clone())];
+                if let Some(current) = current_url {
+                    cookie_targets.push(("current", current));
+                }
+                log_scraper_cookies(&scraper, &queue, "after_webview_extract", cookie_targets);
                 return Ok(decoded);
             }
         }
 
         if attempt < max_attempts {
             log::debug!(
-                "[scraper:extract] timeout before result marker; retrying queue={queue} url={url} attempt={attempt}"
+                "[scraper:extract] timeout before extract result; retrying queue={queue} url={url} attempt={attempt}"
             );
             reset_extract_navigation(&scraper, &parsed, "extract")?;
         }
     }
 
+    clear_webview_extract_result(&scraper, None);
     log::error!(
         "[scraper:extract] timeout queue={queue} url={url} current_url={}",
         scraper_current_url_for_log(&scraper)
