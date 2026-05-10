@@ -477,7 +477,13 @@
 }
 
 .lnr-reader-settings-overlay {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   inset: 0;
+  max-height: 100%;
+  min-height: 0;
   pointer-events: auto;
   position: absolute;
   z-index: 12;
@@ -486,18 +492,16 @@
 .lnr-reader-settings-sheet {
   background: var(--lnr-design-surface);
   border-top: 1px solid var(--lnr-design-rule-strong);
-  bottom: 0;
   box-shadow: 0 -0.75rem 2rem rgba(15, 23, 42, 0.18);
   color: var(--lnr-design-ink);
   display: flex;
   flex-direction: column;
-  height: 50%;
-  left: 0;
+  flex: 0 1 min(50%, 100%);
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
   pointer-events: auto;
-  position: absolute;
-  right: 0;
+  width: 100%;
 }
 
 .lnr-reader-settings-header {
@@ -536,7 +540,10 @@
 }
 
 .lnr-reader-shell[data-full-page="true"] .lnr-reader-settings-sheet {
-  bottom: var(--lnr-app-bottom-inset);
+  max-height: calc(
+    var(--lnr-viewport-height) - var(--lnr-safe-area-top) -
+      var(--lnr-safe-area-bottom)
+  );
 }
 
 .lnr-reader-shell[data-full-page="true"] {
@@ -548,9 +555,15 @@
 
 @media (min-width: 992px) {
   .lnr-reader-settings-overlay {
-    bottom: auto;
-    height: 50%;
+    height: min(
+      50%,
+      calc(
+        100% - var(--lnr-safe-area-top) - var(--lnr-safe-area-bottom) -
+          2.25rem
+      )
+    );
     left: auto;
+    padding-bottom: 0;
     right: var(--lnr-safe-area-right);
     top: calc(var(--lnr-safe-area-top) + 2.25rem);
     width: min(100%, 34rem);
@@ -560,16 +573,12 @@
     border-bottom: 1px solid var(--lnr-design-rule-strong);
     border-left: 1px solid var(--lnr-design-rule-strong);
     border-radius: 0 0 0 0.5rem;
-    bottom: auto;
     box-shadow: var(--lnr-design-shadow-floating);
-    height: 100%;
-    left: 0;
-    right: 0;
-    top: 0;
+    flex-basis: 100%;
   }
 
   .lnr-reader-shell[data-full-page="true"] .lnr-reader-settings-sheet {
-    bottom: auto;
+    max-height: 100%;
   }
 }
 

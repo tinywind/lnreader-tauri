@@ -11,6 +11,7 @@ import { PdfReaderContent } from "../components/PdfReaderContent";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
 import { ReaderSettingsPanel } from "../components/ReaderSettingsPanel";
+import { ReaderSettingsGlyph } from "../components/ActionGlyphs";
 import {
   getAdjacentChapter,
   getChapterById,
@@ -24,6 +25,7 @@ import {
 import { getNovelById } from "../db/queries/novel";
 import { resolveLocalChapterMedia } from "../lib/chapter-media";
 import { renderChapterContentAsHtml } from "../lib/chapter-content";
+import { pluginManager } from "../lib/plugins/manager";
 import { enqueueChapterDownload } from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { readerRoute } from "../router";
@@ -181,7 +183,7 @@ function ReaderTopChrome({
         onClick={onOpenSettings}
         size="sm"
       >
-        <SettingsIcon />
+        <ReaderSettingsGlyph />
       </IconButton>
     </header>
   );
@@ -191,17 +193,6 @@ function BookmarkIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
       <path d="M6 4h12v16l-6-3.5L6 20V4z" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M4 7h16" />
-      <path d="M4 17h16" />
-      <path d="M8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
-      <path d="M16 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
     </svg>
   );
 }
@@ -221,12 +212,14 @@ function ReaderSettingsOverlay({
   onClose,
   onOpenSettingsPage,
   sourceId,
+  sourceName,
 }: {
   novelId?: number;
   novelName?: string;
   onClose: () => void;
   onOpenSettingsPage: () => void;
   sourceId?: string | null;
+  sourceName?: string | null;
 }) {
   const { t } = useTranslation();
   const settingsTarget =
@@ -235,6 +228,7 @@ function ReaderSettingsOverlay({
           kind: "novel" as const,
           novelId,
           sourceId,
+          sourceLabel: sourceName,
           label: novelName,
         }
       : { kind: "global" as const };
@@ -265,7 +259,7 @@ function ReaderSettingsOverlay({
               onClick={onOpenSettingsPage}
               size="sm"
             >
-              <SettingsIcon />
+              <ReaderSettingsGlyph />
             </IconButton>
             <IconButton
               className="lnr-reader-icon-button"
@@ -451,6 +445,13 @@ export function ReaderPage() {
   });
   const currentNovel = currentNovelQuery.data ?? null;
   const currentSourceId = currentNovel?.pluginId ?? null;
+  const currentSourceName = useMemo(
+    () =>
+      currentSourceId
+        ? (pluginManager.getPlugin(currentSourceId)?.name ?? currentSourceId)
+        : null,
+    [currentSourceId],
+  );
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const globalReaderGeneral = useReaderStore((state) => state.general);
   const globalReaderAppearance = useReaderStore((state) => state.appearance);
@@ -1069,6 +1070,7 @@ export function ReaderPage() {
           onClose={closeReaderSettingsPanel}
           onOpenSettingsPage={openReaderSettingsPage}
           sourceId={currentSourceId}
+          sourceName={currentSourceName}
         />
       ) : null}
       <ReaderBottomStrip

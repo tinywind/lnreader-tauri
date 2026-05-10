@@ -371,7 +371,7 @@
 }
 
 .lnr-reader-settings-scope-card {
-  align-items: center;
+  align-items: flex-start;
   background: var(--lnr-design-panel);
   border: 1px solid var(--lnr-design-rule-strong);
   border-left: 0.25rem solid var(--lnr-design-accent);
@@ -408,6 +408,43 @@
   line-height: 1.35;
 }
 
+.lnr-reader-settings-scope-status {
+  display: grid;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.lnr-reader-settings-scope-status-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.lnr-reader-settings-scope-status-label {
+  color: var(--lnr-design-ink-subtle);
+  font-family: var(--lnr-font-ui);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.lnr-reader-settings-scope-status-value {
+  color: var(--lnr-design-ink);
+  font-family: var(--lnr-font-ui);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.lnr-reader-settings-scope-status-row[data-current="true"]
+  .lnr-reader-settings-scope-status-value {
+  color: var(--lnr-design-accent);
+  font-weight: 900;
+}
+
 .lnr-reader-settings-scope-badge {
   background: var(--lnr-design-accent-soft);
   border: 1px solid var(--lnr-design-rule);
@@ -426,6 +463,42 @@
   .lnr-reader-settings-scope-badge {
   background: var(--lnr-design-surface);
   color: var(--lnr-design-ink-muted);
+}
+
+.lnr-reader-settings-disabled-notice {
+  background: var(--lnr-design-surface);
+  border: 1px solid var(--lnr-design-rule-strong);
+  border-left: 0.25rem solid var(--lnr-design-warn);
+  border-radius: 0.375rem;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.lnr-reader-settings-disabled-title {
+  color: var(--lnr-design-ink);
+  font-family: var(--lnr-font-ui);
+  font-size: 0.8125rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.lnr-reader-settings-disabled-description {
+  color: var(--lnr-design-ink-muted);
+  font-family: var(--lnr-font-ui);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.lnr-reader-settings-controls {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.lnr-reader-settings-controls:disabled {
+  opacity: 0.54;
 }
 
 .lnr-reader-settings-tabs {

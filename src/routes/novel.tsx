@@ -51,7 +51,7 @@ import {
   PlayFromStartGlyph,
   PlayGlyph,
   PlusGlyph,
-  SettingsGlyph,
+  ReaderSettingsGlyph,
 } from "../components/ActionGlyphs";
 import {
   ConsoleChip,
@@ -1233,7 +1233,7 @@ function NovelWorkspace({
         label={t("novel.readerSettings")}
         onClick={onOpenReaderSettings}
       >
-        <SettingsGlyph />
+        <ReaderSettingsGlyph />
       </NovelActionButton>
       <NovelActionButton
         active={novel.inLibrary}
@@ -1788,6 +1788,12 @@ export function NovelDetailPage() {
   }
 
   const sourceUrl = resolveNovelSourceUrl(novel);
+  const sourcePlugin = novel.isLocal
+    ? null
+    : pluginManager.getPlugin(novel.pluginId);
+  const sourceName = novel.isLocal
+    ? t("common.local")
+    : (sourcePlugin?.name ?? novel.pluginId);
 
   return (
     <>
@@ -1901,6 +1907,7 @@ export function NovelDetailPage() {
             kind: "novel",
             novelId: novel.id,
             sourceId: novel.pluginId,
+            sourceLabel: sourceName,
             label: novel.name,
           }}
         />

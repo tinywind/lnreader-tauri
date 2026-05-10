@@ -79,6 +79,7 @@ export type ReaderSettingsPanelTarget =
       kind: "novel";
       novelId: number;
       sourceId?: string | null;
+      sourceLabel?: string | null;
       label?: string;
     };
 
@@ -200,8 +201,14 @@ export function ReaderSettingsPanel({
   );
   const targetOverride =
     targetKind === "source" ? sourceSettingsOverride : novelSettingsOverride;
+  const sourceSettingsEnabled = Boolean(sourceSettingsOverride?.enabled);
+  const novelSettingsEnabled = Boolean(novelSettingsOverride?.enabled);
   const targetSettingsEnabled =
-    targetKind === "global" || Boolean(targetOverride?.enabled);
+    targetKind === "global" ||
+    (targetKind === "source"
+      ? sourceSettingsEnabled
+      : novelSettingsEnabled);
+  const settingsLocked = targetKind !== "global" && !targetSettingsEnabled;
   const baseGeneral = useMemo(
     () =>
       targetKind === "novel"
@@ -243,6 +250,18 @@ export function ReaderSettingsPanel({
       : targetKind === "novel"
         ? t("readerSettings.scope.novelFallback")
         : t("readerSettings.scope.globalName"));
+  const resolvedSourceLabel =
+    targetKind === "novel" ? resolvedTarget.sourceLabel?.trim() : "";
+  const fallbackSourceDisplayName =
+    resolvedSourceLabel ||
+    scopedSourceId ||
+    t("readerSettings.scope.sourceFallback");
+  const sourceDisplayName =
+    targetKind === "source"
+      ? scopeDisplayName
+      : targetKind === "novel"
+        ? fallbackSourceDisplayName
+        : t("readerSettings.scope.globalName");
   const scopeTitle =
     targetKind === "source"
       ? t("readerSettings.scope.sourceTitle", { name: scopeDisplayName })
@@ -261,6 +280,20 @@ export function ReaderSettingsPanel({
       : targetSettingsEnabled
         ? t("readerSettings.scope.activeBadge")
         : t("readerSettings.scope.inactiveBadge");
+  const editingScopeLabel =
+    targetKind === "source"
+      ? t("readerSettings.scope.appliedSource", { name: scopeDisplayName })
+      : targetKind === "novel"
+        ? t("readerSettings.scope.appliedNovel", { name: scopeDisplayName })
+        : t("readerSettings.scope.appliedGlobal");
+  const appliedScopeLabel =
+    targetKind === "novel" && novelSettingsEnabled
+      ? t("readerSettings.scope.appliedNovel", { name: scopeDisplayName })
+      : scopedSourceId && sourceSettingsEnabled
+        ? t("readerSettings.scope.appliedSource", {
+            name: sourceDisplayName,
+          })
+        : t("readerSettings.scope.appliedGlobal");
 
   const readerThemes = useMemo(
     () => [...READER_PRESET_THEMES, ...appearance.customThemes],
@@ -295,6 +328,8 @@ export function ReaderSettingsPanel({
   );
 
   function handleSaveCustomTheme(): void {
+    if (settingsLocked) return;
+
     const id = `custom-${Date.now()}`;
     saveCustomTheme({
       id,
@@ -308,6 +343,8 @@ export function ReaderSettingsPanel({
   }
 
   function setActiveGeneral(settings: Partial<ReaderGeneralSettings>): void {
+    if (settingsLocked) return;
+
     if (targetKind === "source") {
       if (scopedSourceId) setSourceGeneral(scopedSourceId, settings);
       return;
@@ -324,6 +361,8 @@ export function ReaderSettingsPanel({
   function setActiveAppearance(
     settings: Partial<ReaderAppearanceSettings>,
   ): void {
+    if (settingsLocked) return;
+
     if (targetKind === "source") {
       if (scopedSourceId) setSourceAppearance(scopedSourceId, settings);
       return;
@@ -338,6 +377,8 @@ export function ReaderSettingsPanel({
   }
 
   function applyActiveTheme(theme: Parameters<typeof applyTheme>[0]): void {
+    if (settingsLocked) return;
+
     if (targetKind === "source") {
       if (scopedSourceId) applySourceTheme(scopedSourceId, theme);
       return;
@@ -352,6 +393,8 @@ export function ReaderSettingsPanel({
   }
 
   function resetActiveReaderSettings(): void {
+    if (settingsLocked) return;
+
     if (targetKind === "source") {
       if (scopedSourceId) resetSourceReaderSettings(scopedSourceId);
       return;
@@ -472,6 +515,27 @@ export function ReaderSettingsPanel({
           <span className="lnr-reader-settings-scope-description">
             {scopeDescription}
           </span>
+          <div className="lnr-reader-settings-scope-status">
+            <span className="lnr-reader-settings-scope-status-row">
+              <span className="lnr-reader-settings-scope-status-label">
+                {t("readerSettings.scope.editingLabel")}
+              </span>
+              <span className="lnr-reader-settings-scope-status-value">
+                {editingScopeLabel}
+              </span>
+            </span>
+            <span
+              className="lnr-reader-settings-scope-status-row"
+              data-current="true"
+            >
+              <span className="lnr-reader-settings-scope-status-label">
+                {t("readerSettings.scope.appliedLabel")}
+              </span>
+              <span className="lnr-reader-settings-scope-status-value">
+                {appliedScopeLabel}
+              </span>
+            </span>
+          </div>
         </div>
         <span className="lnr-reader-settings-scope-badge">
           {scopeBadge}
@@ -500,11 +564,28 @@ export function ReaderSettingsPanel({
           </SettingsFieldRow>
         </SettingsSection>
       ) : null}
-      <Tabs
-        className="lnr-reader-settings-tabs"
-        defaultValue="reading"
-        keepMounted={false}
+      {settingsLocked ? (
+        <div className="lnr-reader-settings-disabled-notice" role="status">
+          <span className="lnr-reader-settings-disabled-title">
+            {t("readerSettings.scope.disabledTitle")}
+          </span>
+          <span className="lnr-reader-settings-disabled-description">
+            {t("readerSettings.scope.disabledDescription", {
+              scope: appliedScopeLabel,
+            })}
+          </span>
+        </div>
+      ) : null}
+      <fieldset
+        aria-disabled={settingsLocked}
+        className="lnr-reader-settings-controls"
+        disabled={settingsLocked}
       >
+        <Tabs
+          className="lnr-reader-settings-tabs"
+          defaultValue="reading"
+          keepMounted={false}
+        >
       <Tabs.List className="lnr-reader-settings-tab-list">
         <Tabs.Tab value="reading">
           {t("readerSettings.reading.title")}
@@ -960,7 +1041,8 @@ export function ReaderSettingsPanel({
           </SettingsSection>
         </Stack>
       </Tabs.Panel>
-      </Tabs>
+        </Tabs>
+      </fieldset>
     </Stack>
   );
 }

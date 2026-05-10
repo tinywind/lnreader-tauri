@@ -84,6 +84,14 @@
   gap: 0.25rem;
 }
 
+.lnr-source-header-action-divider {
+  align-self: stretch;
+  background: var(--lnr-design-rule);
+  display: inline-block;
+  min-height: 2rem;
+  width: 1px;
+}
+
 .lnr-browse-plugin-row {
   background: var(--lnr-design-surface);
   border: 1px solid var(--lnr-design-rule);

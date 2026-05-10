@@ -266,6 +266,17 @@ export function SettingsGlyph({ className }: ActionGlyphProps) {
   );
 }
 
+export function ReaderSettingsGlyph({ className }: ActionGlyphProps) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 7h16" />
+      <path d="M4 17h16" />
+      <path d="M8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+      <path d="M16 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+    </svg>
+  );
+}
+
 export function SourceGlyph({ className }: ActionGlyphProps) {
   return (
     <svg className={className} aria-hidden="true" viewBox="0 0 24 24">

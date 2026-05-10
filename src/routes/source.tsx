@@ -15,8 +15,8 @@ import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
 import {
   ChevronDownGlyph,
   ExternalLinkGlyph,
+  ReaderSettingsGlyph,
   SettingsGlyph,
-  SourceGlyph,
 } from "../components/ActionGlyphs";
 import { SegmentedToggle } from "../components/SegmentedToggle";
 import { TextButton } from "../components/TextButton";
@@ -440,8 +440,22 @@ export function SourcePage() {
                 <BackGlyph />
               </IconButton>
             ) : null}
+            {backToGlobalSearch ? (
+              <span className="lnr-source-header-action-divider" aria-hidden />
+            ) : null}
+            <IconButton
+              active={readerSettingsDrawerOpen}
+              label={t("readerSettings.source.open", { name: plugin.name })}
+              size="lg"
+              variant="subtle"
+              onClick={() => setReaderSettingsDrawerOpen(true)}
+            >
+              <ReaderSettingsGlyph />
+            </IconButton>
+            <span className="lnr-source-header-action-divider" aria-hidden />
             {hasPluginSettings ? (
               <IconButton
+                active={settingsDrawerOpen}
                 label={t("pluginSettings.open", { name: plugin.name })}
                 size="lg"
                 variant="subtle"
@@ -450,14 +464,6 @@ export function SourcePage() {
                 <SettingsGlyph />
               </IconButton>
             ) : null}
-            <IconButton
-              label={t("readerSettings.source.open", { name: plugin.name })}
-              size="lg"
-              variant="subtle"
-              onClick={() => setReaderSettingsDrawerOpen(true)}
-            >
-              <SourceGlyph />
-            </IconButton>
             <Badge variant="light">{plugin.lang}</Badge>
             <Badge variant="light" color="gray">
               v{plugin.version}
