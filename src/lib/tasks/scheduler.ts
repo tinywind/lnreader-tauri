@@ -223,7 +223,6 @@ interface TaskEntry {
 }
 
 const DEFAULT_SOURCE_FOREGROUND_CONCURRENCY = 3;
-const DEFAULT_SOURCE_BACKGROUND_CONCURRENCY = 2;
 const HISTORY_LIMIT = 200;
 const TERMINAL_TASK_RETENTION_MS = 2_000;
 export const TASK_PAUSE_ABORT_MESSAGE = "Task was paused.";
@@ -366,7 +365,8 @@ export class TaskScheduler {
   private readonly sourceQueueOrder: string[] = [];
   private readonly sourceQueues = new Map<string, string[]>();
   private sourceForegroundConcurrency: number;
-  private readonly sourceBackgroundConcurrency: number;
+  private sourceBackgroundConcurrency: number;
+  private readonly sourceBackgroundConcurrencyFollowsForeground: boolean;
   private readonly terminalTaskRetentionMs: number;
   private sourceQueuesPaused: boolean;
   private activeBackgroundCount = 0;
@@ -403,10 +403,12 @@ export class TaskScheduler {
       options.sourceForegroundConcurrency ??
         DEFAULT_SOURCE_FOREGROUND_CONCURRENCY,
     );
+    this.sourceBackgroundConcurrencyFollowsForeground =
+      options.sourceBackgroundConcurrency === undefined;
     this.sourceBackgroundConcurrency = Math.max(
       1,
       options.sourceBackgroundConcurrency ??
-        DEFAULT_SOURCE_BACKGROUND_CONCURRENCY,
+        this.sourceForegroundConcurrency,
     );
     this.snapshot = this.buildSnapshot();
   }
@@ -821,9 +823,13 @@ export class TaskScheduler {
       : DEFAULT_SOURCE_FOREGROUND_CONCURRENCY;
     if (nextConcurrency === this.sourceForegroundConcurrency) return;
     this.sourceForegroundConcurrency = nextConcurrency;
+    if (this.sourceBackgroundConcurrencyFollowsForeground) {
+      this.sourceBackgroundConcurrency = nextConcurrency;
+    }
     this.dropDisabledDomainExecutors();
     this.debug("source foreground concurrency changed", undefined, {
       sourceForegroundConcurrency: nextConcurrency,
+      sourceBackgroundConcurrency: this.sourceBackgroundConcurrency,
     });
     this.drain();
   }
@@ -961,9 +967,27 @@ export class TaskScheduler {
     executorId: ScraperExecutorId,
   ): boolean {
     const domainKey = this.sourceDomainKey(entry);
-    if (!domainKey) return true;
-    const assignedExecutor = this.assignedDomainExecutor(domainKey);
-    return !assignedExecutor || assignedExecutor === executorId;
+    if (domainKey) {
+      const assignedExecutor = this.assignedDomainExecutor(domainKey);
+      if (assignedExecutor) return assignedExecutor === executorId;
+    }
+    return !this.isExecutorReservedForQueuedDomain(executorId, domainKey);
+  }
+
+  private isExecutorReservedForQueuedDomain(
+    executorId: ScraperExecutorId,
+    candidateDomainKey: string | null,
+  ): boolean {
+    for (const [domainKey, assignedExecutor] of this.sourceExecutorByDomain) {
+      if (domainKey === candidateDomainKey) continue;
+      if (assignedExecutor !== executorId) continue;
+      if (!this.isEnabledPoolExecutor(assignedExecutor)) {
+        this.sourceExecutorByDomain.delete(domainKey);
+        continue;
+      }
+      if (this.hasQueuedSourceDomain(domainKey)) return true;
+    }
+    return false;
   }
 
   private hasQueuedSourceDomain(domainKey: string): boolean {

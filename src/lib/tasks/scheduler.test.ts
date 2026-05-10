@@ -237,6 +237,94 @@ describe("TaskScheduler", () => {
     await Promise.all([sharedB.promise, other.promise]);
   });
 
+  it("keeps a queued domain on its assigned executor when queues are reordered", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 2,
+      sourceQueuesPaused: true,
+    });
+    const order: string[] = [];
+    const finishers = new Map<string, () => void>();
+
+    const sharedA = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Shared A",
+      priority: "normal",
+      source: { id: "shared-a", name: "Shared A", site: "https://a.shared.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`shared-a:${context.executor}:start`);
+          finishers.set("shared-a", resolve);
+        }),
+    });
+    const sharedB = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Shared B",
+      priority: "normal",
+      source: { id: "shared-b", name: "Shared B", site: "https://b.shared.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`shared-b:${context.executor}:start`);
+          finishers.set("shared-b", resolve);
+        }),
+    });
+    const blocker = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Blocker",
+      priority: "normal",
+      source: { id: "blocker", name: "Blocker", site: "https://blocker.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`blocker:${context.executor}:start`);
+          finishers.set("blocker", resolve);
+        }),
+    });
+    const other = scheduler.enqueueSource({
+      kind: "source.globalSearch",
+      title: "Other",
+      priority: "normal",
+      source: { id: "other", name: "Other", site: "https://other.test" },
+      run: (context) =>
+        new Promise<void>((resolve) => {
+          order.push(`other:${context.executor}:start`);
+          finishers.set("other", resolve);
+        }),
+    });
+
+    expect(scheduler.resumeSourceQueue()).toBe(true);
+    await settle();
+
+    expect(order).toEqual([
+      "shared-a:pool:0:start",
+      "blocker:pool:1:start",
+    ]);
+
+    expect(scheduler.moveSourceQueue("other", "top")).toBe(true);
+    finishers.get("shared-a")?.();
+    await sharedA.promise;
+    await settle();
+
+    expect(order).toEqual([
+      "shared-a:pool:0:start",
+      "blocker:pool:1:start",
+      "shared-b:pool:0:start",
+    ]);
+
+    finishers.get("shared-b")?.();
+    await sharedB.promise;
+    await settle();
+
+    expect(order).toEqual([
+      "shared-a:pool:0:start",
+      "blocker:pool:1:start",
+      "shared-b:pool:0:start",
+      "other:pool:0:start",
+    ]);
+
+    finishers.get("other")?.();
+    finishers.get("blocker")?.();
+    await Promise.all([blocker.promise, other.promise]);
+  });
+
   it("keeps one active task per source even when later work has higher priority", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,
@@ -551,6 +639,46 @@ describe("TaskScheduler", () => {
       "foreground-c:start",
       "background-b:start",
     ]);
+  });
+
+  it("lets background work follow the source work concurrency setting", async () => {
+    const scheduler = new TaskScheduler({
+      sourceForegroundConcurrency: 1,
+      sourceQueuesPaused: true,
+    });
+    const order: string[] = [];
+    const finishers: Array<() => void> = [];
+
+    const tasks = ["a", "b", "c"].map((sourceId) =>
+      scheduler.enqueueSource({
+        kind: "chapter.download",
+        title: `Background ${sourceId}`,
+        priority: "background",
+        source: {
+          id: sourceId,
+          name: sourceId.toUpperCase(),
+          site: `https://source-${sourceId}.test`,
+        },
+        run: (context) =>
+          new Promise<void>((resolve) => {
+            order.push(`${sourceId}:${context.executor}:start`);
+            finishers.push(resolve);
+          }),
+      }),
+    );
+
+    scheduler.setSourceForegroundConcurrency(3);
+    expect(scheduler.resumeSourceQueue()).toBe(true);
+    await settle();
+
+    expect(order).toEqual([
+      "a:pool:0:start",
+      "b:pool:1:start",
+      "c:pool:2:start",
+    ]);
+
+    finishers.forEach((finish) => finish());
+    await Promise.all(tasks.map((task) => task.promise));
   });
 
   it("delays tasks with a matching source cooldown", async () => {
