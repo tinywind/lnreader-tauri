@@ -3,7 +3,6 @@ import { getDb } from "../client";
 export interface InstalledPluginRow {
   id: string;
   name: string;
-  site: string;
   lang: string;
   version: string;
   iconUrl: string;
@@ -15,7 +14,6 @@ export interface InstalledPluginRow {
 export interface UpsertInstalledPluginInput {
   id: string;
   name: string;
-  site: string;
   lang: string;
   version: string;
   iconUrl: string;
@@ -27,7 +25,6 @@ const SELECT_ALL = `
   SELECT
     id,
     name,
-    site,
     lang,
     version,
     icon_url    AS iconUrl,
@@ -53,11 +50,10 @@ export async function upsertInstalledPlugin(
   const db = await getDb();
   await db.execute(
     `INSERT INTO installed_plugin (
-       id, name, site, lang, version, icon_url, source_url, source_code
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       id, name, lang, version, icon_url, source_url, source_code
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
-       site = excluded.site,
        lang = excluded.lang,
        version = excluded.version,
        icon_url = excluded.icon_url,
@@ -67,7 +63,6 @@ export async function upsertInstalledPlugin(
     [
       input.id,
       input.name,
-      input.site,
       input.lang,
       input.version,
       input.iconUrl,

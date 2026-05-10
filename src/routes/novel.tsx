@@ -93,6 +93,7 @@ import {
 } from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
+import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { pluginManager } from "../lib/plugins/manager";
 import { novelRoute } from "../router";
 import { useTranslation } from "../i18n";
@@ -401,14 +402,14 @@ function resolveNovelSourceUrl(novel: NovelDetailRecord): string | null {
       const resolved = plugin.resolveUrl(novel.path, true);
       if (resolved) return resolved;
     } catch {
-      // Fall back to resolving the path against the plugin site below.
+      // Fall back to resolving the path against the plugin base URL below.
     }
   }
 
   try {
-    return new URL(novel.path, plugin.site).toString();
+    return new URL(novel.path, getPluginBaseUrl(plugin)).toString();
   } catch {
-    return plugin.site || null;
+    return getPluginBaseUrl(plugin);
   }
 }
 

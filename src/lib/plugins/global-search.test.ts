@@ -16,11 +16,11 @@ function makePlugin(
   return {
     id,
     name: `Plugin ${id}`,
-    site: `https://${id}.test`,
     lang: "en",
     version: "1.0.0",
     url: `https://${id}.test/index.js`,
     iconUrl: `https://${id}.test/icon.png`,
+    getBaseUrl: () => `https://${id}.test`,
     popularNovels: () => Promise.resolve([]),
     parseNovel: () =>
       Promise.resolve({ name: "", path: "", chapters: [] }),

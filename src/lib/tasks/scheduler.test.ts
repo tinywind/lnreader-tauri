@@ -170,7 +170,7 @@ describe("TaskScheduler", () => {
     ]);
   });
 
-  it("serializes different sources that share a base domain", async () => {
+  it("runs different sources that share a base domain concurrently", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,
       sourceQueuesPaused: false,
@@ -182,7 +182,7 @@ describe("TaskScheduler", () => {
       kind: "source.globalSearch",
       title: "Shared A",
       priority: "normal",
-      source: { id: "shared-a", name: "Shared A", site: "https://m.shared.test" },
+      source: { id: "shared-a", name: "Shared A" },
       run: (context) =>
         new Promise<void>((resolve) => {
           order.push(`shared-a:${context.executor}:start`);
@@ -193,11 +193,7 @@ describe("TaskScheduler", () => {
       kind: "source.globalSearch",
       title: "Shared B",
       priority: "normal",
-      source: {
-        id: "shared-b",
-        name: "Shared B",
-        site: "https://www.shared.test/path",
-      },
+      source: { id: "shared-b", name: "Shared B" },
       run: (context) =>
         new Promise<void>((resolve) => {
           order.push(`shared-b:${context.executor}:start`);
@@ -208,7 +204,7 @@ describe("TaskScheduler", () => {
       kind: "source.globalSearch",
       title: "Other",
       priority: "normal",
-      source: { id: "other", name: "Other", site: "https://other.test" },
+      source: { id: "other", name: "Other" },
       run: (context) =>
         new Promise<void>((resolve) => {
           order.push(`other:${context.executor}:start`);
@@ -219,7 +215,7 @@ describe("TaskScheduler", () => {
     await settle();
     expect(order).toEqual([
       "shared-a:pool:0:start",
-      "other:pool:1:start",
+      "shared-b:pool:1:start",
     ]);
 
     finishers.get("shared-a")?.();
@@ -228,8 +224,8 @@ describe("TaskScheduler", () => {
 
     expect(order).toEqual([
       "shared-a:pool:0:start",
-      "other:pool:1:start",
-      "shared-b:pool:0:start",
+      "shared-b:pool:1:start",
+      "other:pool:0:start",
     ]);
 
     finishers.get("shared-b")?.();
@@ -237,7 +233,7 @@ describe("TaskScheduler", () => {
     await Promise.all([sharedB.promise, other.promise]);
   });
 
-  it("keeps a queued domain on its assigned executor when queues are reordered", async () => {
+  it("keeps a queued source on its assigned executor when queues are reordered", async () => {
     const scheduler = new TaskScheduler({
       sourceForegroundConcurrency: 2,
       sourceQueuesPaused: true,
@@ -245,33 +241,33 @@ describe("TaskScheduler", () => {
     const order: string[] = [];
     const finishers = new Map<string, () => void>();
 
-    const sharedA = scheduler.enqueueSource({
+    const sharedFirst = scheduler.enqueueSource({
       kind: "source.globalSearch",
-      title: "Shared A",
+      title: "Shared first",
       priority: "normal",
-      source: { id: "shared-a", name: "Shared A", site: "https://a.shared.test" },
+      source: { id: "shared", name: "Shared" },
       run: (context) =>
         new Promise<void>((resolve) => {
-          order.push(`shared-a:${context.executor}:start`);
-          finishers.set("shared-a", resolve);
+          order.push(`shared-first:${context.executor}:start`);
+          finishers.set("shared-first", resolve);
         }),
     });
-    const sharedB = scheduler.enqueueSource({
+    const sharedSecond = scheduler.enqueueSource({
       kind: "source.globalSearch",
-      title: "Shared B",
+      title: "Shared second",
       priority: "normal",
-      source: { id: "shared-b", name: "Shared B", site: "https://b.shared.test" },
+      source: { id: "shared", name: "Shared" },
       run: (context) =>
         new Promise<void>((resolve) => {
-          order.push(`shared-b:${context.executor}:start`);
-          finishers.set("shared-b", resolve);
+          order.push(`shared-second:${context.executor}:start`);
+          finishers.set("shared-second", resolve);
         }),
     });
     const blocker = scheduler.enqueueSource({
       kind: "source.globalSearch",
       title: "Blocker",
       priority: "normal",
-      source: { id: "blocker", name: "Blocker", site: "https://blocker.test" },
+      source: { id: "blocker", name: "Blocker" },
       run: (context) =>
         new Promise<void>((resolve) => {
           order.push(`blocker:${context.executor}:start`);
@@ -282,7 +278,7 @@ describe("TaskScheduler", () => {
       kind: "source.globalSearch",
       title: "Other",
       priority: "normal",
-      source: { id: "other", name: "Other", site: "https://other.test" },
+      source: { id: "other", name: "Other" },
       run: (context) =>
         new Promise<void>((resolve) => {
           order.push(`other:${context.executor}:start`);
@@ -294,29 +290,29 @@ describe("TaskScheduler", () => {
     await settle();
 
     expect(order).toEqual([
-      "shared-a:pool:0:start",
+      "shared-first:pool:0:start",
       "blocker:pool:1:start",
     ]);
 
     expect(scheduler.moveSourceQueue("other", "top")).toBe(true);
-    finishers.get("shared-a")?.();
-    await sharedA.promise;
+    finishers.get("shared-first")?.();
+    await sharedFirst.promise;
     await settle();
 
     expect(order).toEqual([
-      "shared-a:pool:0:start",
+      "shared-first:pool:0:start",
       "blocker:pool:1:start",
-      "shared-b:pool:0:start",
+      "shared-second:pool:0:start",
     ]);
 
-    finishers.get("shared-b")?.();
-    await sharedB.promise;
+    finishers.get("shared-second")?.();
+    await sharedSecond.promise;
     await settle();
 
     expect(order).toEqual([
-      "shared-a:pool:0:start",
+      "shared-first:pool:0:start",
       "blocker:pool:1:start",
-      "shared-b:pool:0:start",
+      "shared-second:pool:0:start",
       "other:pool:0:start",
     ]);
 
@@ -427,7 +423,7 @@ describe("TaskScheduler", () => {
       kind: "chapter.download",
       title: "Background download",
       priority: "background",
-      source: { id: "p", name: "Plugin", site: "https://example.test" },
+      source: { id: "p", name: "Plugin" },
       run: (context) =>
         new Promise<void>((resolve) => {
           order.push(`download:${context.executor}:start`);
@@ -441,7 +437,7 @@ describe("TaskScheduler", () => {
       kind: "source.listPopular",
       title: "Open source",
       priority: "interactive",
-      source: { id: "p", name: "Plugin", site: "https://example.test" },
+      source: { id: "p", name: "Plugin" },
       run: async (context) => {
         order.push(`browse:${context.executor}:start`);
       },
@@ -463,7 +459,7 @@ describe("TaskScheduler", () => {
       sourceQueuesPaused: false,
     });
     const order: string[] = [];
-    let closeSite!: () => void;
+    let closeBrowser!: () => void;
     let finishPool!: () => void;
 
     const pool = scheduler.enqueueSource({
@@ -480,25 +476,25 @@ describe("TaskScheduler", () => {
 
     await settle();
 
-    const site = scheduler.enqueueSource({
+    const browser = scheduler.enqueueSource({
       kind: "source.openSite",
       title: "Open site",
       priority: "interactive",
       exclusive: true,
-      source: { id: "site", name: "Site" },
+      source: { id: "browser", name: "Browser" },
       run: (context) =>
         new Promise<void>((resolve) => {
-          order.push(`site:${context.executor}:start`);
-          closeSite = resolve;
+          order.push(`browser:${context.executor}:start`);
+          closeBrowser = resolve;
         }),
     });
 
     await settle();
-    expect(order).toEqual(["pool:pool:0:start", "site:immediate:start"]);
+    expect(order).toEqual(["pool:pool:0:start", "browser:immediate:start"]);
 
-    closeSite();
+    closeBrowser();
     finishPool();
-    await Promise.all([site.promise, pool.promise]);
+    await Promise.all([browser.promise, pool.promise]);
   });
 
   it("lets open site work run while source queues are paused", async () => {
@@ -514,21 +510,21 @@ describe("TaskScheduler", () => {
         order.push("search:start");
       },
     });
-    const site = scheduler.enqueueSource({
+    const browser = scheduler.enqueueSource({
       kind: "source.openSite",
       title: "Open site",
       priority: "interactive",
       exclusive: true,
       source: { id: "p", name: "Plugin" },
       run: async (context) => {
-        order.push(`site:${context.executor}:start`);
+        order.push(`browser:${context.executor}:start`);
       },
     });
 
-    await site.promise;
+    await browser.promise;
     await settle();
 
-    expect(order).toEqual(["site:immediate:start"]);
+    expect(order).toEqual(["browser:immediate:start"]);
     expect(scheduler.getTask(search.id)?.status).toBe("queued");
   });
 
@@ -654,11 +650,7 @@ describe("TaskScheduler", () => {
         kind: "chapter.download",
         title: `Background ${sourceId}`,
         priority: "background",
-        source: {
-          id: sourceId,
-          name: sourceId.toUpperCase(),
-          site: `https://source-${sourceId}.test`,
-        },
+        source: { id: sourceId, name: sourceId.toUpperCase() },
         run: (context) =>
           new Promise<void>((resolve) => {
             order.push(`${sourceId}:${context.executor}:start`);

@@ -58,8 +58,6 @@ export interface SourcePage {
 export interface PluginItem {
   id: string;
   name: string;
-  /** Canonical URL, e.g. "https://boxnovel.com". */
-  site: string;
   /** ISO 639 language code, e.g. "en", "ko", "zh". */
   lang: string;
   version: string;
@@ -90,6 +88,8 @@ export interface Plugin extends PluginItem {
   pluginInputs?: PluginInputSchema;
   /** Backward-compatible alias for upstream plugin setting declarations. */
   pluginSettings?: PluginInputSchema | Record<string, unknown>;
+  /** Runtime base URL used by the host for source navigation and URL fallback. */
+  getBaseUrl: () => string;
   popularNovels: (
     pageNo: number,
     options?: PluginPopularOptions,

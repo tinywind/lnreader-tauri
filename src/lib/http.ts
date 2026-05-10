@@ -35,6 +35,8 @@ export interface HttpInit {
   signal?: AbortSignal;
 }
 
+export type ContextUrlProvider = string | (() => string);
+
 interface FetchInitWire {
   method?: string;
   headers?: Record<string, string>;
@@ -60,6 +62,12 @@ interface AppFetchSendResult {
 
 const EMPTY_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
 const REQUEST_CANCELLED_ERROR = "Request cancelled";
+
+function resolveContextUrl(
+  contextUrl: ContextUrlProvider | undefined,
+): string | undefined {
+  return typeof contextUrl === "function" ? contextUrl() : contextUrl;
+}
 
 function requestAbortedError(): DOMException {
   return new DOMException(REQUEST_CANCELLED_ERROR, "AbortError");
@@ -395,28 +403,28 @@ export async function pluginFetchText(
 }
 
 export function createPluginFetch(
-  contextUrl: string,
+  contextUrl: ContextUrlProvider,
   sourceId?: string,
   scraperExecutor?: ScraperExecutorId,
 ): (url: string, init?: HttpInit) => Promise<Response> {
   return (url, init = {}) =>
     pluginFetch(url, {
       ...init,
-      contextUrl: init.contextUrl ?? contextUrl,
+      contextUrl: init.contextUrl ?? resolveContextUrl(contextUrl),
       sourceId: init.sourceId ?? sourceId,
       scraperExecutor: init.scraperExecutor ?? scraperExecutor,
     });
 }
 
 export function createPluginFetchText(
-  contextUrl: string,
+  contextUrl: ContextUrlProvider,
   sourceId?: string,
   scraperExecutor?: ScraperExecutorId,
 ): (url: string, init?: HttpInit) => Promise<string> {
   return (url, init = {}) =>
     pluginFetchText(url, {
       ...init,
-      contextUrl: init.contextUrl ?? contextUrl,
+      contextUrl: init.contextUrl ?? resolveContextUrl(contextUrl),
       sourceId: init.sourceId ?? sourceId,
       scraperExecutor: init.scraperExecutor ?? scraperExecutor,
     });
@@ -458,7 +466,7 @@ export function pluginFetchShim(
 }
 
 export function createPluginFetchShim(
-  contextUrl?: string,
+  contextUrl?: ContextUrlProvider,
   sourceId?: string,
   scraperExecutor?: ScraperExecutorId,
 ): (
@@ -484,7 +492,7 @@ export function createPluginFetchShim(
       method: pluginInit?.method,
       headers: normalizeHeaders(pluginInit?.headers),
       body: pluginInit?.body,
-      contextUrl: pluginInit?.contextUrl ?? contextUrl,
+      contextUrl: pluginInit?.contextUrl ?? resolveContextUrl(contextUrl),
       sourceId: pluginInit?.sourceId ?? sourceId,
       scraperExecutor: pluginInit?.scraperExecutor ?? scraperExecutor,
       timeoutMs: pluginInit?.timeoutMs,

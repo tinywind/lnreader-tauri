@@ -14,6 +14,7 @@ import {
   clearChapterMedia,
   pruneChapterMedia,
 } from "../chapter-media";
+import { getPluginBaseUrl } from "../plugins/base-url";
 import { pluginManager } from "../plugins/manager";
 import type { Plugin } from "../plugins/types";
 import { isTauriRuntime } from "../tauri-runtime";
@@ -110,7 +111,7 @@ function absolutePluginUrl(plugin: Plugin, path: string): string | null {
     try {
       candidates.push(plugin.resolveUrl(path, false));
     } catch {
-      // Fall back to the opaque path and source site below.
+      // Fall back to the opaque path and source base URL below.
     }
   }
   candidates.push(path);
@@ -120,7 +121,7 @@ function absolutePluginUrl(plugin: Plugin, path: string): string | null {
       return new URL(candidate).href;
     } catch {
       try {
-        return new URL(candidate, plugin.site).href;
+        return new URL(candidate, getPluginBaseUrl(plugin)).href;
       } catch {
         continue;
       }
@@ -346,14 +347,14 @@ export function enqueueChapterDownload(
 ): TaskHandle<void> {
   const sourceName = job.pluginName ?? job.pluginId;
   const sourcePlugin = pluginManager.getPlugin(job.pluginId);
-  const sourceSite = sourcePlugin?.site;
-  const sourceCooldownKey = sourceBaseDomainKey(sourceSite) ?? job.pluginId;
+  const sourceBaseUrl = sourcePlugin ? getPluginBaseUrl(sourcePlugin) : undefined;
+  const sourceCooldownKey = sourceBaseDomainKey(sourceBaseUrl) ?? job.pluginId;
   persistChapterDownloadJob(job);
   const handle = taskScheduler.enqueueSource<void>({
     kind: "chapter.download",
     priority: job.priority ?? "background",
     title: job.title,
-    source: { id: job.pluginId, name: sourceName, site: sourceSite },
+    source: { id: job.pluginId, name: sourceName },
     subject: {
       chapterId: job.id,
       chapterName: job.chapterName,

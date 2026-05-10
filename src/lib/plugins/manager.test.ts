@@ -31,7 +31,6 @@ const VALID_ITEM = {
   id: "demo",
   name: "Demo",
   url: "https://example.test/index.js",
-  site: "https://example.test",
   lang: "en",
   version: "1.0.0",
   iconUrl: "https://example.test/icon.png",
@@ -42,7 +41,6 @@ const VALID_PLUGIN_SOURCE = `
     id: "demo",
     name: "Demo",
     url: "https://example.test/index.js",
-    site: "https://example.test",
     lang: "en",
     version: "1.0.0",
     iconUrl: "https://example.test/icon.png",
@@ -50,6 +48,7 @@ const VALID_PLUGIN_SOURCE = `
     parseNovel: () => Promise.resolve({ name: "", path: "", chapters: [] }),
     parseChapter: () => Promise.resolve(""),
     searchNovels: () => Promise.resolve([]),
+    getBaseUrl: () => "https://example.test",
   };
 `;
 
@@ -129,7 +128,7 @@ describe("PluginManager.installPlugin", () => {
     expect(manager.size()).toBe(1);
     expect(manager.getPlugin("demo")).toBe(plugin);
     expect(mockedCreateFetchShim).toHaveBeenCalledWith(
-      VALID_ITEM.site,
+      expect.any(Function),
       VALID_ITEM.id,
       "immediate",
     );
@@ -163,7 +162,7 @@ describe("PluginManager.installPluginFromSource", () => {
     expect(manager.getPlugin("demo")).toBe(plugin);
     expect(mockedCreateFetchShim.mock.calls).toEqual([
       [undefined, undefined, "immediate"],
-      [VALID_ITEM.site, VALID_ITEM.id, "immediate"],
+      [expect.any(Function), VALID_ITEM.id, "immediate"],
     ]);
   });
 
@@ -176,6 +175,19 @@ describe("PluginManager.installPluginFromSource", () => {
 
     await expect(
       manager.installPluginFromSource(missingSearch, "local:broken.js"),
+    ).rejects.toBeInstanceOf(PluginValidationError);
+    expect(manager.has("demo")).toBe(false);
+  });
+
+  it("rejects local sources with an invalid base URL", async () => {
+    const manager = new PluginManager();
+    const emptyBaseUrl = VALID_PLUGIN_SOURCE.replace(
+      '    getBaseUrl: () => "https://example.test",\n',
+      '    getBaseUrl: () => "",\n',
+    );
+
+    await expect(
+      manager.installPluginFromSource(emptyBaseUrl, "local:broken.js"),
     ).rejects.toBeInstanceOf(PluginValidationError);
     expect(manager.has("demo")).toBe(false);
   });

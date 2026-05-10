@@ -23,7 +23,6 @@ plugin object to `module.exports.default`.
 export interface PluginItem {
   id: string;
   name: string;
-  site: string;
   lang: string;
   version: string;
   url: string;
@@ -43,6 +42,7 @@ export interface Plugin extends PluginItem {
   filters?: Filters;
   pluginInputs?: PluginInputSchema;
   pluginSettings?: PluginInputSchema | Record<string, unknown>;
+  getBaseUrl: () => string;
   popularNovels: (
     pageNo: number,
     options?: { showLatestNovels?: boolean; filters?: FilterToValues<Filters> },
@@ -62,6 +62,9 @@ persisting the installed plugin. Local file installs do not have a repository
 index fallback, so uploaded `.js` plugin files that omit repository-only
 metadata are registered with `lang: "local"` and an empty `iconUrl`. They still
 must export the required runtime functions before they can be registered.
+Plugins must provide `getBaseUrl()` and return a non-empty absolute `http` or
+`https` URL. The host uses it for source navigation, URL fallback, fetch
+context, and cooldown grouping.
 
 ## Domain Types
 

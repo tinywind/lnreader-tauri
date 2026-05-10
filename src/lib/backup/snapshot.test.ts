@@ -173,7 +173,6 @@ const REPOSITORY = {
 const INSTALLED_PLUGIN = {
   id: "demo",
   name: "Demo",
-  site: "https://example.test",
   lang: "en",
   version: "1.0.0",
   iconUrl: "https://example.test/icon.png",
@@ -333,7 +332,6 @@ describe("applyBackupSnapshot", () => {
     expect(pluginInsert?.[1]).toEqual([
       "demo",
       "Demo",
-      "https://example.test",
       "en",
       "1.0.0",
       "https://example.test/icon.png",

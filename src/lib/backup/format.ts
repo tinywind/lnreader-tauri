@@ -85,7 +85,6 @@ export interface BackupRepository {
 export interface BackupInstalledPlugin {
   id: string;
   name: string;
-  site: string;
   lang: string;
   version: string;
   iconUrl: string;
@@ -244,7 +243,6 @@ function isInstalledPlugin(value: unknown): value is BackupInstalledPlugin {
   return (
     typeof value.id === "string" &&
     typeof value.name === "string" &&
-    typeof value.site === "string" &&
     typeof value.lang === "string" &&
     typeof value.version === "string" &&
     typeof value.iconUrl === "string" &&

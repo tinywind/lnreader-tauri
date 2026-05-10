@@ -38,7 +38,9 @@ vi.mock("../tauri-runtime", () => ({
   isTauriRuntime: vi.fn(() => false),
 }));
 vi.mock("./scheduler", () => ({
-  sourceBaseDomainKey: vi.fn((site?: string) => (site ? "source.test" : null)),
+  sourceBaseDomainKey: vi.fn((baseUrl?: string) =>
+    baseUrl ? "source.test" : null,
+  ),
   TASK_PAUSE_ABORT_MESSAGE: "Task was paused.",
   taskScheduler: {
     enqueueSource: schedulerMocks.enqueueSource,
@@ -70,7 +72,7 @@ beforeEach(() => {
   const plugin = {
     id: "source-a",
     name: "Source A",
-    site: "https://source.test",
+    getBaseUrl: () => "https://source.test",
     parseChapter: pluginMocks.parseChapter,
   };
   pluginMocks.getPlugin.mockReturnValue(plugin);

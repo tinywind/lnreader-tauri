@@ -35,6 +35,7 @@ import {
   globalSearch,
   type GlobalSearchResult,
 } from "../lib/plugins/global-search";
+import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { pluginManager } from "../lib/plugins/manager";
 import type { NovelItem, Plugin } from "../lib/plugins/types";
@@ -586,7 +587,7 @@ function SearchResultSection({
             <ConsoleChip>{plugin.lang.toUpperCase()}</ConsoleChip>
           </Group>
           <Text size="xs" c="dimmed" truncate>
-            {plugin.site}
+            {getPluginBaseUrl(plugin)}
           </Text>
         </Box>
         <ConsoleStatusDot status={status} label={statusLabel} />
@@ -685,9 +686,10 @@ export function PluginSearchSection({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openSite = (plugin: Plugin) => {
+    const url = getPluginBaseUrl(plugin);
     void enqueueOpenSiteTask(
       plugin,
-      plugin.site,
+      url,
       t("tasks.task.openSite", { source: plugin.name }),
     ).promise.catch(() => undefined);
   };

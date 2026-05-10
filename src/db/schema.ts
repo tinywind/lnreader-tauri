@@ -202,7 +202,6 @@ export const installedPluginTable = sqliteTable(
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
-    site: text("site").notNull(),
     lang: text("lang").notNull(),
     version: text("version").notNull(),
     iconUrl: text("icon_url").notNull(),

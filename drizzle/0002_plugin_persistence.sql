@@ -1,7 +1,6 @@
 CREATE TABLE `installed_plugin` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
-	`site` text NOT NULL,
 	`lang` text NOT NULL,
 	`version` text NOT NULL,
 	`icon_url` text NOT NULL,

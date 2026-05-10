@@ -81,7 +81,6 @@ interface RawCategoryRow {
 interface RawInstalledPluginRow {
   id: string;
   name: string;
-  site: string;
   lang: string;
   version: string;
   iconUrl: string;
@@ -172,7 +171,6 @@ const SELECT_INSTALLED_PLUGINS = `
   SELECT
     id,
     name,
-    site,
     lang,
     version,
     icon_url    AS iconUrl,
@@ -213,8 +211,8 @@ const INSERT_REPOSITORY = `
 
 const INSERT_INSTALLED_PLUGIN = `
   INSERT INTO installed_plugin (
-    id, name, site, lang, version, icon_url, source_url, source_code, installed_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    id, name, lang, version, icon_url, source_url, source_code, installed_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `;
 
 function browserLocalStorage(): Storage | null {
@@ -378,7 +376,6 @@ function toInstalledPlugin(row: RawInstalledPluginRow): BackupInstalledPlugin {
   return {
     id: row.id,
     name: row.name,
-    site: row.site,
     lang: row.lang,
     version: row.version,
     iconUrl: row.iconUrl,
@@ -488,7 +485,6 @@ export async function applyBackupSnapshot(
         await db.execute(INSERT_INSTALLED_PLUGIN, [
           plugin.id,
           plugin.name,
-          plugin.site,
           plugin.lang,
           plugin.version,
           plugin.iconUrl,

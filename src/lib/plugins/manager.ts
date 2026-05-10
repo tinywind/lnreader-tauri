@@ -8,6 +8,7 @@ import {
   createPluginFetchShim,
 } from "../http";
 import type { ScraperExecutorId } from "../tasks/scraper-queue";
+import { getPluginBaseUrl } from "./base-url";
 import { clearPluginInputValues } from "./inputs";
 import { loadPlugin } from "./sandbox";
 import { createShimResolver } from "./shims";
@@ -23,7 +24,6 @@ export class PluginValidationError extends Error {
 const REQUIRED_PLUGIN_METADATA_FIELDS = [
   "id",
   "name",
-  "site",
   "lang",
   "version",
 ] as const;
@@ -33,6 +33,7 @@ const REQUIRED_PLUGIN_METHOD_FIELDS = [
   "parseNovel",
   "parseChapter",
   "searchNovels",
+  "getBaseUrl",
 ] as const;
 
 const LOCAL_PLUGIN_LANGUAGE = "multi";
@@ -83,7 +84,6 @@ function pluginItemFromLocalSource(
   return {
     id: readRequiredPluginString(value.id, "id", sourceUrl),
     name: readRequiredPluginString(value.name, "name", sourceUrl),
-    site: readRequiredPluginString(value.site, "site", sourceUrl),
     lang: readOptionalPluginString(value.lang) ?? LOCAL_PLUGIN_LANGUAGE,
     version: readRequiredPluginString(value.version, "version", sourceUrl),
     url: sourceUrl,
@@ -103,7 +103,6 @@ export function isValidPluginItem(value: unknown): value is PluginItem {
     typeof v.id === "string" &&
     typeof v.name === "string" &&
     typeof v.url === "string" &&
-    typeof v.site === "string" &&
     typeof v.lang === "string" &&
     typeof v.version === "string" &&
     typeof v.iconUrl === "string"
@@ -114,7 +113,6 @@ function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
   const target = plugin as Plugin & Partial<PluginItem>;
   target.id = typeof target.id === "string" ? target.id : item.id;
   target.name = typeof target.name === "string" ? target.name : item.name;
-  target.site = typeof target.site === "string" ? target.site : item.site;
   target.lang = typeof target.lang === "string" ? target.lang : item.lang;
   target.version =
     typeof target.version === "string" ? target.version : item.version;
@@ -128,7 +126,6 @@ function pluginItemFromPlugin(plugin: Plugin, sourceUrl: string): PluginItem {
   return {
     id: plugin.id,
     name: plugin.name,
-    site: plugin.site,
     lang: plugin.lang,
     version: plugin.version,
     iconUrl: plugin.iconUrl,
@@ -185,18 +182,7 @@ export class PluginManager {
    */
   async installPlugin(item: PluginItem): Promise<Plugin> {
     const source = await appFetchText(item.url);
-    const plugin = withPluginMetadata(
-      loadPlugin(source, {
-        resolveRequire: createShimResolver(
-          item.id,
-          item.site,
-          "immediate",
-        ),
-        fetch: createPluginFetchShim(item.site, item.id, "immediate"),
-      }),
-      item,
-    );
-    assertPluginContract(plugin, item.url);
+    const plugin = this.loadRuntimePlugin(source, item, "immediate");
     if (plugin.id !== item.id) {
       throw new PluginValidationError(
         `Plugin id mismatch: repository index says '${item.id}', source says '${plugin.id}'.`,
@@ -230,19 +216,42 @@ export class PluginManager {
       }),
       sourceUrl,
     );
-    const plugin = withPluginMetadata(
+    const plugin = this.loadRuntimePlugin(source, item, "immediate");
+    await this.registerInstalledPlugin(plugin, sourceUrl, source);
+    return plugin;
+  }
+
+  private loadRuntimePlugin(
+    source: string,
+    item: PluginItem,
+    executor: ScraperExecutorId,
+  ): Plugin {
+    let plugin: Plugin | undefined;
+    const baseUrl = () => {
+      if (!plugin) {
+        throw new PluginValidationError(
+          `Plugin '${item.id}' accessed its base URL during module load.`,
+        );
+      }
+      return getPluginBaseUrl(plugin);
+    };
+    plugin = withPluginMetadata(
       loadPlugin(source, {
-        resolveRequire: createShimResolver(
-          item.id,
-          item.site,
-          "immediate",
-        ),
-        fetch: createPluginFetchShim(item.site, item.id, "immediate"),
+        resolveRequire: createShimResolver(item.id, baseUrl, executor),
+        fetch: createPluginFetchShim(baseUrl, item.id, executor),
       }),
       item,
     );
-    assertPluginContract(plugin, sourceUrl);
-    await this.registerInstalledPlugin(plugin, sourceUrl, source);
+    assertPluginContract(plugin, item.url);
+    try {
+      getPluginBaseUrl(plugin);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : `Plugin '${item.id}' returned an invalid base URL.`;
+      throw new PluginValidationError(message);
+    }
     return plugin;
   }
 
@@ -257,15 +266,9 @@ export class PluginManager {
       source,
     });
     this.clearExecutorRuntimes(plugin.id);
-    // Some plugin sources (e.g. Komga) only set `id`/`name`/
-    // `version`/`site` on the loaded instance and rely on the
-    // repository index for `lang`/`iconUrl`. Fall back to the
-    // index entry so runtime lists and the DB UPSERT never see null
-    // for required metadata columns.
     await upsertInstalledPlugin({
       id: plugin.id,
       name: plugin.name,
-      site: plugin.site,
       lang: plugin.lang,
       version: plugin.version,
       iconUrl: plugin.iconUrl,
@@ -304,37 +307,22 @@ export class PluginManager {
     const rows = await listInstalledPlugins();
     for (const row of rows) {
       try {
-        const plugin = withPluginMetadata(
-          loadPlugin(row.sourceCode, {
-            resolveRequire: createShimResolver(
-              row.id,
-              row.site,
-              "immediate",
-            ),
-            fetch: createPluginFetchShim(row.site, row.id, "immediate"),
-          }),
-          {
-            id: row.id,
-            name: row.name,
-            site: row.site,
-            lang: row.lang,
-            version: row.version,
-            iconUrl: row.iconUrl,
-            url: row.sourceUrl,
-          },
+        const item = {
+          id: row.id,
+          name: row.name,
+          lang: row.lang,
+          version: row.version,
+          iconUrl: row.iconUrl,
+          url: row.sourceUrl,
+        };
+        const plugin = this.loadRuntimePlugin(
+          row.sourceCode,
+          item,
+          "immediate",
         );
-        assertPluginContract(plugin, row.sourceUrl);
         this.installed.set(plugin.id, plugin);
         this.installedSources.set(plugin.id, {
-          item: {
-            id: row.id,
-            name: row.name,
-            site: row.site,
-            lang: row.lang,
-            version: row.version,
-            iconUrl: row.iconUrl,
-            url: row.sourceUrl,
-          },
+          item,
           source: row.sourceCode,
         });
       } catch (error) {
@@ -365,22 +353,11 @@ export class PluginManager {
     const installed = this.installedSources.get(id);
     if (!installed) return base;
 
-    const plugin = withPluginMetadata(
-      loadPlugin(installed.source, {
-        resolveRequire: createShimResolver(
-          installed.item.id,
-          installed.item.site,
-          executor,
-        ),
-        fetch: createPluginFetchShim(
-          installed.item.site,
-          installed.item.id,
-          executor,
-        ),
-      }),
+    const plugin = this.loadRuntimePlugin(
+      installed.source,
       installed.item,
+      executor,
     );
-    assertPluginContract(plugin, installed.item.url);
     this.executorRuntimes.set(runtimeKey, plugin);
     return plugin;
   }

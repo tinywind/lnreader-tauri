@@ -66,7 +66,6 @@ function sourceFilterSignature(plugin: Plugin): string {
     iconUrl: plugin.iconUrl,
     lang: plugin.lang,
     name: plugin.name,
-    site: plugin.site,
     url: plugin.url,
     version: plugin.version,
   });

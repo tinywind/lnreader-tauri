@@ -6,8 +6,8 @@
  * Logical source queues protect sites from noisy access patterns:
  * - Keep one queue per source id.
  * - Gate each source with pause, cooldown, backoff, and an active lease.
- * - Dispatch source queues through a base-domain lane so sources sharing a
- *   site do not spread across multiple hidden WebViews.
+ * - Dispatch source queues through a source lane so queued work for one source
+ *   does not spread across multiple hidden WebViews.
  * - Default to one active task per source. Queue order can be changed by the
  *   user, but it must not bypass source rate limits unless a future task
  *   explicitly opts into that policy.
@@ -93,7 +93,6 @@ export type TaskKind = MainLaneTaskKind | SourceTaskKind | ChapterTaskKind;
 export interface TaskSource {
   id: string;
   name: string;
-  site?: string;
 }
 
 export interface TaskSubject {
@@ -289,8 +288,8 @@ function poolExecutorIndex(executorId: ScraperExecutorId): number | null {
   return match ? Number(match[1]) : null;
 }
 
-export function sourceBaseDomainKey(site: string | undefined): string | null {
-  const trimmed = site?.trim();
+export function sourceBaseDomainKey(baseUrl: string | undefined): string | null {
+  const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return null;
   }
@@ -348,7 +347,6 @@ function isAbortError(error: unknown): boolean {
 
 export class TaskScheduler {
   private readonly activeDedupeByKey = new Map<string, string>();
-  private readonly activeSourceTaskIdsByDomain = new Map<string, Set<string>>();
   private readonly activeSourceTaskIdsById = new Map<string, Set<string>>();
   private readonly entries = new Map<string, TaskEntry>();
   private readonly eventListeners = new Set<(event: TaskEvent) => void>();
@@ -373,7 +371,7 @@ export class TaskScheduler {
   private activeImmediateTaskId: string | null = null;
   private activeMainTaskId: string | null = null;
   private readonly activePoolTaskIdsByExecutor = new Map<ScraperExecutorId, string>();
-  private readonly sourceExecutorByDomain = new Map<string, ScraperExecutorId>();
+  private readonly sourceExecutorBySource = new Map<string, ScraperExecutorId>();
   private readonly sourceLastServedAt = new Map<string, number>();
   private snapshot: TaskSnapshot = {
     pausedSourceIds: [],
@@ -826,7 +824,7 @@ export class TaskScheduler {
     if (this.sourceBackgroundConcurrencyFollowsForeground) {
       this.sourceBackgroundConcurrency = nextConcurrency;
     }
-    this.dropDisabledDomainExecutors();
+    this.dropDisabledSourceExecutors();
     this.debug("source foreground concurrency changed", undefined, {
       sourceForegroundConcurrency: nextConcurrency,
       sourceBackgroundConcurrency: this.sourceBackgroundConcurrency,
@@ -913,7 +911,7 @@ export class TaskScheduler {
         const executorId = freeExecutorIds[index]!;
         const next = this.pickSourceTaskFromQueue(sourceId, (entry) => {
           if (shouldUseImmediateExecutor(entry)) return false;
-          if (!this.canUseExecutorForSourceDomain(entry, executorId)) return false;
+          if (!this.canUseExecutorForSource(entry, executorId)) return false;
           if (
             isBackgroundPriority(entry.record.priority) &&
             this.activeBackgroundCount >= this.sourceBackgroundConcurrency
@@ -944,62 +942,62 @@ export class TaskScheduler {
     return index !== null && index < this.sourceForegroundConcurrency;
   }
 
-  private assignedDomainExecutor(
-    domainKey: string,
+  private assignedSourceExecutor(
+    sourceId: string,
   ): ScraperExecutorId | undefined {
-    const executorId = this.sourceExecutorByDomain.get(domainKey);
+    const executorId = this.sourceExecutorBySource.get(sourceId);
     if (!executorId) return undefined;
     if (this.isEnabledPoolExecutor(executorId)) return executorId;
-    this.sourceExecutorByDomain.delete(domainKey);
+    this.sourceExecutorBySource.delete(sourceId);
     return undefined;
   }
 
-  private dropDisabledDomainExecutors(): void {
-    for (const [domainKey, executorId] of this.sourceExecutorByDomain) {
+  private dropDisabledSourceExecutors(): void {
+    for (const [sourceId, executorId] of this.sourceExecutorBySource) {
       if (!this.isEnabledPoolExecutor(executorId)) {
-        this.sourceExecutorByDomain.delete(domainKey);
+        this.sourceExecutorBySource.delete(sourceId);
       }
     }
   }
 
-  private canUseExecutorForSourceDomain(
+  private canUseExecutorForSource(
     entry: TaskEntry,
     executorId: ScraperExecutorId,
   ): boolean {
-    const domainKey = this.sourceDomainKey(entry);
-    if (domainKey) {
-      const assignedExecutor = this.assignedDomainExecutor(domainKey);
+    const sourceId = entry.record.source?.id;
+    if (sourceId) {
+      const assignedExecutor = this.assignedSourceExecutor(sourceId);
       if (assignedExecutor) return assignedExecutor === executorId;
     }
-    return !this.isExecutorReservedForQueuedDomain(executorId, domainKey);
+    return !this.isExecutorReservedForQueuedSource(
+      executorId,
+      sourceId ?? null,
+    );
   }
 
-  private isExecutorReservedForQueuedDomain(
+  private isExecutorReservedForQueuedSource(
     executorId: ScraperExecutorId,
-    candidateDomainKey: string | null,
+    candidateSourceId: string | null,
   ): boolean {
-    for (const [domainKey, assignedExecutor] of this.sourceExecutorByDomain) {
-      if (domainKey === candidateDomainKey) continue;
+    for (const [sourceId, assignedExecutor] of this.sourceExecutorBySource) {
+      if (sourceId === candidateSourceId) continue;
       if (assignedExecutor !== executorId) continue;
       if (!this.isEnabledPoolExecutor(assignedExecutor)) {
-        this.sourceExecutorByDomain.delete(domainKey);
+        this.sourceExecutorBySource.delete(sourceId);
         continue;
       }
-      if (this.hasQueuedSourceDomain(domainKey)) return true;
+      if (this.hasQueuedSource(sourceId)) return true;
     }
     return false;
   }
 
-  private hasQueuedSourceDomain(domainKey: string): boolean {
-    for (const queue of this.sourceQueues.values()) {
-      for (const id of queue) {
-        const entry = this.entries.get(id);
-        if (
-          entry?.record.status === "queued" &&
-          this.sourceDomainKey(entry) === domainKey
-        ) {
-          return true;
-        }
+  private hasQueuedSource(sourceId: string): boolean {
+    const queue = this.sourceQueues.get(sourceId);
+    if (!queue) return false;
+    for (const id of queue) {
+      const entry = this.entries.get(id);
+      if (entry?.record.status === "queued") {
+        return true;
       }
     }
     return false;
@@ -1011,15 +1009,8 @@ export class TaskScheduler {
     const activeIds = this.activeSourceTaskIdsById.get(sourceId) ?? new Set();
     activeIds.add(entry.record.id);
     this.activeSourceTaskIdsById.set(sourceId, activeIds);
-    const domainKey = this.sourceDomainKey(entry);
-    if (domainKey) {
-      const domainActiveIds =
-        this.activeSourceTaskIdsByDomain.get(domainKey) ?? new Set();
-      domainActiveIds.add(entry.record.id);
-      this.activeSourceTaskIdsByDomain.set(domainKey, domainActiveIds);
-      if (executorId !== "immediate" && !this.assignedDomainExecutor(domainKey)) {
-        this.sourceExecutorByDomain.set(domainKey, executorId);
-      }
+    if (executorId !== "immediate" && !this.assignedSourceExecutor(sourceId)) {
+      this.sourceExecutorBySource.set(sourceId, executorId);
     }
     entry.sourceExecutorId = executorId;
     entry.activeReleased = false;
@@ -1110,12 +1101,8 @@ export class TaskScheduler {
     );
   }
 
-  private sourceDomainKey(entry: TaskEntry): string | null {
-    return sourceBaseDomainKey(entry.record.source?.site);
-  }
-
   private sourceFairnessKey(entry: TaskEntry): string | null {
-    return this.sourceDomainKey(entry) ?? entry.record.source?.id ?? null;
+    return entry.record.source?.id ?? null;
   }
 
   private canStartSourceTask(
@@ -1127,10 +1114,7 @@ export class TaskScheduler {
     if (!sourceId) return true;
     const activeIds = this.activeSourceTaskIdsById.get(sourceId);
     if (activeIds && activeIds.size > 0) return false;
-    const domainKey = this.sourceDomainKey(entry);
-    if (!domainKey) return true;
-    const activeDomainIds = this.activeSourceTaskIdsByDomain.get(domainKey);
-    return !activeDomainIds || activeDomainIds.size === 0;
+    return true;
   }
 
   private compareTaskOrder(a: TaskEntry, b: TaskEntry): number {
@@ -1366,19 +1350,11 @@ export class TaskScheduler {
       if (sourceId) {
         const activeIds = this.activeSourceTaskIdsById.get(sourceId);
         activeIds?.delete(entry.record.id);
-        if (activeIds?.size === 0) {
+        const hasActiveSource = (activeIds?.size ?? 0) > 0;
+        if (!hasActiveSource) {
           this.activeSourceTaskIdsById.delete(sourceId);
-        }
-      }
-      const domainKey = this.sourceDomainKey(entry);
-      if (domainKey) {
-        const activeDomainIds = this.activeSourceTaskIdsByDomain.get(domainKey);
-        activeDomainIds?.delete(entry.record.id);
-        const hasActiveDomain = (activeDomainIds?.size ?? 0) > 0;
-        if (!hasActiveDomain) {
-          this.activeSourceTaskIdsByDomain.delete(domainKey);
-          if (!this.hasQueuedSourceDomain(domainKey)) {
-            this.sourceExecutorByDomain.delete(domainKey);
+          if (!this.hasQueuedSource(sourceId)) {
+            this.sourceExecutorBySource.delete(sourceId);
           }
         }
       }

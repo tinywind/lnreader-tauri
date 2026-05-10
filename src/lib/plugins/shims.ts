@@ -5,6 +5,7 @@ import { Parser } from "htmlparser2";
 import { androidWebviewExtract } from "../android-scraper";
 import { getSourceRequestTimeoutMs } from "../../store/browse";
 import {
+  type ContextUrlProvider,
   createPluginFetch,
   createPluginFetchText,
   pluginFetch,
@@ -317,23 +318,23 @@ function makeNamespacedStorage(
  */
 export function createShimResolver(
   pluginId: string,
-  siteUrl?: string,
+  baseUrl?: ContextUrlProvider,
   scraperExecutor: ScraperExecutorId = "immediate",
 ): (id: string) => unknown {
   const prefix = getPluginInputPrefix(pluginId);
   const storage = makeNamespacedStorage(prefix, true);
   const sessionStg = makeNamespacedStorage(prefix, false);
   const pluginInputs = createPluginInputsApi(pluginId);
-  const fetchApi = siteUrl
-    ? createPluginFetch(siteUrl, pluginId, scraperExecutor)
+  const fetchApi = baseUrl
+    ? createPluginFetch(baseUrl, pluginId, scraperExecutor)
     : (url: string, init: HttpInit = {}) =>
         pluginFetch(url, {
           ...init,
           scraperExecutor: init.scraperExecutor ?? scraperExecutor,
           sourceId: init.sourceId ?? pluginId,
         });
-  const fetchText = siteUrl
-    ? createPluginFetchText(siteUrl, pluginId, scraperExecutor)
+  const fetchText = baseUrl
+    ? createPluginFetchText(baseUrl, pluginId, scraperExecutor)
     : (url: string, init: HttpInit = {}) =>
         pluginFetchText(url, {
           ...init,

@@ -10,7 +10,7 @@ import {
 } from "./scheduler";
 
 interface SourceTaskOptions<T> {
-  plugin: Pick<Plugin, "id" | "name" | "site">;
+  plugin: Pick<Plugin, "id" | "name">;
   kind: SourceTaskKind;
   title: string;
   priority?: Exclude<TaskPriority, "background">;
@@ -38,7 +38,7 @@ export function enqueueSourceTask<T>({
     kind,
     priority,
     title,
-    source: { id: plugin.id, name: plugin.name, site: plugin.site },
+    source: { id: plugin.id, name: plugin.name },
     subject: { ...subject, pluginId: plugin.id },
     dedupeKey,
     exclusive,
@@ -47,7 +47,7 @@ export function enqueueSourceTask<T>({
 }
 
 export function enqueueOpenSiteTask(
-  plugin: Pick<Plugin, "id" | "name" | "site">,
+  plugin: Pick<Plugin, "id" | "name">,
   url: string,
   title: string,
 ): TaskHandle<void> {

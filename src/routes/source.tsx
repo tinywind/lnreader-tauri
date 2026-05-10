@@ -34,6 +34,7 @@ import {
 import { IconButton } from "../components/IconButton";
 import { PluginSettingsEditor } from "../components/PluginSettingsEditor";
 import { SearchBar } from "../components/SearchBar";
+import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { importNovelFromSource } from "../lib/plugins/import-novel";
 import { FilterTypes, type Filters } from "../lib/plugins/filterTypes";
 import { pluginManager } from "../lib/plugins/manager";
@@ -310,9 +311,10 @@ export function SourcePage() {
 
   function openPluginSite(): void {
     if (!plugin) return;
+    const url = getPluginBaseUrl(plugin);
     void enqueueOpenSiteTask(
       plugin,
-      plugin.site,
+      url,
       t("tasks.task.openSite", { source: plugin.name }),
     ).promise.catch(() => undefined);
   }
@@ -418,7 +420,7 @@ export function SourcePage() {
               openPluginSite();
             }}
           >
-            {plugin.site}
+            {getPluginBaseUrl(plugin)}
           </Anchor>
         }
         actions={
@@ -549,7 +551,7 @@ export function SourcePage() {
                       openPluginSite();
                     }}
                   >
-                    {plugin.site}
+                    {getPluginBaseUrl(plugin)}
                   </Anchor>
                 </Box>
               </Stack>

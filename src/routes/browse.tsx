@@ -53,6 +53,7 @@ import { isTauriRuntime } from "../lib/tauri-runtime";
 import { enqueueMainTask } from "../lib/tasks/main-tasks";
 import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { PluginSearchSection } from "./global-search";
+import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { isValidPluginItem, pluginManager } from "../lib/plugins/manager";
 import { clearSourceFilterStorage } from "../lib/plugins/source-filter-storage";
 import type { Plugin, PluginItem } from "../lib/plugins/types";
@@ -947,13 +948,14 @@ interface InstalledSectionProps {
 }
 
 /**
- * Open the plugin's site in the in-app browser overlay. The
+ * Open the plugin's base URL in the in-app browser overlay. The
  * persistent scraper WebView owns browser cache and cookies, and
  * plugin-owned fetches prepare this origin before requesting data.
  */
-function openSite(plugin: Pick<Plugin, "id" | "name" | "site">, title: string): void {
-  console.debug("[site-browser] open site clicked", { url: plugin.site });
-  void enqueueOpenSiteTask(plugin, plugin.site, title).promise.catch(
+function openSite(plugin: Plugin, title: string): void {
+  const url = getPluginBaseUrl(plugin);
+  console.debug("[site-browser] open site clicked", { url });
+  void enqueueOpenSiteTask(plugin, url, title).promise.catch(
     () => undefined,
   );
 }
@@ -1027,7 +1029,7 @@ function PluginRow({
             }}
             title={t("common.openSiteInApp")}
           >
-            {plugin.site}
+            {getPluginBaseUrl(plugin)}
           </Anchor>
         </Box>
         <Group className="lnr-action-strip" gap={4} wrap="nowrap" justify="flex-end">
@@ -1274,35 +1276,11 @@ function AvailablePluginRow({
               </span>
             ) : null}
           </Group>
-          <Anchor
-            size="xs"
-            c="dimmed"
-            truncate
-            onClick={(event) => {
-              event.preventDefault();
-              openSite(item, t("tasks.task.openSite", { source: item.name }));
-            }}
-            title={t("common.openSiteInApp")}
-          >
-            {item.site}
-          </Anchor>
           <Text size="xs" c="dimmed" truncate>
             {t("browse.repositoryLabel", { url: repoUrl })}
           </Text>
         </Box>
         <Group className="lnr-action-strip" gap={4} wrap="nowrap" justify="flex-end">
-          <IconButton
-            label={`${t("common.openSite")}: ${item.name}`}
-            size="lg"
-            variant="default"
-            disabled={installing}
-            title={t("common.openSite")}
-            onClick={() =>
-              openSite(item, t("tasks.task.openSite", { source: item.name }))
-            }
-          >
-            <ExternalLinkGlyph />
-          </IconButton>
           <IconButton
             label={`${isInstalled ? t("common.installed") : t("common.install")}: ${item.name}`}
             size="lg"

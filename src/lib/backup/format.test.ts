@@ -67,7 +67,6 @@ const VALID_MANIFEST: BackupManifest = {
     {
       id: "demo",
       name: "Demo",
-      site: "https://example.test",
       lang: "en",
       version: "1.0.0",
       iconUrl: "https://example.test/icon.png",
