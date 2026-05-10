@@ -37,8 +37,10 @@ jobs:
       matrix:
         include:
           - platform: windows-x64
+            artifact_platform: x64
             rust-target: x86_64-pc-windows-msvc
           - platform: windows-arm64
+            artifact_platform: arm64
             rust-target: aarch64-pc-windows-msvc
 
     steps:
@@ -84,6 +86,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $platform = "${{ matrix.platform }}"
+          $artifactPlatform = "${{ matrix.artifact_platform }}"
           $target = "${{ matrix.rust-target }}"
           $bundleRoot = "src-tauri/target/$target/release/bundle"
           $artifactDir = $env:WINDOWS_BUNDLE_ARTIFACT_DIR
@@ -125,7 +128,8 @@ jobs:
 
           foreach ($type in @("msi", "nsis")) {
             $bundleFile = $byType[$type]
-            $destination = Join-Path $artifactDir "norea-$platform-$type-$($bundleFile.Name)"
+            $extension = $bundleFile.Extension.TrimStart(".")
+            $destination = Join-Path $artifactDir "norea-$artifactPlatform.$extension"
             Copy-Item -LiteralPath $bundleFile.FullName -Destination $destination
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
             Add-Content -Path $checksumFile -Value "$hash  $(Split-Path -Leaf $destination)"
@@ -134,8 +138,8 @@ jobs:
       - name: Upload Windows MSI
         uses: actions/upload-artifact@v7
         with:
-          name: norea-${{ matrix.platform }}-msi
-          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-msi-*.msi
+          name: norea-${{ matrix.artifact_platform }}.msi
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/norea-*.msi
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -144,8 +148,8 @@ jobs:
       - name: Upload Windows NSIS installer
         uses: actions/upload-artifact@v7
         with:
-          name: norea-${{ matrix.platform }}-nsis
-          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-nsis-*.exe
+          name: norea-${{ matrix.artifact_platform }}.exe
+          path: ${{ env.WINDOWS_BUNDLE_ARTIFACT_DIR }}/norea-*.exe
           if-no-files-found: error
           archive: false
           compression-level: 0

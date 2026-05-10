@@ -137,7 +137,8 @@ jobs:
             fi
 
             local source_file="${files[0]}"
-            local destination="$artifact_dir/norea-$platform-$type-$(basename "$source_file")"
+            local extension="${source_file##*.}"
+            local destination="$artifact_dir/norea-$platform.$extension"
             cp "$source_file" "$destination"
             (cd "$artifact_dir" && sha256sum "$(basename "$destination")") >> "$artifact_dir/SHA256SUMS-$platform.txt"
           }
@@ -150,8 +151,8 @@ jobs:
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v7
         with:
-          name: norea-${{ matrix.platform }}-appimage
-          path: ${{ env.LINUX_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-appimage-*.AppImage
+          name: norea-${{ matrix.platform }}.AppImage
+          path: ${{ env.LINUX_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}.AppImage
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -160,8 +161,8 @@ jobs:
       - name: Upload Linux deb package
         uses: actions/upload-artifact@v7
         with:
-          name: norea-${{ matrix.platform }}-deb
-          path: ${{ env.LINUX_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-deb-*.deb
+          name: norea-${{ matrix.platform }}.deb
+          path: ${{ env.LINUX_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}.deb
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -170,8 +171,8 @@ jobs:
       - name: Upload Linux rpm package
         uses: actions/upload-artifact@v7
         with:
-          name: norea-${{ matrix.platform }}-rpm
-          path: ${{ env.LINUX_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}-rpm-*.rpm
+          name: norea-${{ matrix.platform }}.rpm
+          path: ${{ env.LINUX_BUNDLE_ARTIFACT_DIR }}/norea-${{ matrix.platform }}.rpm
           if-no-files-found: error
           archive: false
           compression-level: 0

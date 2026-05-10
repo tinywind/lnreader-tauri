@@ -167,7 +167,7 @@ jobs:
             fi
 
             variant="$(basename "$(dirname "$(dirname "$release_apk")")")"
-            collected_apk="$RELEASE_SIGNED_APK_DIR/norea-${variant}-$(basename "$release_apk")"
+            collected_apk="$RELEASE_SIGNED_APK_DIR/norea-${variant}.apk"
 
             "$apksigner" verify --verbose "$release_apk"
             cp "$release_apk" "$collected_apk"
@@ -177,8 +177,8 @@ jobs:
       - name: Upload arm64 signed release APK
         uses: actions/upload-artifact@v7
         with:
-          name: norea-arm64-signed-release-apk
-          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/norea-arm64-*.apk
+          name: norea-arm64.apk
+          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/norea-arm64.apk
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -187,8 +187,8 @@ jobs:
       - name: Upload x86_64 signed release APK
         uses: actions/upload-artifact@v7
         with:
-          name: norea-x86_64-signed-release-apk
-          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/norea-x86_64-*.apk
+          name: norea-x86_64.apk
+          path: ${{ env.RELEASE_SIGNED_APK_DIR }}/norea-x86_64.apk
           if-no-files-found: error
           archive: false
           compression-level: 0
@@ -197,7 +197,7 @@ jobs:
       - name: Upload signed release APK checksums
         uses: actions/upload-artifact@v7
         with:
-          name: norea-signed-release-apk-checksums
+          name: norea-android-checksums
           path: ${{ env.RELEASE_SIGNED_APK_DIR }}/SHA256SUMS.txt
           if-no-files-found: error
           archive: false

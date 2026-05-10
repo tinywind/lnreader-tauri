@@ -272,9 +272,7 @@ function selectWorkflowArtifact(
 ): WorkflowArtifactSelection | null {
   for (const preference of assetPreferences(platform)) {
     const artifact = artifacts.find(
-      (item) =>
-        !item.expired &&
-        item.name.toLowerCase().includes(preference.token.toLowerCase()),
+      (item) => !item.expired && matchesPreference(item.name, preference),
     );
     if (artifact) {
       return {
@@ -289,25 +287,25 @@ function assetPreferences(platform: string): AssetPreference[] {
   switch (platform) {
     case "windows-x64":
       return [
-        { token: "norea-windows-x64-nsis", extensions: [".exe"] },
-        { token: "norea-windows-x64-msi", extensions: [".msi"] },
+        { token: "norea-x64", extensions: [".exe"] },
+        { token: "norea-x64", extensions: [".msi"] },
       ];
     case "windows-arm64":
       return [
-        { token: "norea-windows-arm64-nsis", extensions: [".exe"] },
-        { token: "norea-windows-arm64-msi", extensions: [".msi"] },
+        { token: "norea-arm64", extensions: [".exe"] },
+        { token: "norea-arm64", extensions: [".msi"] },
       ];
     case "linux-x64":
       return [
-        { token: "norea-linux-x64-appimage", extensions: [".appimage"] },
-        { token: "norea-linux-x64-deb", extensions: [".deb"] },
-        { token: "norea-linux-x64-rpm", extensions: [".rpm"] },
+        { token: "norea-linux-x64", extensions: [".appimage"] },
+        { token: "norea-linux-x64", extensions: [".deb"] },
+        { token: "norea-linux-x64", extensions: [".rpm"] },
       ];
     case "linux-arm64":
       return [
-        { token: "norea-linux-arm64-appimage", extensions: [".appimage"] },
-        { token: "norea-linux-arm64-deb", extensions: [".deb"] },
-        { token: "norea-linux-arm64-rpm", extensions: [".rpm"] },
+        { token: "norea-linux-arm64", extensions: [".appimage"] },
+        { token: "norea-linux-arm64", extensions: [".deb"] },
+        { token: "norea-linux-arm64", extensions: [".rpm"] },
       ];
     case "android-arm64":
       return [{ token: "norea-arm64", extensions: [".apk"] }];
