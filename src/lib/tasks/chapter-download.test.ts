@@ -122,6 +122,7 @@ describe("enqueueChapterDownload", () => {
   it("keeps chapter media downloads on the assigned scraper executor", async () => {
     pluginMocks.parseChapter.mockResolvedValueOnce(`<img src="/page.png">`);
     vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: `<img src="norea-media://chapter/7/old/page.png">`,
       contentType: "html",
       id: 7,
     } as never);
@@ -145,6 +146,7 @@ describe("enqueueChapterDownload", () => {
 
     expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
       expect.objectContaining({
+        previousHtml: `<img src="norea-media://chapter/7/old/page.png">`,
         scraperExecutor: "pool:1",
         sourceId: "source-a",
       }),

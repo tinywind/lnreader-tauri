@@ -219,6 +219,62 @@ describe("cacheHtmlChapterMedia", () => {
     expect(htmlUpdates[2]).toContain("page-1.png");
     expect(htmlUpdates[2]).toContain("clip-2.png");
   });
+
+  it("reuses stored local media when resuming a partial HTML download", async () => {
+    pluginFetchMock.mockImplementation(async () => {
+      return new Response(new Uint8Array([4, 5]), {
+        headers: { "content-type": "image/png" },
+        status: 200,
+        statusText: "OK",
+      });
+    });
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_total_size") return 5;
+      const input = args as {
+        cacheKey: string;
+        chapterId: number;
+        fileName: string;
+      };
+      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+    });
+
+    const result = await cacheHtmlChapterMedia({
+      baseUrl: "https://source.test/chapter/1",
+      chapterId: 42,
+      html: `<img src="/page-1.png"><img src="/page-2.png">`,
+      previousHtml: [
+        `<img src="norea-media://chapter/42/old/page-1.png">`,
+        `<img src="">`,
+      ].join(""),
+    });
+
+    expect(pluginFetchMock).toHaveBeenCalledTimes(1);
+    expect(pluginFetchMock).toHaveBeenCalledWith(
+      "https://source.test/page-2.png",
+      {
+        contextUrl: "https://source.test/chapter/1",
+        signal: undefined,
+      },
+    );
+    expect(invokeMock).toHaveBeenCalledWith(
+      "chapter_media_store",
+      expect.objectContaining({
+        cacheKey: "old",
+        fileName: "page-2-2.png",
+      }),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("chapter_media_total_size", {
+      mediaSrcs: [
+        "norea-media://chapter/42/old/page-1.png",
+        "norea-media://chapter/42/old/page-2-2.png",
+      ],
+    });
+    expect(result.cacheKey).toBe("old");
+    expect(result.mediaBytes).toBe(5);
+    expect(result.html).toContain("norea-media://chapter/42/old/page-1.png");
+    expect(result.html).toContain("norea-media://chapter/42/old/page-2-2.png");
+    expect(result.html).not.toContain("data-norea-media-source-url");
+  });
 });
 
 describe("stored chapter media byte stats", () => {

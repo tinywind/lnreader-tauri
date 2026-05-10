@@ -6,6 +6,10 @@ import { isTauriRuntime } from "./tauri-runtime";
 const LOCAL_MEDIA_SRC_PREFIX = "norea-media://chapter/";
 const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
   /norea-media:\/\/chapter\/\d+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/g;
+const LOCAL_CHAPTER_MEDIA_SRC_DETAIL_PATTERN =
+  /^norea-media:\/\/chapter\/(\d+)\/([A-Za-z0-9._-]+)\/[A-Za-z0-9._-]+$/;
+const MEDIA_SOURCE_URL_ATTRIBUTE = "data-norea-media-source-url";
+const MEDIA_SRCSET_SOURCE_ATTRIBUTE = "data-norea-media-srcset-source";
 const MEDIA_SRC_ATTRIBUTES = [
   "src",
   "data-src",
@@ -31,6 +35,7 @@ interface CacheChapterMediaOptions {
   html: string;
   onHtmlUpdate?: (html: string) => Promise<void> | void;
   onProgress?: (progress: { current: number; total: number }) => void;
+  previousHtml?: string | null;
   scraperExecutor?: ScraperExecutorId;
   signal?: AbortSignal;
   sourceId?: string;
@@ -63,6 +68,11 @@ interface SrcsetCandidate {
 interface MediaSrcsetTarget {
   candidates: SrcsetCandidate[];
   element: Element;
+}
+
+interface ExistingMediaSlots {
+  srcSlots: Array<string | null>;
+  srcsetSlots: string[][];
 }
 
 function isSkippableMediaSource(src: string): boolean {
@@ -222,6 +232,20 @@ function addUniqueUrl(urls: string[], url: string): void {
   }
 }
 
+function localMediaSrc(value: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed?.startsWith(LOCAL_MEDIA_SRC_PREFIX) ? trimmed : null;
+}
+
+function cacheKeyFromLocalMediaSrc(
+  src: string,
+  chapterId: number,
+): string | null {
+  const match = src.match(LOCAL_CHAPTER_MEDIA_SRC_DETAIL_PATTERN);
+  if (!match || Number(match[1]) !== chapterId) return null;
+  return match[2] ?? null;
+}
+
 function collectMediaTargets(
   root: DocumentFragment,
   baseUrl: string,
@@ -262,6 +286,44 @@ function collectMediaTargets(
   return { srcTargets, srcsetTargets, urls };
 }
 
+function collectExistingMediaSlots(root: DocumentFragment): ExistingMediaSlots {
+  const srcSlots: Array<string | null> = [];
+  const srcsetSlots: string[][] = [];
+
+  for (const element of root.querySelectorAll<Element>(MEDIA_SOURCE_SELECTOR)) {
+    for (const attribute of MEDIA_SRC_ATTRIBUTES) {
+      const rawSource = element.getAttribute(attribute);
+      if (rawSource === null) continue;
+      srcSlots.push(localMediaSrc(rawSource));
+    }
+
+    const rawSrcset = element.getAttribute("srcset");
+    if (rawSrcset === null) continue;
+    srcsetSlots.push(
+      parseSrcset(rawSrcset)
+        .map((candidate) => localMediaSrc(candidate.source))
+        .filter((src): src is string => src !== null),
+    );
+  }
+
+  return { srcSlots, srcsetSlots };
+}
+
+function tagCollectedMediaTargets(
+  srcTargets: MediaSrcTarget[],
+  srcsetTargets: MediaSrcsetTarget[],
+): void {
+  for (const target of srcTargets) {
+    target.element.setAttribute(MEDIA_SOURCE_URL_ATTRIBUTE, target.url);
+  }
+  for (const target of srcsetTargets) {
+    target.element.setAttribute(
+      MEDIA_SRCSET_SOURCE_ATTRIBUTE,
+      formatSrcset(target.candidates),
+    );
+  }
+}
+
 function blankCollectedMediaTargets(
   srcTargets: MediaSrcTarget[],
   srcsetTargets: MediaSrcsetTarget[],
@@ -272,6 +334,157 @@ function blankCollectedMediaTargets(
   for (const target of srcsetTargets) {
     target.element.setAttribute("srcset", "");
   }
+}
+
+function clearMediaSourceMetadata(root: DocumentFragment): void {
+  for (const element of root.querySelectorAll<Element>(
+    `[${MEDIA_SOURCE_URL_ATTRIBUTE}],[${MEDIA_SRCSET_SOURCE_ATTRIBUTE}]`,
+  )) {
+    element.removeAttribute(MEDIA_SOURCE_URL_ATTRIBUTE);
+    element.removeAttribute(MEDIA_SRCSET_SOURCE_ATTRIBUTE);
+  }
+}
+
+function collectMetadataReusableMediaSources(
+  root: DocumentFragment,
+  baseUrl: string,
+  urls: Set<string>,
+): Map<string, string> {
+  const reusable = new Map<string, string>();
+
+  for (const element of root.querySelectorAll<Element>(
+    `[${MEDIA_SOURCE_URL_ATTRIBUTE}]`,
+  )) {
+    const sourceUrl = absoluteMediaUrl(
+      element.getAttribute(MEDIA_SOURCE_URL_ATTRIBUTE) ?? "",
+      baseUrl,
+    );
+    const src = localMediaSrc(element.getAttribute("src"));
+    if (sourceUrl && src && urls.has(sourceUrl)) {
+      reusable.set(sourceUrl, src);
+    }
+  }
+
+  for (const element of root.querySelectorAll<Element>(
+    `[${MEDIA_SRCSET_SOURCE_ATTRIBUTE}]`,
+  )) {
+    const sourceCandidates = parseSrcset(
+      element.getAttribute(MEDIA_SRCSET_SOURCE_ATTRIBUTE) ?? "",
+    );
+    const localCandidates = parseSrcset(element.getAttribute("srcset") ?? "")
+      .map((candidate) => localMediaSrc(candidate.source))
+      .filter((src): src is string => src !== null);
+    for (
+      let index = 0;
+      index < sourceCandidates.length && index < localCandidates.length;
+      index += 1
+    ) {
+      const sourceUrl = absoluteMediaUrl(
+        sourceCandidates[index]!.source,
+        baseUrl,
+      );
+      if (sourceUrl && urls.has(sourceUrl)) {
+        reusable.set(sourceUrl, localCandidates[index]!);
+      }
+    }
+  }
+
+  return reusable;
+}
+
+function collectSlotReusableMediaSources({
+  baseUrl,
+  root,
+  srcTargets,
+  srcsetTargets,
+}: {
+  baseUrl: string;
+  root: DocumentFragment;
+  srcTargets: MediaSrcTarget[];
+  srcsetTargets: MediaSrcsetTarget[];
+}): Map<string, string> {
+  const reusable = new Map<string, string>();
+  const existingSlots = collectExistingMediaSlots(root);
+
+  srcTargets.forEach((target, index) => {
+    const src = existingSlots.srcSlots[index];
+    if (src) reusable.set(target.url, src);
+  });
+
+  srcsetTargets.forEach((target, index) => {
+    const localCandidates = existingSlots.srcsetSlots[index] ?? [];
+    for (
+      let candidateIndex = 0;
+      candidateIndex < target.candidates.length &&
+      candidateIndex < localCandidates.length;
+      candidateIndex += 1
+    ) {
+      const sourceUrl = absoluteMediaUrl(
+        target.candidates[candidateIndex]!.source,
+        baseUrl,
+      );
+      const src = localCandidates[candidateIndex];
+      if (sourceUrl && src) reusable.set(sourceUrl, src);
+    }
+  });
+
+  return reusable;
+}
+
+function collectReusableMediaSources({
+  baseUrl,
+  chapterId,
+  previousHtml,
+  srcTargets,
+  srcsetTargets,
+  urls,
+}: {
+  baseUrl: string;
+  chapterId: number;
+  previousHtml: string | null | undefined;
+  srcTargets: MediaSrcTarget[];
+  srcsetTargets: MediaSrcsetTarget[];
+  urls: string[];
+}): Map<string, string> {
+  if (!previousHtml?.includes(LOCAL_MEDIA_SRC_PREFIX)) {
+    return new Map();
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = previousHtml;
+  const urlSet = new Set(urls);
+  const reusable = collectMetadataReusableMediaSources(
+    template.content,
+    baseUrl,
+    urlSet,
+  );
+  const slotReusable = collectSlotReusableMediaSources({
+    baseUrl,
+    root: template.content,
+    srcTargets,
+    srcsetTargets,
+  });
+  for (const [url, src] of slotReusable) {
+    if (!reusable.has(url)) reusable.set(url, src);
+  }
+
+  for (const [url, src] of reusable) {
+    if (!urlSet.has(url) || !cacheKeyFromLocalMediaSrc(src, chapterId)) {
+      reusable.delete(url);
+    }
+  }
+  return reusable;
+}
+
+function chooseCacheKey(
+  chapterId: number,
+  reusableSources: Iterable<string>,
+): string {
+  for (const src of reusableSources) {
+    const cacheKey = cacheKeyFromLocalMediaSrc(src, chapterId);
+    if (cacheKey) return cacheKey;
+  }
+  return makeCacheKey();
 }
 
 function applyLocalMediaSource({
@@ -326,6 +539,7 @@ export async function cacheHtmlChapterMedia({
   html,
   onHtmlUpdate,
   onProgress,
+  previousHtml,
   scraperExecutor,
   signal,
   sourceId,
@@ -345,15 +559,38 @@ export async function cacheHtmlChapterMedia({
     return { cacheKey: null, html: template.innerHTML, mediaBytes: 0 };
   }
 
-  const cacheKey = makeCacheKey();
-  const localSources = new Map<string, string>();
+  const reusableSources = collectReusableMediaSources({
+    baseUrl,
+    chapterId,
+    previousHtml,
+    srcTargets,
+    srcsetTargets,
+    urls,
+  });
+  const cacheKey = chooseCacheKey(chapterId, reusableSources.values());
+  const localSources = new Map<string, string>(reusableSources);
   let mediaBytes = 0;
+  tagCollectedMediaTargets(srcTargets, srcsetTargets);
   blankCollectedMediaTargets(srcTargets, srcsetTargets);
+  for (const [url, src] of localSources) {
+    applyLocalMediaSource({
+      baseUrl,
+      localSources,
+      src,
+      srcTargets,
+      srcsetTargets,
+      url,
+    });
+  }
   await emitHtmlUpdate(onHtmlUpdate, template);
 
   for (let index = 0; index < urls.length; index += 1) {
     throwIfAborted(signal);
     const url = urls[index]!;
+    if (localSources.has(url)) {
+      onProgress?.({ current: index + 1, total: urls.length });
+      continue;
+    }
     const response = await pluginFetch(url, {
       contextUrl: contextUrl ?? baseUrl,
       ...(scraperExecutor ? { scraperExecutor } : {}),
@@ -391,6 +628,11 @@ export async function cacheHtmlChapterMedia({
     await emitHtmlUpdate(onHtmlUpdate, template);
     onProgress?.({ current: index + 1, total: urls.length });
   }
+
+  if (reusableSources.size > 0) {
+    mediaBytes = await getStoredChapterMediaBytes(template.innerHTML);
+  }
+  clearMediaSourceMetadata(template.content);
 
   return {
     cacheKey,

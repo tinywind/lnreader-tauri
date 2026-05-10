@@ -1126,40 +1126,163 @@ async fn document_is_ready(scraper: &ScraperWebview) -> bool {
 }
 
 #[cfg(desktop)]
-async fn prepare_fetch_context(
+async fn scraper_bridge_is_ready(scraper: &ScraperWebview) -> bool {
+    let ready = eval_json::<bool>(
+        scraper,
+        r#"(function () {
+  return !!(window.ReactNativeWebView &&
+    typeof window.ReactNativeWebView.postMessage === "function");
+})()"#
+            .to_string(),
+    )
+    .await;
+    ready.unwrap_or(false)
+}
+
+#[cfg(desktop)]
+async fn wait_for_scraper_bridge_ready(
+    scraper: &ScraperWebview,
+    operation: &str,
+    timeout: Duration,
+) -> bool {
+    let started = Instant::now();
+    let poll_interval = Duration::from_millis(100);
+
+    while started.elapsed() < timeout {
+        if scraper_bridge_is_ready(scraper).await {
+            return true;
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+
+    log::debug!("[scraper:{operation}] bridge readiness wait timed out");
+    false
+}
+
+#[cfg(desktop)]
+async fn document_has_browser_challenge(scraper: &ScraperWebview) -> bool {
+    let challenged = eval_json::<bool>(
+        scraper,
+        r##"(function () {
+  var title = (document.title || "").toLowerCase();
+  var body = ((document.body && document.body.innerText) || "").toLowerCase();
+  if (body.length > 12000) body = body.slice(0, 12000);
+  var selectors = [
+    "#challenge-running",
+    "#cf-challenge-running",
+    ".cf-browser-verification",
+    ".cf-challenge",
+    ".cf-turnstile",
+    "input[name=\"cf-turnstile-response\"]",
+    "iframe[src*=\"challenges.cloudflare.com\"]"
+  ];
+  for (var i = 0; i < selectors.length; i += 1) {
+    if (document.querySelector(selectors[i])) return true;
+  }
+  return title.indexOf("just a moment") !== -1 ||
+    title.indexOf("attention required") !== -1 ||
+    body.indexOf("checking if the site connection is secure") !== -1 ||
+    body.indexOf("verify you are human") !== -1 ||
+    body.indexOf("enable javascript and cookies to continue") !== -1 ||
+    body.indexOf("cf-chl") !== -1;
+})()"##
+            .to_string(),
+    )
+    .await;
+    challenged.unwrap_or(false)
+}
+
+#[cfg(desktop)]
+fn looks_like_browser_challenge_extract_result(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("cloudflare challenge")
+        || lower.contains("\"kind\":\"cf\"")
+        || lower.contains("\"kind\": \"cf\"")
+}
+
+#[cfg(desktop)]
+async fn wait_for_browser_challenge_to_clear(
+    scraper: &ScraperWebview,
+    operation: &str,
+    url: &str,
+    timeout: Duration,
+) -> bool {
+    let started = Instant::now();
+    let poll_interval = Duration::from_millis(250);
+    let mut challenge_logged = false;
+
+    while started.elapsed() < timeout {
+        tokio::time::sleep(poll_interval).await;
+        if !document_is_ready(scraper).await {
+            continue;
+        }
+        if document_has_browser_challenge(scraper).await {
+            if !challenge_logged {
+                log::debug!(
+                    "[scraper:{operation}] waiting browser challenge before retry url={url}"
+                );
+                challenge_logged = true;
+            }
+            continue;
+        }
+        return true;
+    }
+
+    false
+}
+
+#[cfg(desktop)]
+async fn prepare_scraper_context(
     scraper: &ScraperWebview,
     context_url: Option<&str>,
+    operation: &str,
+    wait_for_browser_challenge: bool,
 ) -> Result<(), String> {
     let Some(context_url) = context_url else {
         return Ok(());
     };
     let target: Url = context_url
         .parse()
-        .map_err(|err| format!("scraper: invalid context url '{context_url}': {err}"))?;
+        .map_err(|err| {
+            format!("scraper: invalid {operation} context url '{context_url}': {err}")
+        })?;
 
-    if scraper_is_at_origin(scraper, &target) && document_is_ready(scraper).await {
+    if scraper_is_at_origin(scraper, &target)
+        && document_is_ready(scraper).await
+        && (!wait_for_browser_challenge || !document_has_browser_challenge(scraper).await)
+    {
         return Ok(());
     }
 
-    log::debug!("[scraper:fetch] prepare context navigate url={context_url}");
+    log::debug!("[scraper:{operation}] prepare context navigate url={context_url}");
     scraper
         .navigate(target.clone())
-        .map_err(|err| format!("scraper: navigate fetch context: {err}"))?;
+        .map_err(|err| format!("scraper: navigate {operation} context: {err}"))?;
 
     let deadline = Duration::from_secs(15);
     let poll_interval = Duration::from_millis(150);
     let started = Instant::now();
+    let mut challenge_logged = false;
 
     while started.elapsed() < deadline {
         tokio::time::sleep(poll_interval).await;
         if scraper_is_at_origin(scraper, &target) && document_is_ready(scraper).await {
-            log::debug!("[scraper:fetch] prepare context ready url={context_url}");
+            if wait_for_browser_challenge && document_has_browser_challenge(scraper).await {
+                if !challenge_logged {
+                    log::debug!(
+                        "[scraper:{operation}] prepare context waiting browser challenge url={context_url}"
+                    );
+                    challenge_logged = true;
+                }
+                continue;
+            }
+            log::debug!("[scraper:{operation}] prepare context ready url={context_url}");
             return Ok(());
         }
     }
 
     Err(format!(
-        "scraper: timed out preparing fetch context {context_url}"
+        "scraper: timed out preparing {operation} context {context_url}"
     ))
 }
 
@@ -1170,6 +1293,42 @@ fn origin_url(url: &Url) -> String {
         Some(port) => format!("{}://{}:{}/", url.scheme(), host, port),
         None => format!("{}://{}/", url.scheme(), host),
     }
+}
+
+#[cfg(desktop)]
+fn reset_extract_navigation(
+    scraper: &ScraperWebview,
+    target: &Url,
+    operation: &str,
+) -> Result<(), String> {
+    if !matches!(target.scheme(), "http" | "https") {
+        return Ok(());
+    }
+    let context_url = origin_url(target);
+    let context: Url = context_url
+        .parse()
+        .map_err(|err| format!("scraper: invalid {operation} reset url '{context_url}': {err}"))?;
+    log::debug!("[scraper:{operation}] reset context navigate url={context_url}");
+    scraper
+        .navigate(context)
+        .map_err(|err| format!("scraper: reset {operation} context: {err}"))
+}
+
+#[cfg(desktop)]
+async fn prepare_fetch_context(
+    scraper: &ScraperWebview,
+    context_url: Option<&str>,
+) -> Result<(), String> {
+    prepare_scraper_context(scraper, context_url, "fetch", false).await
+}
+
+#[cfg(desktop)]
+async fn prepare_extract_context(scraper: &ScraperWebview, target: &Url) -> Result<(), String> {
+    if !matches!(target.scheme(), "http" | "https") {
+        return Ok(());
+    }
+    let context_url = origin_url(target);
+    prepare_scraper_context(scraper, Some(&context_url), "extract", true).await
 }
 
 #[cfg(desktop)]
@@ -1644,43 +1803,92 @@ pub async fn webview_extract(
         format!("webview_extract: invalid url '{target_url_str}': {err}")
     })?;
 
-    log::trace!("[scraper:extract] navigate queue={queue} url={url} target_url={target_url_str}");
-
-    scraper
-        .navigate(parsed)
-        .map_err(|err| format!("webview_extract: navigate: {err}"))?;
-
-    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
-    let poll_interval = std::time::Duration::from_millis(150);
-    let start = std::time::Instant::now();
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
+    let poll_interval = Duration::from_millis(150);
     let result_marker = "#__lnr_result__=";
+    let mut retried_after_browser_challenge = false;
+    let max_attempts = 2;
 
-    while start.elapsed() < timeout {
-        tokio::time::sleep(poll_interval).await;
-        let current = match scraper.url() {
-            Ok(u) => u.to_string(),
-            Err(_) => continue,
-        };
-        if let Some(idx) = current.find(result_marker) {
-            let encoded = &current[idx + result_marker.len()..];
-            let decoded = decode_uri_component(encoded).map_err(|err| {
-                format!("webview_extract: decode result: {err}")
-            })?;
-            // Clear the result marker without leaving the source origin.
-            // Parking on about:blank forces the next fetch to prepare the
-            // source context again.
-            clear_webview_extract_result_marker(&scraper, &current);
-            log::trace!(
-                "[scraper:extract] complete queue={queue} url={url} current_url={current} result_len={}",
-                decoded.len()
+    for attempt in 1..=max_attempts {
+        prepare_extract_context(&scraper, &parsed).await?;
+        wait_for_scraper_bridge_ready(&scraper, "extract", Duration::from_secs(5)).await;
+
+        log::trace!(
+            "[scraper:extract] navigate queue={queue} url={url} target_url={target_url_str} attempt={attempt}"
+        );
+
+        scraper
+            .navigate(parsed.clone())
+            .map_err(|err| format!("webview_extract: navigate: {err}"))?;
+
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            tokio::time::sleep(poll_interval).await;
+            let current = match scraper.url() {
+                Ok(u) => u.to_string(),
+                Err(_) => continue,
+            };
+            if let Some(idx) = current.find(result_marker) {
+                let encoded = &current[idx + result_marker.len()..];
+                let decoded = decode_uri_component(encoded).map_err(|err| {
+                    format!("webview_extract: decode result: {err}")
+                })?;
+                if !retried_after_browser_challenge
+                    && looks_like_browser_challenge_extract_result(&decoded)
+                {
+                    retried_after_browser_challenge = true;
+                    clear_webview_extract_result_marker(&scraper, &current);
+                    let remaining = timeout.checked_sub(start.elapsed()).unwrap_or_default();
+                    let wait_budget = remaining.min(Duration::from_secs(20));
+                    if wait_budget > Duration::from_millis(0)
+                        && wait_for_browser_challenge_to_clear(
+                            &scraper,
+                            "extract",
+                            &url,
+                            wait_budget,
+                        )
+                        .await
+                    {
+                        reset_extract_navigation(&scraper, &parsed, "extract")?;
+                        prepare_extract_context(&scraper, &parsed).await?;
+                        wait_for_scraper_bridge_ready(
+                            &scraper,
+                            "extract",
+                            Duration::from_secs(5),
+                        )
+                        .await;
+                        log::debug!(
+                            "[scraper:extract] retry after browser challenge queue={queue} url={url}"
+                        );
+                        scraper.navigate(parsed.clone()).map_err(|err| {
+                            format!("webview_extract: retry after browser challenge: {err}")
+                        })?;
+                        continue;
+                    }
+                }
+                // Clear the result marker without leaving the source origin.
+                // Parking on about:blank forces the next fetch to prepare the
+                // source context again.
+                clear_webview_extract_result_marker(&scraper, &current);
+                log::trace!(
+                    "[scraper:extract] complete queue={queue} url={url} current_url={current} result_len={}",
+                    decoded.len()
+                );
+                log_scraper_cookies(
+                    &scraper,
+                    &queue,
+                    "after_webview_extract",
+                    vec![("request", url.clone()), ("current", current)],
+                );
+                return Ok(decoded);
+            }
+        }
+
+        if attempt < max_attempts {
+            log::debug!(
+                "[scraper:extract] timeout before result marker; retrying queue={queue} url={url} attempt={attempt}"
             );
-            log_scraper_cookies(
-                &scraper,
-                &queue,
-                "after_webview_extract",
-                vec![("request", url.clone()), ("current", current)],
-            );
-            return Ok(decoded);
+            reset_extract_navigation(&scraper, &parsed, "extract")?;
         }
     }
 
@@ -1695,8 +1903,9 @@ pub async fn webview_extract(
         vec![("request", url.clone())],
     );
     Err(format!(
-        "webview_extract: timeout after {}ms",
+        "webview_extract: timeout after {}ms ({} attempts)",
         timeout.as_millis(),
+        max_attempts,
     ))
 }
 

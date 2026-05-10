@@ -418,6 +418,7 @@ export function enqueueChapterDownload(
                 progressTotal = total + 1;
                 setProgress({ current, total: progressTotal });
               },
+              previousHtml: chapter.content,
               scraperExecutor: executor ?? "immediate",
               signal,
               sourceId: job.pluginId,
