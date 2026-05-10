@@ -5,6 +5,7 @@ use std::{
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_opener::OpenerExt;
 
 const UPDATE_DOWNLOAD_DIR: &str = "Norea Updates";
@@ -50,8 +51,28 @@ pub async fn download_and_open_update(
         return Err("unsupported update host".to_string());
     }
 
+    let bytes = download_update_bytes(&url).await?;
+    save_and_open_update(app, &file_name, bytes)
+}
+
+#[tauri::command]
+pub fn open_downloaded_update(
+    app: AppHandle,
+    url: String,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    if !is_allowed_update_url(&url) {
+        return Err("unsupported update host".to_string());
+    }
+
+    save_and_open_update(app, &file_name, bytes)
+}
+
+#[cfg(not(target_os = "android"))]
+async fn download_update_bytes(url: &str) -> Result<Vec<u8>, String> {
     let response = reqwest::Client::new()
-        .get(&url)
+        .get(url)
         .header(reqwest::header::USER_AGENT, "Norea")
         .send()
         .await
@@ -68,6 +89,15 @@ pub async fn download_and_open_update(
         .bytes()
         .await
         .map_err(|err| format!("download read failed: {err}"))?;
+    Ok(bytes.to_vec())
+}
+
+#[cfg(target_os = "android")]
+async fn download_update_bytes(_url: &str) -> Result<Vec<u8>, String> {
+    Err("native update downloads are disabled on Android".to_string())
+}
+
+fn save_and_open_update(app: AppHandle, file_name: &str, bytes: Vec<u8>) -> Result<String, String> {
     let updates_dir = app
         .path()
         .download_dir()
@@ -77,21 +107,33 @@ pub async fn download_and_open_update(
         .map_err(|err| format!("update directory unavailable: {err}"))?;
 
     let is_archive = is_zip_archive(&bytes);
-    let archive_path = updates_dir.join(sanitize_file_name(&file_name));
+    let archive_path = updates_dir.join(sanitize_file_name(file_name));
     fs::write(&archive_path, &bytes).map_err(|err| format!("download save failed: {err}"))?;
 
-    let installer_path = if is_archive {
+    let installer_path = if is_installer_file_name(file_name) {
+        archive_path
+    } else if is_archive {
         extract_installer_from_zip(&archive_path, &updates_dir)?
     } else {
         archive_path
     };
 
     mark_executable_if_needed(&installer_path)?;
-    app.opener()
-        .open_path(installer_path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|err| format!("installer open failed: {err}"))?;
+    open_installer(&app, &installer_path)?;
 
     Ok(installer_path.to_string_lossy().to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn open_installer(app: &AppHandle, installer_path: &Path) -> Result<(), String> {
+    app.opener()
+        .open_path(installer_path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|err| format!("installer open failed: {err}"))
+}
+
+#[cfg(target_os = "android")]
+fn open_installer(_app: &AppHandle, _installer_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn empty_to_none(value: Option<&'static str>) -> Option<&'static str> {
@@ -153,6 +195,10 @@ fn is_zip_archive(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"PK\x07\x08")
 }
 
+fn is_installer_file_name(file_name: &str) -> bool {
+    installer_priority(file_name).is_some()
+}
+
 fn extract_installer_from_zip(zip_path: &Path, updates_dir: &Path) -> Result<PathBuf, String> {
     let zip_file = File::open(zip_path).map_err(|err| format!("artifact open failed: {err}"))?;
     let mut archive =
@@ -205,9 +251,54 @@ fn installer_priority(name: &str) -> Option<u8> {
         "linux" if lower_name.ends_with(".appimage") => Some(0),
         "linux" if lower_name.ends_with(".deb") => Some(1),
         "linux" if lower_name.ends_with(".rpm") => Some(2),
-        "android" if lower_name.ends_with(".apk") => Some(0),
+        "android" => android_apk_priority(&lower_name),
         _ => None,
     }
+}
+
+fn android_apk_priority(name: &str) -> Option<u8> {
+    if !name.ends_with(".apk") {
+        return None;
+    }
+
+    if is_current_android_arch_apk(name) {
+        return Some(0);
+    }
+    if is_universal_android_apk(name) {
+        return Some(1);
+    }
+    if is_other_android_arch_apk(name) {
+        return None;
+    }
+
+    Some(2)
+}
+
+fn is_current_android_arch_apk(name: &str) -> bool {
+    match std::env::consts::ARCH {
+        "aarch64" => name.contains("arm64") || name.contains("aarch64"),
+        "x86_64" => name.contains("x86_64") || name.contains("x64"),
+        "arm" => name.contains("armeabi") || name.contains("armv7"),
+        "x86" => name.contains("x86") && !name.contains("x86_64"),
+        _ => false,
+    }
+}
+
+fn is_other_android_arch_apk(name: &str) -> bool {
+    let known_arch = [
+        "arm64",
+        "aarch64",
+        "armeabi",
+        "armv7",
+        "x86_64",
+        "x64",
+        "x86",
+    ];
+    known_arch.iter().any(|token| name.contains(token)) && !is_current_android_arch_apk(name)
+}
+
+fn is_universal_android_apk(name: &str) -> bool {
+    name.contains("universal") || name.contains("fat")
 }
 
 #[cfg(unix)]

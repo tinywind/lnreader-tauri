@@ -75,10 +75,25 @@ interface AssetPreference {
   token: string;
 }
 
+interface AndroidUpdateInstallBridge {
+  openApk: (path: string) => string;
+}
+
+interface AndroidUpdateInstallResult {
+  error?: string;
+  ok?: boolean;
+}
+
 interface Semver {
   major: number;
   minor: number;
   patch: number;
+}
+
+declare global {
+  interface Window {
+    __NoreaAndroidUpdater?: AndroidUpdateInstallBridge;
+  }
 }
 
 export function getBuildInfo(): Promise<BuildInfo> {
@@ -162,11 +177,43 @@ export async function checkDevUpdate(
   throw new Error(`No successful workflow artifact matches ${buildInfo.platform}.`);
 }
 
-export function installUpdate(candidate: UpdateCandidate): Promise<string> {
+export async function installUpdate(
+  candidate: UpdateCandidate,
+  buildInfo?: BuildInfo | null,
+): Promise<string> {
+  if (buildInfo?.targetOs === "android") {
+    return installAndroidUpdate(candidate);
+  }
+
   return invoke<string>("download_and_open_update", {
     fileName: candidate.downloadFileName,
     url: candidate.downloadUrl,
   });
+}
+
+async function installAndroidUpdate(candidate: UpdateCandidate): Promise<string> {
+  if (!isAllowedUpdateUrl(candidate.downloadUrl)) {
+    throw new Error("Unsupported update host.");
+  }
+
+  const response = await appFetch(candidate.downloadUrl, {
+    headers: {
+      Accept: "application/octet-stream",
+      "User-Agent": "Norea",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Download failed with HTTP ${response.status}.`);
+  }
+
+  const bytes = Array.from(new Uint8Array(await response.arrayBuffer()));
+  const installerPath = await invoke<string>("open_downloaded_update", {
+    bytes,
+    fileName: candidate.downloadFileName,
+    url: candidate.downloadUrl,
+  });
+  openAndroidInstaller(installerPath);
+  return installerPath;
 }
 
 async function fetchGithubJson<T>(url: string): Promise<T> {
@@ -181,6 +228,31 @@ async function fetchGithubJson<T>(url: string): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function isAllowedUpdateUrl(url: string): boolean {
+  return (
+    url.startsWith("https://github.com/tinywind/norea/") ||
+    url.startsWith("https://api.github.com/repos/tinywind/norea/")
+  );
+}
+
+function openAndroidInstaller(path: string): void {
+  const bridge = window.__NoreaAndroidUpdater;
+  if (!bridge) {
+    throw new Error("Android update installer bridge is unavailable.");
+  }
+
+  let result: AndroidUpdateInstallResult;
+  try {
+    result = JSON.parse(bridge.openApk(path)) as AndroidUpdateInstallResult;
+  } catch {
+    throw new Error("Android update installer bridge returned an invalid response.");
+  }
+
+  if (!result.ok) {
+    throw new Error(result.error || "Android update installer failed to open.");
+  }
 }
 
 function selectReleaseAsset(

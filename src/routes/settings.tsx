@@ -810,7 +810,7 @@ function AboutSettingsSection({
       }),
     );
     try {
-      const path = await installUpdate(candidate);
+      const path = await installUpdate(candidate, buildInfo);
       updateSettingsToast(
         toastId,
         "green",

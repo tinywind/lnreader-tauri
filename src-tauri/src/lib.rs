@@ -133,6 +133,7 @@ pub fn run() {
             tray::tray_set_task_progress,
             update::download_and_open_update,
             update::get_build_info,
+            update::open_downloaded_update,
         ])
         .setup(|app| {
             app.manage(scraper::ScraperState::default());

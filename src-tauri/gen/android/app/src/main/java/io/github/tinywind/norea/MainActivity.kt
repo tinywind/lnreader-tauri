@@ -1,15 +1,20 @@
 package io.github.tinywind.norea
 
 import android.Manifest
+import android.content.ClipData
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.graphics.Insets
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import java.io.File
 import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
@@ -30,6 +35,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(bridge, "__NoreaAndroidScraper")
     webView.addJavascriptInterface(SafeAreaBridge(), "__NoreaAndroidSafeArea")
     webView.addJavascriptInterface(TaskNotificationBridge(), "__NoreaAndroidTasks")
+    webView.addJavascriptInterface(UpdateInstallBridge(), "__NoreaAndroidUpdater")
     webView.addJavascriptInterface(WindowMetricsBridge(webView), "__NoreaAndroidWindow")
     webView.settings.apply {
       setSupportZoom(false)
@@ -102,10 +108,45 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private inner class UpdateInstallBridge {
+    @JavascriptInterface
+    fun openApk(path: String): String =
+      runCatching {
+        val apk = File(path)
+        require(apk.exists()) { "APK file does not exist." }
+        require(apk.extension.equals("apk", ignoreCase = true)) {
+          "Update file is not an APK."
+        }
+
+        val uri = FileProvider.getUriForFile(
+          this@MainActivity,
+          "$packageName.fileprovider",
+          apk,
+        )
+        startActivity(apkInstallIntent(uri))
+      }.fold(
+        onSuccess = { JSONObject().put("ok", true).toString() },
+        onFailure = { error ->
+          JSONObject()
+            .put("ok", false)
+            .put("error", error.message ?: error.toString())
+            .toString()
+        },
+      )
+  }
+
   private inner class WindowMetricsBridge(private val webView: WebView) {
     @JavascriptInterface
     fun getMetrics(): String = windowMetricsJson(webView)
   }
+
+  private fun apkInstallIntent(uri: Uri): Intent =
+    Intent(Intent.ACTION_VIEW).apply {
+      setDataAndType(uri, APK_MIME_TYPE)
+      clipData = ClipData.newUri(contentResolver, "Norea update", uri)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
 
   private fun requestNotificationPermissionIfNeeded() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -138,6 +179,7 @@ class MainActivity : TauriActivity() {
   }
 
   companion object {
+    private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
     private const val REQUEST_POST_NOTIFICATIONS = 1002
 
     private fun insetsJson(insets: Insets): String {
