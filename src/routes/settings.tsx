@@ -41,6 +41,14 @@ import {
   importBackupFromFile,
 } from "../lib/backup/io";
 import { clearAllChapterMedia } from "../lib/chapter-media";
+import {
+  mirrorAllStoredChapterContent,
+  restoreChapterContentStorageMirror,
+} from "../lib/chapter-content-storage";
+import {
+  getChapterMediaStorageRoot,
+  selectChapterMediaStorageRoot,
+} from "../lib/chapter-media-storage";
 import { pluginManager } from "../lib/plugins/manager";
 import { isAndroidRuntime } from "../lib/tauri-runtime";
 import { enqueueMainTask } from "../lib/tasks/main-tasks";
@@ -467,10 +475,88 @@ function DataSettingsSection({
   const resetReadingProgressState = useReaderStore(
     (state) => state.resetReadingProgress,
   );
+  const queryClient = useQueryClient();
   const [userAgentInput, setUserAgentInput] = useState(userAgent);
+  const [mediaStorageRoot, setMediaStorageRoot] = useState<string | null>(null);
+  const [mediaStorageBusy, setMediaStorageBusy] = useState(false);
+
+  useEffect(() => {
+    void getChapterMediaStorageRoot()
+      .then(setMediaStorageRoot)
+      .catch((error: unknown) => {
+        showSettingsToast(
+          "red",
+          t("settings.data.mediaStorage.loadFailed", {
+            error: describeError(error),
+          }),
+        );
+      });
+  }, [t]);
+
+  async function chooseMediaStorageRoot(): Promise<void> {
+    setMediaStorageBusy(true);
+    try {
+      const root = await selectChapterMediaStorageRoot();
+      if (root) {
+        const result = await restoreChapterContentStorageMirror();
+        setMediaStorageRoot(root);
+        showSettingsToast(
+          "green",
+          t("settings.toast.saved"),
+          t("settings.data.mediaStorage.restore.done", {
+            chapters: result.chapters,
+            novels: result.novels,
+          }),
+        );
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+        void queryClient.invalidateQueries({ queryKey: ["category"] });
+      }
+    } catch (error) {
+      showSettingsToast(
+        "red",
+        t("settings.data.mediaStorage.selectFailed", {
+          error: describeError(error),
+        }),
+      );
+    } finally {
+      setMediaStorageBusy(false);
+    }
+  }
 
   return (
     <Stack gap="md">
+      <SettingsSection title={t("settings.data.mediaStorage.title")}>
+        <SettingsFieldRow
+          label={t("settings.data.mediaStorage.folder.label")}
+          description={
+            isAndroidRuntime()
+              ? t("settings.data.mediaStorage.folder.androidDescription")
+              : t("settings.data.mediaStorage.folder.description")
+          }
+          layout="stacked"
+        >
+          <SettingsWideField>
+            <Text className="lnr-settings-path-value">
+              {mediaStorageRoot ?? t("settings.data.mediaStorage.folder.empty")}
+            </Text>
+          </SettingsWideField>
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          label={t("settings.data.mediaStorage.change.label")}
+          description={t("settings.data.mediaStorage.change.description")}
+        >
+          <TextButton
+            loading={mediaStorageBusy}
+            disabled={mediaStorageBusy || isBusy}
+            onClick={() => {
+              void chooseMediaStorageRoot();
+            }}
+          >
+            {t("storageSetup.selectFolder")}
+          </TextButton>
+        </SettingsFieldRow>
+      </SettingsSection>
+
       <SettingsSection
         title={t("settings.data.backup.title")}
       >
@@ -1107,7 +1193,10 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
       const path = await enqueueMainTask({
         kind: "backup.export",
         title: t("settings.data.exportBackup"),
-        run: exportBackupToFile,
+        run: async () => {
+          await mirrorAllStoredChapterContent();
+          return exportBackupToFile();
+        },
       }).promise;
       if (path) {
         updateSettingsToast(

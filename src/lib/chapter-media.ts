@@ -31,8 +31,10 @@ type MediaSrcAttribute = (typeof MEDIA_SRC_ATTRIBUTES)[number];
 interface CacheChapterMediaOptions {
   baseUrl: string;
   chapterId: number;
+  chapterNumber?: string | null;
   contextUrl?: string;
   html: string;
+  novelId?: number;
   onHtmlUpdate?: (html: string) => Promise<void> | void;
   onProgress?: (progress: { current: number; total: number }) => void;
   previousHtml?: string | null;
@@ -52,6 +54,7 @@ interface ChapterMediaStoreInput {
   cacheKey: string;
   chapterId: number;
   fileName: string;
+  novelId?: number;
 }
 
 interface MediaSrcTarget {
@@ -192,12 +195,28 @@ async function storeChapterMedia({
   cacheKey,
   chapterId,
   fileName,
+  novelId,
 }: ChapterMediaStoreInput): Promise<string> {
   return invoke<string>("chapter_media_store", {
     body,
     cacheKey,
     chapterId,
     fileName,
+    ...(novelId ? { novelId } : {}),
+  });
+}
+
+async function archiveChapterMediaCache(
+  chapterId: number,
+  cacheKey: string,
+  novelId?: number,
+  chapterNumber?: string | null,
+): Promise<number> {
+  return invoke<number>("chapter_media_archive_cache", {
+    chapterId,
+    ...(chapterNumber ? { chapterNumber } : {}),
+    cacheKey,
+    ...(novelId ? { novelId } : {}),
   });
 }
 
@@ -535,8 +554,10 @@ async function emitHtmlUpdate(
 export async function cacheHtmlChapterMedia({
   baseUrl,
   chapterId,
+  chapterNumber,
   contextUrl,
   html,
+  novelId,
   onHtmlUpdate,
   onProgress,
   previousHtml,
@@ -569,7 +590,6 @@ export async function cacheHtmlChapterMedia({
   });
   const cacheKey = chooseCacheKey(chapterId, reusableSources.values());
   const localSources = new Map<string, string>(reusableSources);
-  let mediaBytes = 0;
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
   blankCollectedMediaTargets(srcTargets, srcsetTargets);
   for (const [url, src] of localSources) {
@@ -614,8 +634,8 @@ export async function cacheHtmlChapterMedia({
         url,
         response.headers.get("content-type"),
       ),
+      novelId,
     });
-    mediaBytes += body.length;
     localSources.set(url, src);
     applyLocalMediaSource({
       baseUrl,
@@ -629,9 +649,12 @@ export async function cacheHtmlChapterMedia({
     onProgress?.({ current: index + 1, total: urls.length });
   }
 
-  if (reusableSources.size > 0) {
-    mediaBytes = await getStoredChapterMediaBytes(template.innerHTML);
-  }
+  const mediaBytes = await archiveChapterMediaCache(
+    chapterId,
+    cacheKey,
+    novelId,
+    chapterNumber,
+  );
   clearMediaSourceMetadata(template.content);
 
   return {

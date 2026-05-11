@@ -73,6 +73,7 @@ import {
   type LocalImportAnalysis,
   type LocalImportFormat,
 } from "../lib/local-import";
+import { mirrorStoredNovelChapters } from "../lib/chapter-content-storage";
 import {
   enqueueChapterDownloadBatch,
   getChapterDownloadStatus,
@@ -2114,7 +2115,7 @@ async function importLocalFileToLibrary(
 ): Promise<LocalNovelImportResult> {
   const conversion = await convertLocalImportFile(file);
 
-  return upsertLocalNovel({
+  const result = await upsertLocalNovel({
     artist: conversion.novel.artist ?? null,
     author: conversion.novel.author ?? null,
     chapters: conversion.chapters.map((chapter, index) => ({
@@ -2136,6 +2137,8 @@ async function importLocalFileToLibrary(
     status: conversion.novel.status ?? null,
     summary: conversion.novel.summary ?? null,
   });
+  await mirrorStoredNovelChapters(result.novelId);
+  return result;
 }
 
 function createManualLocalNovelPath(): string {

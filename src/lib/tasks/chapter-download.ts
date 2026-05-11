@@ -14,6 +14,7 @@ import {
   clearChapterMedia,
   pruneChapterMedia,
 } from "../chapter-media";
+import { mirrorStoredChapterContent } from "../chapter-content-storage";
 import { getPluginBaseUrl } from "../plugins/base-url";
 import { pluginManager } from "../plugins/manager";
 import type { Plugin } from "../plugins/types";
@@ -403,8 +404,10 @@ export function enqueueChapterDownload(
             const media = await cacheHtmlChapterMedia({
               baseUrl,
               chapterId: job.id,
+              chapterNumber: chapter.chapterNumber ?? String(chapter.position),
               contextUrl: baseUrl,
               html,
+              novelId: chapter.novelId,
               onHtmlUpdate: async (partialHtml) => {
                 const partialSaveResult = await saveChapterPartialContent(
                   job.id,
@@ -435,6 +438,7 @@ export function enqueueChapterDownload(
         if (saveResult.rowsAffected <= 0) {
           throw missingLocalChapterError(job);
         }
+        await mirrorStoredChapterContent(job.id);
         if (mediaCacheKey) {
           await pruneChapterMedia(job.id, mediaCacheKey);
         } else {

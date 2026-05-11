@@ -85,6 +85,10 @@ import {
 import { convertLocalImportFile } from "../lib/local-import";
 import { clearChapterMedia } from "../lib/chapter-media";
 import {
+  clearStoredChapterContentMirror,
+  mirrorStoredNovelChapters,
+} from "../lib/chapter-content-storage";
+import {
   findPreviousAppHistoryEntry,
   trimAppNavigationHistoryTo,
 } from "../lib/navigation-history";
@@ -1477,6 +1481,7 @@ export function NovelDetailPage() {
     mutationFn: async (chapterId: number) => {
       await clearChapterContent(chapterId);
       await clearChapterMedia(chapterId);
+      await clearStoredChapterContentMirror(chapterId);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -1498,7 +1503,9 @@ export function NovelDetailPage() {
         startPosition,
       );
       if (chapters.length === 0) return null;
-      return upsertLocalNovelChapters(id, chapters);
+      const result = await upsertLocalNovelChapters(id, chapters);
+      await mirrorStoredNovelChapters(id);
+      return result;
     },
     onSuccess: () => {
       setLocalChapterError(null);

@@ -82,7 +82,8 @@ describe("cacheHtmlChapterMedia", () => {
         statusText: "OK",
       });
     });
-    invokeMock.mockImplementation(async (_command, args) => {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_archive_cache") return 6;
       const input = args as {
         cacheKey: string;
         chapterId: number;
@@ -94,6 +95,7 @@ describe("cacheHtmlChapterMedia", () => {
     const result = await cacheHtmlChapterMedia({
       baseUrl: "https://source.test/novel/chapter/1.html",
       chapterId: 42,
+      chapterNumber: "1",
       html: [
         `<img src="../images/page.png">`,
         `<img src="/covers/cover.webp">`,
@@ -102,6 +104,7 @@ describe("cacheHtmlChapterMedia", () => {
         `<img src="norea-media://chapter/42/old/page.png">`,
         `<img src="file:///tmp/page.png">`,
       ].join(""),
+      novelId: 9,
     });
 
     expect(pluginFetchMock).toHaveBeenCalledTimes(2);
@@ -121,13 +124,14 @@ describe("cacheHtmlChapterMedia", () => {
         signal: undefined,
       },
     );
-    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenCalledTimes(3);
     expect(invokeMock.mock.calls[0]).toEqual([
       "chapter_media_store",
       expect.objectContaining({
         body: [1, 2, 3],
         chapterId: 42,
         fileName: "page-1.png",
+        novelId: 9,
       }),
     ]);
     expect(invokeMock.mock.calls[1]).toEqual([
@@ -136,8 +140,17 @@ describe("cacheHtmlChapterMedia", () => {
         body: [1, 2, 3],
         chapterId: 42,
         fileName: "cover-2.webp",
+        novelId: 9,
       }),
     ]);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "chapter_media_archive_cache",
+      expect.objectContaining({
+        chapterId: 42,
+        chapterNumber: "1",
+        novelId: 9,
+      }),
+    );
     expect(result.cacheKey).toEqual(expect.any(String));
     expect(result.mediaBytes).toBe(6);
     expect(result.html).toContain("norea-media://chapter/");
@@ -155,7 +168,8 @@ describe("cacheHtmlChapterMedia", () => {
         statusText: "OK",
       });
     });
-    invokeMock.mockImplementation(async (_command, args) => {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_archive_cache") return 15;
       const input = args as {
         cacheKey: string;
         chapterId: number;
@@ -194,7 +208,8 @@ describe("cacheHtmlChapterMedia", () => {
         statusText: "OK",
       });
     });
-    invokeMock.mockImplementation(async (_command, args) => {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_archive_cache") return 6;
       const input = args as {
         cacheKey: string;
         chapterId: number;
@@ -229,7 +244,7 @@ describe("cacheHtmlChapterMedia", () => {
       });
     });
     invokeMock.mockImplementation(async (command, args) => {
-      if (command === "chapter_media_total_size") return 5;
+      if (command === "chapter_media_archive_cache") return 5;
       const input = args as {
         cacheKey: string;
         chapterId: number;
@@ -263,11 +278,9 @@ describe("cacheHtmlChapterMedia", () => {
         fileName: "page-2-2.png",
       }),
     );
-    expect(invokeMock).toHaveBeenCalledWith("chapter_media_total_size", {
-      mediaSrcs: [
-        "norea-media://chapter/42/old/page-1.png",
-        "norea-media://chapter/42/old/page-2-2.png",
-      ],
+    expect(invokeMock).toHaveBeenCalledWith("chapter_media_archive_cache", {
+      cacheKey: "old",
+      chapterId: 42,
     });
     expect(result.cacheKey).toBe("old");
     expect(result.mediaBytes).toBe(5);

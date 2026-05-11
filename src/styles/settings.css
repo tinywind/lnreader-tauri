@@ -318,6 +318,18 @@
   min-height: 7rem;
 }
 
+.lnr-settings-path-value {
+  background: var(--lnr-design-panel);
+  border: 1px solid var(--lnr-design-rule);
+  border-radius: var(--lnr-border-radius);
+  color: var(--lnr-design-ink-muted);
+  font-family: var(--lnr-font-meta);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  padding: 0.625rem 0.75rem;
+}
+
 .lnr-settings-switch-list {
   display: grid;
   gap: 0.5rem;

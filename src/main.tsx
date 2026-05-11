@@ -1,6 +1,20 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import {
+  StrictMode,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
-import { MantineProvider, createTheme } from "@mantine/core";
+import {
+  Button,
+  MantineProvider,
+  Paper,
+  Stack,
+  Text,
+  Title,
+  createTheme,
+} from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
@@ -16,6 +30,11 @@ import {
   installRuntimeLogLevelFilter,
   setRuntimeLogLevel,
 } from "./lib/logging";
+import {
+  getChapterMediaStorageRoot,
+  selectChapterMediaStorageRoot,
+} from "./lib/chapter-media-storage";
+import { restoreChapterContentStorageMirror } from "./lib/chapter-content-storage";
 import { pluginManager } from "./lib/plugins/manager";
 import { isAndroidRuntime, isTauriRuntime } from "./lib/tauri-runtime";
 import { router } from "./router";
@@ -77,13 +96,6 @@ const queryClient = new QueryClient({
  * Rehydrate previously-installed plugins from the DB at app start.
  * Fire-and-forget; failures get logged but don't block boot.
  */
-if (isTauriRuntime()) {
-  void pluginManager.loadInstalledFromDb().catch((error: unknown) => {
-    // eslint-disable-next-line no-console
-    console.warn("[bootstrap] failed to rehydrate installed plugins", error);
-  });
-}
-
 /**
  * Async errors that escape React Query entirely get logged for
  * devtools but are not toasted; plugin-side scrape failures during
@@ -435,6 +447,117 @@ function withAlpha(color: string, alpha: number): string {
   return `rgba(${channels[0]}, ${channels[1]}, ${channels[2]}, ${alpha})`;
 }
 
+interface ChapterMediaStorageGateProps {
+  children: ReactNode;
+}
+
+function ChapterMediaStorageGate({
+  children,
+}: ChapterMediaStorageGateProps) {
+  const appLocale = useAppearanceStore((state) => state.appLocale);
+  const [checking, setChecking] = useState(isTauriRuntime());
+  const [storageReady, setStorageReady] = useState(!isTauriRuntime());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    let cancelled = false;
+    void getChapterMediaStorageRoot()
+      .then((root) => {
+        if (cancelled) return;
+        setStorageReady(root !== null && root.trim() !== "");
+      })
+      .catch((unknownError: unknown) => {
+        if (cancelled) return;
+        setError(describeError(unknownError));
+        setStorageReady(false);
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady || !isTauriRuntime()) return;
+
+    void pluginManager.loadInstalledFromDb().catch((unknownError: unknown) => {
+      // eslint-disable-next-line no-console
+      console.warn("[bootstrap] failed to rehydrate installed plugins", unknownError);
+    });
+  }, [storageReady]);
+
+  async function chooseStorageRoot(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const root = await selectChapterMediaStorageRoot();
+      if (root) {
+        await restoreChapterContentStorageMirror();
+        setStorageReady(true);
+      }
+    } catch (unknownError) {
+      setError(describeError(unknownError));
+    } finally {
+      setBusy(false);
+      setChecking(false);
+    }
+  }
+
+  if (checking) {
+    return (
+      <div className="lnr-storage-setup">
+        <Paper className="lnr-storage-setup-card" withBorder>
+          <Text>{translate(appLocale, "storageSetup.checking")}</Text>
+        </Paper>
+      </div>
+    );
+  }
+
+  if (!storageReady) {
+    return (
+      <div className="lnr-storage-setup">
+        <Paper className="lnr-storage-setup-card" withBorder>
+          <Stack gap="md">
+            <Stack gap="xs">
+              <Title order={1} className="lnr-storage-setup-title">
+                {translate(appLocale, "storageSetup.title")}
+              </Title>
+              <Text className="lnr-storage-setup-copy">
+                {translate(
+                  appLocale,
+                  isAndroidRuntime()
+                    ? "storageSetup.androidDescription"
+                    : "storageSetup.description",
+                )}
+              </Text>
+            </Stack>
+            {error ? (
+              <Text className="lnr-storage-setup-error" role="alert">
+                {translate(appLocale, "storageSetup.failed", { error })}
+              </Text>
+            ) : null}
+            <Button
+              loading={busy}
+              onClick={() => {
+                void chooseStorageRoot();
+              }}
+            >
+              {translate(appLocale, "storageSetup.selectFolder")}
+            </Button>
+          </Stack>
+        </Paper>
+      </div>
+    );
+  }
+
+  return children;
+}
+
 function AppProviders() {
   const appLocale = useAppearanceStore((state) => state.appLocale);
   const appThemeId = useAppearanceStore((state) => state.appThemeId);
@@ -591,7 +714,9 @@ function AppProviders() {
     <MantineProvider theme={theme} forceColorScheme={colorScheme}>
       <Notifications position="top-right" />
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <ChapterMediaStorageGate>
+          <RouterProvider router={router} />
+        </ChapterMediaStorageGate>
       </QueryClientProvider>
     </MantineProvider>
   );
