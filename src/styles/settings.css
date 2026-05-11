@@ -544,11 +544,27 @@
 
   .lnr-settings-detail-header {
     align-items: center;
+    flex-wrap: nowrap !important;
     flex-direction: row;
     gap: 0.75rem;
     height: auto;
     min-height: 3.75rem;
     padding: 0 0.75rem;
+  }
+
+  .lnr-settings-detail-copy {
+    flex: 1 1 50%;
+    min-width: 0;
+  }
+
+  .lnr-settings-section-select {
+    flex: 0 1 50%;
+    min-width: 0;
+    width: 50%;
+  }
+
+  .lnr-settings-section-select :where(.mantine-InputWrapper-root) {
+    width: 100%;
   }
 }
 
@@ -577,12 +593,6 @@
 
   .lnr-settings-slider-control {
     grid-template-columns: 1fr;
-  }
-
-  .lnr-settings-detail-copy,
-  .lnr-settings-section-select {
-    flex-basis: 100%;
-    width: 100%;
   }
 
   .lnr-settings-slider-value {

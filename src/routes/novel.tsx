@@ -52,6 +52,7 @@ import {
   PlayGlyph,
   PlusGlyph,
   ReaderSettingsGlyph,
+  SortGlyph,
 } from "../components/ActionGlyphs";
 import {
   ConsoleChip,
@@ -98,13 +99,17 @@ import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
 import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { pluginManager } from "../lib/plugins/manager";
+import {
+  DEFAULT_CHAPTER_SORT_LABEL_KEYS,
+  DEFAULT_CHAPTER_SORT_ORDERS,
+} from "../lib/library-settings-options";
 import { novelRoute } from "../router";
 import { useTranslation } from "../i18n";
 import {
   normalizeFontScalePercent,
   useAppearanceStore,
 } from "../store/appearance";
-import { useLibraryStore } from "../store/library";
+import { useLibraryStore, type DefaultChapterSort } from "../store/library";
 import { useReaderStore } from "../store/reader";
 import "../styles/novel.css";
 
@@ -1001,6 +1006,59 @@ function NovelBatchDownloadMenu({
   );
 }
 
+interface ChapterSortPickerProps {
+  onChange: (value: DefaultChapterSort) => void;
+  value: DefaultChapterSort;
+}
+
+function ChapterSortPicker({ onChange, value }: ChapterSortPickerProps) {
+  const { t } = useTranslation();
+  const [opened, setOpened] = useState(false);
+  const activeLabel = t(DEFAULT_CHAPTER_SORT_LABEL_KEYS[value]);
+
+  return (
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-end"
+      shadow="md"
+      width={180}
+    >
+      <Popover.Target>
+        <IconButton
+          active={opened}
+          className="lnr-novel-chapter-sort-button"
+          label={t("librarySettings.defaultChapterSort")}
+          onClick={() => setOpened((current) => !current)}
+          size="sm"
+          title={activeLabel}
+        >
+          <SortGlyph />
+        </IconButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-novel-chapter-sort-menu">
+        {DEFAULT_CHAPTER_SORT_ORDERS.map((option) => {
+          const label = t(DEFAULT_CHAPTER_SORT_LABEL_KEYS[option]);
+          return (
+            <button
+              className="lnr-novel-chapter-sort-option"
+              data-active={value === option}
+              key={option}
+              onClick={() => {
+                onChange(option);
+                setOpened(false);
+              }}
+              type="button"
+            >
+              {label}
+            </button>
+          );
+        })}
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
 interface NovelReadButtonProps {
   children: ReactNode;
   disabled: boolean;
@@ -1376,6 +1434,9 @@ export function NovelDetailPage() {
   });
   const queryClient = useQueryClient();
   const defaultChapterSort = useLibraryStore((s) => s.defaultChapterSort);
+  const setDefaultChapterSort = useLibraryStore(
+    (s) => s.setDefaultChapterSort,
+  );
   const lastReadChapterId = useReaderStore(
     (state) => state.lastReadChapterByNovel[id],
   );
@@ -1819,6 +1880,12 @@ export function NovelDetailPage() {
 
           <ConsolePanel className="lnr-novel-chapters-panel">
             <ConsoleSectionHeader
+              actions={
+                <ChapterSortPicker
+                  onChange={setDefaultChapterSort}
+                  value={defaultChapterSort}
+                />
+              }
               eyebrow={t("novel.chapterIndex")}
               title={t("novel.chapters")}
               count={t("novel.chapterCount", {

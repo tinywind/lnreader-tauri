@@ -27,6 +27,7 @@ import {
   DownloadGlyph,
   DownloadedGlyph,
   RefreshGlyph,
+  SortGlyph,
 } from "../components/ActionGlyphs";
 import { CategoriesDrawer } from "../components/CategoriesDrawer";
 import { ConsoleStatusStrip } from "../components/ConsolePrimitives";
@@ -84,6 +85,7 @@ import {
   type LibraryDisplayMode,
   type LibrarySortOrder,
 } from "../store/library";
+import { LIBRARY_SORT_ORDERS } from "../lib/library-settings-options";
 import { useReaderStore } from "../store/reader";
 import {
   formatRelativeTimeForLocale,
@@ -264,6 +266,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
     (s) => s.setSelectedCategoryId,
   );
   const sortOrder = useLibraryStore((s) => s.sortOrder);
+  const setSortOrder = useLibraryStore((s) => s.setSortOrder);
   const displayMode = useLibraryStore((s) => s.displayMode);
   const setDisplayMode = useLibraryStore((s) => s.setDisplayMode);
   const novelsPerRow = useLibraryStore((s) => s.novelsPerRow);
@@ -841,6 +844,11 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
                   onUnreadOnlyChange={setUnreadOnlyMode}
                   t={t}
                   unreadOnly={unreadOnlyMode}
+                />
+                <LibrarySortPicker
+                  onChange={setSortOrder}
+                  sortOrder={sortOrder}
+                  t={t}
                 />
                 <ViewModeToggle
                   displayMode={displayMode}
@@ -1862,6 +1870,62 @@ function MobileViewModePicker({
               onClick={() => onChange(option.mode)}
             >
               <ViewModeIcon icon={option.icon} />
+              <span>{label}</span>
+            </UnstyledButton>
+          );
+        })}
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
+interface LibrarySortPickerProps {
+  onChange: (sortOrder: LibrarySortOrder) => void;
+  sortOrder: LibrarySortOrder;
+  t: TranslateFn;
+}
+
+function LibrarySortPicker({
+  onChange,
+  sortOrder,
+  t,
+}: LibrarySortPickerProps) {
+  const [opened, setOpened] = useState(false);
+  const activeLabel = t(SORT_LABEL_KEYS[sortOrder]);
+
+  return (
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-end"
+      shadow="md"
+      width={220}
+    >
+      <Popover.Target>
+        <IconButton
+          active={opened}
+          className="lnr-library-icon-button lnr-library-sort-button"
+          label={t("librarySettings.sort")}
+          onClick={() => setOpened((current) => !current)}
+          size="sm"
+          title={activeLabel}
+        >
+          <SortGlyph />
+        </IconButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-library-sort-menu">
+        {LIBRARY_SORT_ORDERS.map((value) => {
+          const label = t(SORT_LABEL_KEYS[value]);
+          return (
+            <UnstyledButton
+              className="lnr-library-sort-option"
+              data-active={sortOrder === value}
+              key={value}
+              onClick={() => {
+                onChange(value);
+                setOpened(false);
+              }}
+            >
               <span>{label}</span>
             </UnstyledButton>
           );

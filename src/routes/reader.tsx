@@ -1001,6 +1001,7 @@ export function ReaderPage() {
         key={chapter?.id ?? "sample"}
         ref={contentRef}
         appearanceSettings={effectiveReaderAppearance}
+        bottomOverlayOffset={readerOverlayBottom}
         dataUrl={content}
         generalSettings={effectiveReaderGeneral}
         initialProgress={progress}

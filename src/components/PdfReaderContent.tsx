@@ -28,11 +28,13 @@ import {
   type ReaderTapZoneMap,
 } from "../store/reader";
 import type { ReaderContentHandle } from "./ReaderContent";
+import { ReaderSeekbars } from "./ReaderSeekbars";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfReaderContentProps {
   appearanceSettings?: ReaderAppearanceSettings;
+  bottomOverlayOffset?: number | string;
   dataUrl: string;
   generalSettings?: ReaderGeneralSettings;
   initialProgress?: number;
@@ -240,7 +242,9 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (isPdfReaderMediaEventTarget(target)) return true;
   if (!(target instanceof HTMLElement)) return false;
-  return !!target.closest("button,a,input,select,textarea,[role='button']");
+  return !!target.closest(
+    "button,a,input,select,textarea,[role='button'],[role='slider']",
+  );
 }
 
 function getPdfReaderEventElement(target: EventTarget | null): Element | null {
@@ -389,6 +393,7 @@ function PdfReaderContentInner(
 ) {
   const {
     dataUrl,
+    bottomOverlayOffset = "1rem",
     initialProgress = 0,
     onBoundaryPage,
     onPageIndexChange,
@@ -426,6 +431,7 @@ function PdfReaderContentInner(
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [pageCount, setPageCount] = useState(0);
+  const [progress, setProgress] = useState(clampProgress(initialProgress));
   const [renderBounds, setRenderBounds] = useState<PdfRenderBounds>(
     INITIAL_PDF_RENDER_BOUNDS,
   );
@@ -464,6 +470,7 @@ function PdfReaderContentInner(
     if (pageCountRef.current > 0) return;
     latestProgressRef.current = nextProgress;
     lastSavedProgressRef.current = Math.round(nextProgress);
+    setProgress(nextProgress);
     if (nextProgress < 97) {
       completedForNavigationRef.current = false;
     }
@@ -549,6 +556,7 @@ function PdfReaderContentInner(
       currentVisiblePageCount,
     );
     latestProgressRef.current = nextProgress;
+    setProgress(nextProgress);
     onPageIndexChangeRef.current?.(
       isPagedReader
         ? currentPageNumber
@@ -651,6 +659,7 @@ function PdfReaderContentInner(
         }
         completedForNavigationRef.current = true;
         latestProgressRef.current = 100;
+        setProgress(100);
         if (progressTimerRef.current !== null) {
           window.clearTimeout(progressTimerRef.current);
           progressTimerRef.current = null;
@@ -683,6 +692,7 @@ function PdfReaderContentInner(
     pageNumberRef.current = 1;
     latestProgressRef.current = initialProgressRef.current;
     lastSavedProgressRef.current = Math.round(initialProgressRef.current);
+    setProgress(initialProgressRef.current);
     setError(null);
     setLoading(true);
     restorePendingRef.current = true;
@@ -968,73 +978,147 @@ function PdfReaderContentInner(
     }, WHEEL_PAGE_COOLDOWN_MS);
   };
 
+  const seekToProgress = useCallback(
+    (value: number) => {
+      const node = viewportRef.current;
+      const currentPageCount = pageCountRef.current;
+      if (!node || currentPageCount <= 0) return;
+      const clamped = clampProgress(value);
+      if (clamped < 97) {
+        completedForNavigationRef.current = false;
+      }
+      latestProgressRef.current = clamped;
+      setProgress(clamped);
+
+      if (isPagedReader) {
+        const nextPage = getPageFromProgress(
+          clamped,
+          currentPageCount,
+          visiblePageCountRef.current,
+        );
+        if (nextPage !== pageNumberRef.current) {
+          pendingPageScrollRef.current = null;
+          restorePendingRef.current = true;
+          renderedPagesRef.current = new Set();
+          pageNumberRef.current = nextPage;
+          setPageNumber(nextPage);
+          setLayoutVersion((current) => current + 1);
+        } else {
+          const offset = getPagedProgressOffset(
+            clamped,
+            nextPage,
+            currentPageCount,
+            visiblePageCountRef.current,
+          );
+          node.scrollTo({
+            top: getVerticalScrollMax(node) * offset,
+            left: 0,
+            behavior: "auto",
+          });
+          restorePendingRef.current = false;
+          onPageIndexChangeRef.current?.(nextPage);
+        }
+      } else {
+        node.scrollTo({
+          top: getVerticalScrollMax(node) * (clamped / 100),
+          left: 0,
+          behavior: "auto",
+        });
+        onPageIndexChangeRef.current?.(
+          getScrollPageIndex(clamped, currentPageCount),
+        );
+      }
+
+      scheduleProgressSave(clamped);
+    },
+    [isPagedReader, scheduleProgressSave],
+  );
+
+  const commitSeekProgress = useCallback(() => {
+    flushProgress(latestProgressRef.current);
+  }, [flushProgress]);
+
   return (
     <Box
-      ref={viewportRef}
-      className={`lnr-pdf-reader-viewport${
-        isTwoPageReader ? " reader-viewport-two-page" : ""
-      }`}
-      data-mode={isPagedReader ? "paged" : "scroll"}
-      data-two-page={isTwoPageReader}
-      onClickCapture={stopPdfReaderMediaClick}
-      onDoubleClickCapture={stopPdfReaderMediaClick}
-      onClick={handleClick}
-      onScroll={updateProgressFromScroll}
-      onTouchStart={(event) => {
-        const touch = event.changedTouches[0];
-        if (touch) {
-          touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-        }
-      }}
-      onTouchEnd={(event) => {
-        if (!general.swipeGestures || !touchStartRef.current) {
-          touchStartRef.current = null;
-          return;
-        }
-        const touch = event.changedTouches[0];
-        if (!touch) return;
-        const dx = touch.clientX - touchStartRef.current.x;
-        const dy = touch.clientY - touchStartRef.current.y;
-        touchStartRef.current = null;
-        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
-          scrollByPage(dx < 0 ? 1 : -1);
-        }
-      }}
-      onWheel={handleWheel}
+      className="lnr-pdf-reader-stage"
       style={{
+        height: viewportHeight,
         background: appearance.backgroundColor,
         color: appearance.textColor,
-        cursor: "pointer",
-        height: viewportHeight,
       }}
     >
       <div
-        ref={canvasWrapRef}
-        className="lnr-pdf-reader-page-wrap"
+        ref={viewportRef}
+        className={`lnr-pdf-reader-viewport${
+          isTwoPageReader ? " reader-viewport-two-page" : ""
+        }`}
         data-mode={isPagedReader ? "paged" : "scroll"}
         data-two-page={isTwoPageReader}
+        onClickCapture={stopPdfReaderMediaClick}
+        onDoubleClickCapture={stopPdfReaderMediaClick}
+        onClick={handleClick}
+        onScroll={updateProgressFromScroll}
+        onTouchStart={(event) => {
+          const touch = event.changedTouches[0];
+          if (touch) {
+            touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+          }
+        }}
+        onTouchEnd={(event) => {
+          if (!general.swipeGestures || !touchStartRef.current) {
+            touchStartRef.current = null;
+            return;
+          }
+          const touch = event.changedTouches[0];
+          if (!touch) return;
+          const dx = touch.clientX - touchStartRef.current.x;
+          const dy = touch.clientY - touchStartRef.current.y;
+          touchStartRef.current = null;
+          if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+            scrollByPage(dx < 0 ? 1 : -1);
+          }
+        }}
+        onWheel={handleWheel}
       >
-        {loading ? (
-          <div className="lnr-pdf-reader-state">{t("reader.loadingContent")}</div>
-        ) : error ? (
-          <div className="lnr-pdf-reader-state" role="alert">
-            <span>{t("reader.loadFailed")}</span>
-            <span>{error}</span>
-          </div>
-        ) : null}
-        {pdfDocument && renderBounds.width > 0
-          ? pageNumbers.map((item) => (
-              <PdfPageCanvas
-                key={item}
-                pageNumber={item}
-                pdfDocument={pdfDocument}
-                renderBounds={renderBounds}
-                onRenderError={handleRenderError}
-                onRendered={handlePageRendered}
-              />
-            ))
-          : null}
+        <div
+          ref={canvasWrapRef}
+          className="lnr-pdf-reader-page-wrap"
+          data-mode={isPagedReader ? "paged" : "scroll"}
+          data-two-page={isTwoPageReader}
+        >
+          {loading ? (
+            <div className="lnr-pdf-reader-state">
+              {t("reader.loadingContent")}
+            </div>
+          ) : error ? (
+            <div className="lnr-pdf-reader-state" role="alert">
+              <span>{t("reader.loadFailed")}</span>
+              <span>{error}</span>
+            </div>
+          ) : null}
+          {pdfDocument && renderBounds.width > 0
+            ? pageNumbers.map((item) => (
+                <PdfPageCanvas
+                  key={item}
+                  pageNumber={item}
+                  pdfDocument={pdfDocument}
+                  renderBounds={renderBounds}
+                  onRenderError={handleRenderError}
+                  onRendered={handlePageRendered}
+                />
+              ))
+            : null}
+        </div>
       </div>
+      <ReaderSeekbars
+        bottomOffset={bottomOverlayOffset}
+        label={t("reader.progressAria", { progress: Math.round(progress) })}
+        onCommit={commitSeekProgress}
+        onSeek={seekToProgress}
+        progress={progress}
+        showHorizontal={general.showSeekbar}
+        showVertical={general.showSeekbar && general.verticalSeekbar}
+      />
     </Box>
   );
 }

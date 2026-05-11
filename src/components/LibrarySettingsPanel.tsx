@@ -1,61 +1,21 @@
 import { NumberInput, Select, Stack, Switch } from "@mantine/core";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { SettingsFieldRow, SettingsSection } from "./SettingsPrimitives";
-import { useTranslation, type TranslationKey } from "../i18n";
+import { useTranslation } from "../i18n";
+import {
+  DEFAULT_CHAPTER_SORT_LABEL_KEYS,
+  DEFAULT_CHAPTER_SORT_ORDERS,
+  LIBRARY_DISPLAY_MODE_LABEL_KEYS,
+  LIBRARY_DISPLAY_MODES,
+  LIBRARY_SORT_ORDER_LABEL_KEYS,
+  LIBRARY_SORT_ORDERS,
+} from "../lib/library-settings-options";
 import {
   useLibraryStore,
   type DefaultChapterSort,
   type LibraryDisplayMode,
   type LibrarySortOrder,
 } from "../store/library";
-
-const DISPLAY_MODE_LABEL_KEYS: Record<LibraryDisplayMode, TranslationKey> = {
-  compact: "librarySettings.display.compact",
-  comfortable: "librarySettings.display.comfortable",
-  "cover-only": "librarySettings.display.coverOnly",
-  list: "librarySettings.display.list",
-};
-
-const SORT_ORDER_LABEL_KEYS: Record<LibrarySortOrder, TranslationKey> = {
-  nameAsc: "librarySettings.sort.nameAsc",
-  nameDesc: "librarySettings.sort.nameDesc",
-  downloadedAsc: "librarySettings.sort.downloadedAsc",
-  downloadedDesc: "librarySettings.sort.downloadedDesc",
-  totalChaptersAsc: "librarySettings.sort.totalChaptersAsc",
-  totalChaptersDesc: "librarySettings.sort.totalChaptersDesc",
-  unreadChaptersAsc: "librarySettings.sort.unreadChaptersAsc",
-  unreadChaptersDesc: "librarySettings.sort.unreadChaptersDesc",
-  dateAddedAsc: "librarySettings.sort.dateAddedAsc",
-  dateAddedDesc: "librarySettings.sort.dateAddedDesc",
-  lastReadAsc: "librarySettings.sort.lastReadAsc",
-  lastReadDesc: "librarySettings.sort.lastReadDesc",
-  lastUpdatedAsc: "librarySettings.sort.lastUpdatedAsc",
-  lastUpdatedDesc: "librarySettings.sort.lastUpdatedDesc",
-};
-
-const DISPLAY_MODES: LibraryDisplayMode[] = [
-  "compact",
-  "comfortable",
-  "cover-only",
-  "list",
-];
-
-const SORT_ORDERS: LibrarySortOrder[] = [
-  "nameAsc",
-  "nameDesc",
-  "downloadedAsc",
-  "downloadedDesc",
-  "totalChaptersAsc",
-  "totalChaptersDesc",
-  "unreadChaptersAsc",
-  "unreadChaptersDesc",
-  "dateAddedAsc",
-  "dateAddedDesc",
-  "lastReadAsc",
-  "lastReadDesc",
-  "lastUpdatedAsc",
-  "lastUpdatedDesc",
-];
 
 export function LibrarySettingsPanel() {
   const { t } = useTranslation();
@@ -88,9 +48,9 @@ export function LibrarySettingsPanel() {
           description={t("librarySettings.sort.description")}
         >
           <Select
-            data={SORT_ORDERS.map((value) => ({
+            data={LIBRARY_SORT_ORDERS.map((value) => ({
               value,
-              label: t(SORT_ORDER_LABEL_KEYS[value]),
+              label: t(LIBRARY_SORT_ORDER_LABEL_KEYS[value]),
             }))}
             value={sortOrder}
             onChange={(value) => {
@@ -103,10 +63,10 @@ export function LibrarySettingsPanel() {
           description={t("librarySettings.defaultChapterSort.description")}
         >
           <Select
-            data={[
-              { value: "asc", label: t("librarySettings.oldestFirst") },
-              { value: "desc", label: t("librarySettings.newestFirst") },
-            ]}
+            data={DEFAULT_CHAPTER_SORT_ORDERS.map((value) => ({
+              value,
+              label: t(DEFAULT_CHAPTER_SORT_LABEL_KEYS[value]),
+            }))}
             value={defaultChapterSort}
             onChange={(value) => {
               if (value) setDefaultChapterSort(value as DefaultChapterSort);
@@ -121,9 +81,9 @@ export function LibrarySettingsPanel() {
           description={t("librarySettings.displayMode.description")}
         >
           <SegmentedToggle
-            data={DISPLAY_MODES.map((value) => ({
+            data={LIBRARY_DISPLAY_MODES.map((value) => ({
               value,
-              label: t(DISPLAY_MODE_LABEL_KEYS[value]),
+              label: t(LIBRARY_DISPLAY_MODE_LABEL_KEYS[value]),
             }))}
             value={displayMode}
             onChange={(value) => setDisplayMode(value as LibraryDisplayMode)}

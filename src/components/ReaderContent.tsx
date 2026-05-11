@@ -21,6 +21,7 @@ import {
   type ReaderTapAction,
   type ReaderTapZone,
 } from "../store/reader";
+import { ReaderSeekbars } from "./ReaderSeekbars";
 
 export interface ReaderContentHandle {
   completeIfAtEnd: () => boolean;
@@ -96,7 +97,9 @@ function getTwoPageMediaMatches(): boolean {
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (isReaderMediaEventTarget(target)) return true;
   if (!(target instanceof HTMLElement)) return false;
-  return !!target.closest("button,a,input,select,textarea,[role='button']");
+  return !!target.closest(
+    "button,a,input,select,textarea,[role='button'],[role='slider']",
+  );
 }
 
 function getReaderEventElement(target: EventTarget | null): Element | null {
@@ -770,6 +773,28 @@ function ReaderContentInner(
     }, WHEEL_PAGE_COOLDOWN_MS);
   };
 
+  const seekToProgress = useCallback(
+    (value: number) => {
+      const node = viewportRef.current;
+      if (!node) return;
+      const clamped = clampProgress(value);
+      if (clamped < 97) {
+        completedForNavigationRef.current = false;
+      }
+      scrollToProgress(node, clamped, isPagedReader, "auto");
+      const nextProgress = clampProgress(getProgress(node, isPagedReader));
+      latestProgressRef.current = nextProgress;
+      setProgress(nextProgress);
+      applyPageInfo(getPageInfo(node, isPagedReader));
+      scheduleProgressSave(nextProgress);
+    },
+    [applyPageInfo, isPagedReader, scheduleProgressSave],
+  );
+
+  const commitSeekProgress = useCallback(() => {
+    flushProgress(latestProgressRef.current);
+  }, [flushProgress]);
+
   const contentStyle: CSSProperties = {
     boxSizing: "border-box",
     color: appearance.textColor,
@@ -817,61 +842,70 @@ function ReaderContentInner(
 
   return (
     <Box
-      ref={viewportRef}
-      className={viewportClassName}
-      onClickCapture={stopReaderMediaClick}
-      onDoubleClickCapture={stopReaderMediaClick}
-      onClick={handleClick}
-      onScroll={updateProgressFromScroll}
-      onWheel={handleWheel}
-      onTouchStart={(event) => {
-        if (interactionBlocked) return;
-        const touch = event.changedTouches[0];
-        if (touch) {
-          touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-        }
-      }}
-      onTouchEnd={(event) => {
-        if (interactionBlocked) {
-          touchStartRef.current = null;
-          return;
-        }
-        if (!general.swipeGestures || !touchStartRef.current) return;
-        const touch = event.changedTouches[0];
-        if (!touch) return;
-        const dx = touch.clientX - touchStartRef.current.x;
-        const dy = touch.clientY - touchStartRef.current.y;
-        touchStartRef.current = null;
-        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
-          scrollByPage(dx < 0 ? 1 : -1);
-        }
-      }}
+      className="lnr-reader-content-stage"
       style={{
-        position: "relative",
         height: viewportHeight,
-        overflowX: "hidden",
-        overflowY: isPagedReader ? "hidden" : "auto",
         background: appearance.backgroundColor,
         color: appearance.textColor,
-        cursor: "pointer",
-        scrollBehavior: isPagedReader ? "auto" : "smooth",
       }}
     >
-      {appearance.customCss.trim() ? <style>{appearance.customCss}</style> : null}
       <Box
-        ref={contentRef}
-        className="reader-content"
-        data-image-paging={
-          isPagedReader ? general.htmlImagePagingMode : undefined
-        }
-        style={{
-          ...contentStyle,
-          ...pageStyle,
+        ref={viewportRef}
+        className={viewportClassName}
+        onClickCapture={stopReaderMediaClick}
+        onDoubleClickCapture={stopReaderMediaClick}
+        onClick={handleClick}
+        onScroll={updateProgressFromScroll}
+        onWheel={handleWheel}
+        onTouchStart={(event) => {
+          if (interactionBlocked) return;
+          const touch = event.changedTouches[0];
+          if (touch) {
+            touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+          }
         }}
-        dangerouslySetInnerHTML={{ __html: renderedHtml }}
-      />
-      <style>
-        {`
+        onTouchEnd={(event) => {
+          if (interactionBlocked) {
+            touchStartRef.current = null;
+            return;
+          }
+          if (!general.swipeGestures || !touchStartRef.current) return;
+          const touch = event.changedTouches[0];
+          if (!touch) return;
+          const dx = touch.clientX - touchStartRef.current.x;
+          const dy = touch.clientY - touchStartRef.current.y;
+          touchStartRef.current = null;
+          if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+            scrollByPage(dx < 0 ? 1 : -1);
+          }
+        }}
+        style={{
+          position: "relative",
+          height: "100%",
+          overflowX: "hidden",
+          overflowY: isPagedReader ? "hidden" : "auto",
+          color: appearance.textColor,
+          cursor: "pointer",
+          scrollBehavior: isPagedReader ? "auto" : "smooth",
+        }}
+      >
+        {appearance.customCss.trim() ? (
+          <style>{appearance.customCss}</style>
+        ) : null}
+        <Box
+          ref={contentRef}
+          className="reader-content"
+          data-image-paging={
+            isPagedReader ? general.htmlImagePagingMode : undefined
+          }
+          style={{
+            ...contentStyle,
+            ...pageStyle,
+          }}
+          dangerouslySetInnerHTML={{ __html: renderedHtml }}
+        />
+        <style>
+          {`
           .reader-content :where(img, svg, video, canvas, iframe) {
             max-width: 100%;
             height: auto;
@@ -932,38 +966,48 @@ function ReaderContentInner(
             display: none;
           }
         `}
-      </style>
-      {(general.showScrollPercentage || general.showBatteryAndTime) && (
-        <Box
-          style={{
-            position: "fixed",
-            left: "0.75rem",
-            right: "0.75rem",
-            bottom: overlayBottom,
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "0.75rem",
-            color: appearance.textColor,
-            fontSize: "0.75rem",
-            pointerEvents: "none",
-            opacity: 0.78,
-            zIndex: 4,
-          }}
-        >
-          <span>
-            {general.showScrollPercentage
-              ? isPagedReader
-                ? `${pageInfo.current}/${pageInfo.total}`
-                : `${Math.round(progress)}%`
-              : ""}
-          </span>
-          <span>
-            {general.showBatteryAndTime
-              ? [battery, formatClock(now, locale)].filter(Boolean).join(" | ")
-              : ""}
-          </span>
-        </Box>
-      )}
+        </style>
+        {(general.showScrollPercentage || general.showBatteryAndTime) && (
+          <Box
+            style={{
+              position: "fixed",
+              left: "0.75rem",
+              right: "0.75rem",
+              bottom: overlayBottom,
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+              color: appearance.textColor,
+              fontSize: "0.75rem",
+              pointerEvents: "none",
+              opacity: 0.78,
+              zIndex: 4,
+            }}
+          >
+            <span>
+              {general.showScrollPercentage
+                ? isPagedReader
+                  ? `${pageInfo.current}/${pageInfo.total}`
+                  : `${Math.round(progress)}%`
+                : ""}
+            </span>
+            <span>
+              {general.showBatteryAndTime
+                ? [battery, formatClock(now, locale)].filter(Boolean).join(" | ")
+                : ""}
+            </span>
+          </Box>
+        )}
+      </Box>
+      <ReaderSeekbars
+        bottomOffset={overlayBottom}
+        label={t("reader.progressAria", { progress: Math.round(progress) })}
+        onCommit={commitSeekProgress}
+        onSeek={seekToProgress}
+        progress={progress}
+        showHorizontal={general.showSeekbar}
+        showVertical={general.showSeekbar && general.verticalSeekbar}
+      />
     </Box>
   );
 }
