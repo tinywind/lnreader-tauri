@@ -18,6 +18,17 @@ This policy covers Norea-owned local data, including SQLite schema/data,
 settings, reading progress, library records, local novel records, downloaded
 chapter content, chapter media cache metadata, and Norea backup format.
 
+## Schema Versioning
+
+- During pre-release schema churn, Norea does not keep one migration file for
+  every schema edit.
+- Before a release boundary, the current SQLite schema may replace prior
+  development migration history. Local development databases can be reset when
+  that happens.
+- Schema version or migration files are created only at release boundaries.
+- Compatibility obligations apply between released schema versions inside the
+  active release line, not to discarded pre-release development history.
+
 ## Boundaries
 
 - Compatibility across different stable major versions is not guaranteed.
@@ -29,8 +40,8 @@ chapter content, chapter media cache metadata, and Norea backup format.
 
 ## Change Checklist
 
-When a change touches storage, backup, import/export, migrations, local files,
-or release packaging:
+When a change touches storage, backup, import/export, schema version files,
+local files, or release packaging:
 
 1. Identify the current release line that the change belongs to.
 2. If the change is inside the compatibility scope, keep existing data readable

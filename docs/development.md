@@ -62,12 +62,13 @@ Use the smallest relevant check for the change.
 ```bash
 pnpm tsc
 pnpm test
-pnpm db:generate
 pnpm tauri build --debug
 ```
 
-After `pnpm db:generate`, commit any intended `drizzle/` migration changes. CI
-fails when generated migrations drift from the checked-in schema.
+`pnpm db:generate` remains available for deliberate release-boundary schema
+generation work, but pre-release schema churn should not accumulate migration
+history. Reset local development databases when the current schema is
+intentionally replaced.
 
 Rust-side checks:
 
@@ -191,7 +192,7 @@ machine's LAN IP or `10.0.2.2` for the Android emulator.
 | React app | `src/` |
 | Tauri/Rust host | `src-tauri/` |
 | Android project shell | `src-tauri/gen/android/` |
-| Database schema and migrations | `src/db/`, `drizzle/` |
+| Database queries and schema | `src/db/`, `src-tauri/src/schema.sql`, `drizzle.config.ts` |
 | Plugin runtime | `src/lib/plugins/`, `src/lib/http.ts`, `src-tauri/src/scraper.rs` |
 | Local import and local novel data | `src/lib/local-import.ts`, `src/db/queries/novel.ts` |
 | i18n strings | `strings/languages/` |

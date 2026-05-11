@@ -8,8 +8,8 @@ let dbPromise: Promise<Database> | null = null;
  * Singleton accessor for the SQLite database.
  *
  * The Rust-side `tauri-plugin-sql` registration in
- * `src-tauri/src/lib.rs` runs the drizzle-generated migrations
- * the first time this URL is loaded.
+ * `src-tauri/src/lib.rs` runs the bootstrap schema migration the first
+ * time this URL is loaded.
  */
 export function getDb(): Promise<Database> {
   if (!dbPromise) {

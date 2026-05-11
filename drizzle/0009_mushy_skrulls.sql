@@ -1,1 +1,0 @@
-ALTER TABLE `chapter` ADD `content_type` text DEFAULT 'html' NOT NULL;

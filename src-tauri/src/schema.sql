@@ -1,37 +1,130 @@
-ALTER TABLE `novel_stats` ADD `progress_sum` integer DEFAULT 0 NOT NULL;
+CREATE TABLE `novel` (
+  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  `plugin_id` text NOT NULL,
+  `path` text NOT NULL,
+  `name` text NOT NULL,
+  `cover` text,
+  `summary` text,
+  `author` text,
+  `artist` text,
+  `status` text,
+  `genres` text,
+  `in_library` integer DEFAULT false NOT NULL,
+  `is_local` integer DEFAULT false NOT NULL,
+  `created_at` integer DEFAULT (unixepoch()) NOT NULL,
+  `updated_at` integer DEFAULT (unixepoch()) NOT NULL,
+  `library_added_at` integer,
+  `last_read_at` integer
+);
 --> statement-breakpoint
-UPDATE `novel_stats`
-SET
-  `progress_sum` = COALESCE(
-    (
-      SELECT SUM(
-        CASE
-          WHEN c.`progress` >= 100 THEN 100
-          WHEN c.`progress` < 0 THEN 0
-          WHEN c.`progress` > 100 THEN 100
-          ELSE c.`progress`
-        END
-      )
-      FROM `chapter` c
-      WHERE c.`novel_id` = `novel_stats`.`novel_id`
-    ),
-    0
-  );
+CREATE UNIQUE INDEX `novel_plugin_path_uniq` ON `novel` (`plugin_id`, `path`);
 --> statement-breakpoint
-UPDATE `novel_stats`
-SET `reading_progress` = CASE
-  WHEN `total_chapters` > 0
-    THEN ROUND(CAST(`progress_sum` AS REAL) / `total_chapters`)
-  ELSE 0
-END;
+CREATE INDEX `novel_in_library_idx` ON `novel` (`in_library`);
 --> statement-breakpoint
-DROP TRIGGER IF EXISTS `chapter_stats_after_insert`;
+CREATE TABLE `chapter` (
+  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  `novel_id` integer NOT NULL,
+  `path` text NOT NULL,
+  `name` text NOT NULL,
+  `chapter_number` text,
+  `position` integer NOT NULL,
+  `page` text DEFAULT '1' NOT NULL,
+  `bookmark` integer DEFAULT false NOT NULL,
+  `unread` integer DEFAULT true NOT NULL,
+  `progress` integer DEFAULT 0 NOT NULL,
+  `is_downloaded` integer DEFAULT false NOT NULL,
+  `content` text,
+  `content_type` text DEFAULT 'html' NOT NULL,
+  `content_bytes` integer DEFAULT 0 NOT NULL,
+  `media_bytes` integer DEFAULT 0 NOT NULL,
+  `release_time` text,
+  `read_at` integer,
+  `created_at` integer,
+  `found_at` integer DEFAULT 0 NOT NULL,
+  `updated_at` integer DEFAULT (unixepoch()) NOT NULL,
+  FOREIGN KEY (`novel_id`) REFERENCES `novel`(`id`) ON UPDATE no action ON DELETE cascade
+);
 --> statement-breakpoint
-DROP TRIGGER IF EXISTS `chapter_stats_after_update_same_novel`;
+CREATE UNIQUE INDEX `chapter_novel_path_uniq` ON `chapter` (`novel_id`, `path`);
 --> statement-breakpoint
-DROP TRIGGER IF EXISTS `chapter_stats_after_update_moved_novel`;
+CREATE INDEX `chapter_novel_position_idx` ON `chapter` (`novel_id`, `position`);
 --> statement-breakpoint
-DROP TRIGGER IF EXISTS `chapter_stats_after_delete`;
+CREATE INDEX `chapter_downloaded_updated_idx` ON `chapter` (`is_downloaded`, `updated_at`, `novel_id`);
+--> statement-breakpoint
+CREATE INDEX `chapter_novel_downloaded_position_idx` ON `chapter` (`novel_id`, `is_downloaded`, `position`, `id`);
+--> statement-breakpoint
+CREATE INDEX `chapter_unread_found_position_idx` ON `chapter` (`unread`, `found_at`, `position`, `id`);
+--> statement-breakpoint
+CREATE TABLE `novel_stats` (
+  `novel_id` integer PRIMARY KEY NOT NULL,
+  `total_chapters` integer DEFAULT 0 NOT NULL,
+  `chapters_downloaded` integer DEFAULT 0 NOT NULL,
+  `chapters_unread` integer DEFAULT 0 NOT NULL,
+  `progress_sum` integer DEFAULT 0 NOT NULL,
+  `reading_progress` integer DEFAULT 0 NOT NULL,
+  `last_chapter_updated_at` integer DEFAULT 0 NOT NULL,
+  `updated_at` integer DEFAULT (unixepoch()) NOT NULL,
+  FOREIGN KEY (`novel_id`) REFERENCES `novel`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `novel_stats_downloaded_idx` ON `novel_stats` (`chapters_downloaded`);
+--> statement-breakpoint
+CREATE INDEX `novel_stats_unread_idx` ON `novel_stats` (`chapters_unread`);
+--> statement-breakpoint
+CREATE INDEX `novel_stats_total_idx` ON `novel_stats` (`total_chapters`);
+--> statement-breakpoint
+CREATE INDEX `novel_stats_last_chapter_updated_idx` ON `novel_stats` (`last_chapter_updated_at`);
+--> statement-breakpoint
+CREATE TABLE `category` (
+  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  `name` text NOT NULL,
+  `sort` integer NOT NULL,
+  `is_system` integer DEFAULT false NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `category_name_uniq` ON `category` (`name`);
+--> statement-breakpoint
+CREATE INDEX `category_sort_idx` ON `category` (`sort`);
+--> statement-breakpoint
+CREATE TABLE `novel_category` (
+  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  `novel_id` integer NOT NULL,
+  `category_id` integer NOT NULL,
+  FOREIGN KEY (`novel_id`) REFERENCES `novel`(`id`) ON UPDATE no action ON DELETE cascade,
+  FOREIGN KEY (`category_id`) REFERENCES `category`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `novel_category_uniq` ON `novel_category` (`novel_id`, `category_id`);
+--> statement-breakpoint
+CREATE INDEX `novel_category_category_idx` ON `novel_category` (`category_id`);
+--> statement-breakpoint
+CREATE TABLE `repository` (
+  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  `url` text NOT NULL,
+  `name` text,
+  `added_at` integer DEFAULT (unixepoch()) NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `repository_url_uniq` ON `repository` (`url`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `repository_singleton_uniq` ON `repository` ((1));
+--> statement-breakpoint
+CREATE TABLE `installed_plugin` (
+  `id` text PRIMARY KEY NOT NULL,
+  `name` text NOT NULL,
+  `lang` text NOT NULL,
+  `version` text NOT NULL,
+  `icon_url` text NOT NULL,
+  `source_url` text NOT NULL,
+  `source_code` text NOT NULL,
+  `installed_at` integer DEFAULT (unixepoch()) NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `repository_index_cache` (
+  `repo_url` text PRIMARY KEY NOT NULL,
+  `fetched_at` integer DEFAULT (unixepoch()) NOT NULL,
+  `items_json` text NOT NULL
+);
 --> statement-breakpoint
 CREATE TRIGGER `chapter_stats_after_insert`
 AFTER INSERT ON `chapter`

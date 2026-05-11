@@ -9,13 +9,4 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 pnpm tsc
-pnpm db:generate
-
-if ! git diff --exit-code -- drizzle/; then
-  echo "drizzle migrations are out of sync with schema.ts."
-  echo "Run 'pnpm db:generate' locally and commit the generated migration changes."
-  exit 1
-fi
-
 pnpm test
-

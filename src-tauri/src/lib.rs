@@ -31,69 +31,8 @@ pub fn run() {
     let migrations = vec![
         Migration {
             version: 1,
-            description:
-                "create initial schema (novel, chapter, category, novel_category, repository)",
-            sql: include_str!("../../drizzle/0000_slow_mach_iv.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "chapter: add content column (downloaded HTML body)",
-            sql: include_str!("../../drizzle/0001_fuzzy_adam_warlock.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "installed_plugin + repository_index_cache tables",
-            sql: include_str!("../../drizzle/0002_plugin_persistence.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "track library registration and chapter discovery timestamps",
-            sql: include_str!("../../drizzle/0003_update_discovery_timestamps.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "enforce single plugin repository",
-            sql: include_str!("../../drizzle/0004_single_repository.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "materialize update ordering timestamp",
-            sql: include_str!("../../drizzle/0005_naive_leech.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 7,
-            description: "materialize library novel chapter statistics",
-            sql: include_str!("../../drizzle/0006_slippery_magma.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 8,
-            description: "maintain library novel statistics incrementally",
-            sql: include_str!("../../drizzle/0007_furry_ogun.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 9,
-            description: "store downloaded chapter content byte counts",
-            sql: include_str!("../../drizzle/0008_careful_sunset_bain.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 10,
-            description: "track downloaded chapter content type",
-            sql: include_str!("../../drizzle/0009_mushy_skrulls.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 11,
-            description: "store downloaded chapter media byte counts",
-            sql: include_str!("../../drizzle/0010_breezy_media_bytes.sql"),
+            description: "create current application schema",
+            sql: include_str!("schema.sql"),
             kind: MigrationKind::Up,
         },
     ];

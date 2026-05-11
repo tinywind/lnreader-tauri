@@ -1,1 +1,0 @@
-ALTER TABLE `chapter` ADD `content` text;

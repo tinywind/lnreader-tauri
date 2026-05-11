@@ -99,7 +99,7 @@ are acceptable to keep, but they are not binding.
 | UI | Mantine |
 | Routing | TanStack Router |
 | State | Zustand and TanStack Query |
-| Database | SQLite through `tauri-plugin-sql` and drizzle proxy |
+| Database | SQLite through `tauri-plugin-sql` with Drizzle schema definitions |
 | HTTP | `tauri-plugin-http`, Rust-side fetch commands, and scraper WebView |
 | Package manager | pnpm |
 | Node | 22 LTS |
