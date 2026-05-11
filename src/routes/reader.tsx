@@ -490,6 +490,9 @@ export function ReaderPage() {
     ],
   );
   const fullPageReader = effectiveReaderGeneral.fullPageReader;
+  const setFullPageReaderActive = useReaderStore(
+    (state) => state.setFullPageReaderActive,
+  );
   const setFullPageReaderChromeVisible = useReaderStore(
     (state) => state.setFullPageReaderChromeVisible,
   );
@@ -939,8 +942,15 @@ export function ReaderPage() {
     sharedFullPageReaderChromeVisible,
   ]);
 
+  useEffect(() => {
+    setFullPageReaderActive(fullPageReader);
+    return () => setFullPageReaderActive(false);
+  }, [fullPageReader, setFullPageReaderActive]);
+
   useEffect(
-    () => () => setFullPageReaderChromeVisible(false),
+    () => () => {
+      setFullPageReaderChromeVisible(false);
+    },
     [setFullPageReaderChromeVisible],
   );
 

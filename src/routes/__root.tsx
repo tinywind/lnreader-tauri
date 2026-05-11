@@ -278,9 +278,8 @@ export function RootLayout() {
   const showUpdatesTab = useAppearanceStore((s) => s.showUpdatesTab);
   const showDownloadsTab = useAppearanceStore((s) => s.showDownloadsTab);
   const showTasksTab = useAppearanceStore((s) => s.showTasksTab);
-  const fullPageReader = useReaderStore((state) => state.general.fullPageReader);
-  const readerSeekbarEnabled = useReaderStore(
-    (state) => state.general.showSeekbar,
+  const fullPageReaderActive = useReaderStore(
+    (state) => state.fullPageReaderActive,
   );
   const fullPageReaderChromeVisible = useReaderStore(
     (state) => state.fullPageReaderChromeVisible,
@@ -371,9 +370,7 @@ export function RootLayout() {
 
   const pageVisited = (page: PersistentPage) =>
     visitedPages.has(page) || activePersistentPage === page;
-  const readerFullPageActive = pathname === "/reader" && fullPageReader;
-  const readerMobileSeekbarActive =
-    pathname === "/reader" && readerSeekbarEnabled;
+  const readerFullPageActive = pathname === "/reader" && fullPageReaderActive;
   const mobileNavVisible = !readerFullPageActive || fullPageReaderChromeVisible;
   const navItems = NAV_ITEMS.filter((item) =>
     isNavItemVisible(item, {
@@ -429,7 +426,6 @@ export function RootLayout() {
       </AppShell.Navbar>
       <AppShell.Main
         className="lnr-app-main"
-        data-reader-seekbar={readerMobileSeekbarActive}
         style={{
           background: "var(--lnr-design-bg)",
           color: "var(--lnr-design-ink)",
@@ -479,7 +475,6 @@ export function RootLayout() {
       <nav
         className="lnr-mobile-nav"
         data-reader-full-page={readerFullPageActive}
-        data-reader-seekbar={readerMobileSeekbarActive}
         data-reader-visible={mobileNavVisible}
         data-show-labels={showLabelsInNav}
         aria-label={t("nav.primary")}

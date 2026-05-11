@@ -826,12 +826,15 @@
   }
 
   .lnr-reader-floating-seekbar[data-orientation="horizontal"] {
-    bottom: calc(var(--lnr-safe-area-bottom) + 0.75rem);
+    bottom: var(--lnr-reader-seek-bottom, 1rem);
     width: min(18rem, calc(100% - 3rem));
   }
 
   .lnr-reader-floating-seekbar[data-orientation="vertical"] {
-    height: min(24rem, calc(100% - var(--lnr-safe-area-bottom) - 5rem));
+    height: min(
+      24rem,
+      calc(100% - var(--lnr-reader-seek-bottom, 1rem) - 4rem)
+    );
     right: 0.75rem;
   }
 }
