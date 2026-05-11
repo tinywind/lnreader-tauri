@@ -96,6 +96,11 @@ export interface ChapterStorageRestoreResult {
   novels: number;
 }
 
+export interface ChapterStorageRestoreOptions {
+  chapterIds?: ReadonlySet<number>;
+  contentOnly?: boolean;
+}
+
 const SELECT_CHAPTER_STORAGE_ROW = `
   SELECT
     c.id             AS chapterId,
@@ -206,6 +211,16 @@ const INSERT_MIRRORED_CHAPTER = `
     updated_at     = excluded.updated_at
 `;
 
+const UPDATE_MIRRORED_CHAPTER_CONTENT = `
+  UPDATE chapter
+     SET is_downloaded = 1,
+         content = $1,
+         content_bytes = $2,
+         media_bytes = $3,
+         content_type = $4
+   WHERE id = $5
+`;
+
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -311,14 +326,26 @@ export async function clearStoredChapterContentMirror(
   await invoke("chapter_content_mirror_clear", { chapterId });
 }
 
-export async function restoreChapterContentStorageMirror(): Promise<ChapterStorageRestoreResult> {
+export async function restoreChapterContentStorageMirror(
+  options: ChapterStorageRestoreOptions = {},
+): Promise<ChapterStorageRestoreResult> {
   if (!isTauriRuntime()) return { chapters: 0, novels: 0 };
 
   const manifest = await invoke<MirroredStorageManifest>(
     "chapter_content_mirror_read",
   );
-  const novels = Object.values(manifest.novels ?? {});
-  const chapters = Object.values(manifest.chapters ?? {});
+  const chapterValues = Object.values(manifest.chapters ?? {});
+  const chapters = options.chapterIds
+    ? chapterValues.filter(
+        (chapter) => options.chapterIds?.has(chapter.id) === true,
+      )
+    : chapterValues;
+  const restoredNovelIds = new Set(chapters.map((chapter) => chapter.novelId));
+  const novels = options.contentOnly
+    ? []
+    : Object.values(manifest.novels ?? {}).filter(
+        (novel) => !options.chapterIds || restoredNovelIds.has(novel.id),
+      );
   const db = await getDb();
   await db.execute("BEGIN IMMEDIATE");
   try {
@@ -343,6 +370,21 @@ export async function restoreChapterContentStorageMirror(): Promise<ChapterStora
       ]);
     }
     for (const chapter of chapters) {
+      const contentBytes =
+        chapter.contentBytes || utf8ByteLength(chapter.content);
+      const contentType = normalizeChapterContentType(
+        chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+      );
+      if (options.contentOnly) {
+        await db.execute(UPDATE_MIRRORED_CHAPTER_CONTENT, [
+          chapter.content,
+          contentBytes,
+          chapter.mediaBytes,
+          contentType,
+          chapter.id,
+        ]);
+        continue;
+      }
       await db.execute(INSERT_MIRRORED_CHAPTER, [
         chapter.id,
         chapter.novelId,
@@ -355,11 +397,9 @@ export async function restoreChapterContentStorageMirror(): Promise<ChapterStora
         chapter.unread,
         chapter.progress,
         chapter.content,
-        chapter.contentBytes || utf8ByteLength(chapter.content),
+        contentBytes,
         chapter.mediaBytes,
-        normalizeChapterContentType(
-          chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
-        ),
+        contentType,
         chapter.releaseTime,
         chapter.readAt,
         chapter.createdAt,

@@ -1,4 +1,5 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { restoreChapterContentStorageMirror } from "../chapter-content-storage";
 import { packBackup } from "./pack";
 import { applyBackupSnapshot, gatherBackupSnapshot } from "./snapshot";
 import { unpackBackup } from "./unpack";
@@ -38,7 +39,8 @@ export async function exportBackupToFile(): Promise<string | null> {
 }
 
 /**
- * Run the full import flow: file picker, zip unpack, then DB apply.
+ * Run the full import flow: file picker, zip unpack, DB apply, then
+ * storage-folder content restore.
  *
  * Destructive; replaces the backup-managed database rows. The
  * caller is expected to confirm intent before invoking this.
@@ -58,5 +60,13 @@ export async function importBackupFromFile(): Promise<string | null> {
   }
   const manifest = await unpackBackup(selected);
   await applyBackupSnapshot(manifest);
+  await restoreChapterContentStorageMirror({
+    chapterIds: new Set(
+      manifest.chapters
+        .filter((chapter) => chapter.content === null)
+        .map((chapter) => chapter.id),
+    ),
+    contentOnly: true,
+  });
   return selected;
 }

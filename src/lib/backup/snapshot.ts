@@ -345,20 +345,36 @@ function parseBackupChapterMediaSource(mediaSrc: string): {
 }
 
 async function restoreBackupChapterMediaFiles(
+  manifest: BackupManifest,
   files: readonly BackupChapterMediaFile[],
 ): Promise<void> {
   if (!isTauriRuntime()) return;
+
+  const chaptersById = new Map(
+    manifest.chapters.map((chapter) => [chapter.id, chapter]),
+  );
+  const novelsById = new Map(manifest.novels.map((novel) => [novel.id, novel]));
 
   await invoke("chapter_media_clear_all");
   for (const file of files) {
     const { cacheKey, chapterId, fileName } = parseBackupChapterMediaSource(
       file.mediaSrc,
     );
+    const chapter = chaptersById.get(chapterId);
+    const novel = chapter ? novelsById.get(chapter.novelId) : undefined;
     await invoke("chapter_media_store", {
       body: file.body,
       cacheKey,
       chapterId,
+      ...(chapter?.name ? { chapterName: chapter.name } : {}),
+      ...(chapter?.chapterNumber
+        ? { chapterNumber: chapter.chapterNumber }
+        : {}),
+      ...(chapter ? { chapterPosition: chapter.position } : {}),
       fileName,
+      ...(chapter ? { novelId: chapter.novelId } : {}),
+      ...(novel ? { novelName: novel.name } : {}),
+      ...(novel ? { sourceId: novel.pluginId } : {}),
     });
   }
 }
@@ -515,6 +531,12 @@ export async function applyBackupSnapshot(
       ]);
     }
     for (const chapter of manifest.chapters) {
+      const restoredContent = chapter.content;
+      const restoredDownloaded =
+        chapter.isDownloaded && restoredContent !== null;
+      const restoredMediaBytes = restoredDownloaded
+        ? (mediaBytesByChapterId.get(chapter.id) ?? chapter.mediaBytes ?? 0)
+        : 0;
       await db.execute(INSERT_CHAPTER, [
         chapter.id,
         chapter.novelId,
@@ -526,10 +548,10 @@ export async function applyBackupSnapshot(
         chapter.bookmark,
         chapter.unread,
         chapter.progress,
-        chapter.isDownloaded,
-        chapter.content,
-        getUtf8ByteLength(chapter.content),
-        mediaBytesByChapterId.get(chapter.id) ?? chapter.mediaBytes ?? 0,
+        restoredDownloaded,
+        restoredContent,
+        getUtf8ByteLength(restoredContent),
+        restoredMediaBytes,
         normalizeChapterContentType(
           chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
         ),
@@ -554,7 +576,10 @@ export async function applyBackupSnapshot(
   }
 
   if (hasBackupChapterMediaFiles(manifest)) {
-    await restoreBackupChapterMediaFiles(getBackupChapterMediaFiles(manifest));
+    await restoreBackupChapterMediaFiles(
+      manifest,
+      getBackupChapterMediaFiles(manifest),
+    );
   }
 
   if (manifest.settings !== undefined) {

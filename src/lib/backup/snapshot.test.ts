@@ -411,6 +411,37 @@ describe("applyBackupSnapshot", () => {
     expect(chapterInsert?.[1]).toContain(5);
   });
 
+  it("does not mark metadata-only chapters as downloaded", async () => {
+    const base = await gatherForTest();
+    const manifest = parseBackupManifest(
+      encodeBackupManifest({
+        ...base,
+        chapters: base.chapters.map((chapter) =>
+          chapter.id === 10
+            ? {
+                ...chapter,
+                content: null,
+                isDownloaded: true,
+                mediaBytes: 5,
+              }
+            : chapter,
+        ),
+      }),
+    );
+
+    mockExecute.mockClear();
+    await applyBackupSnapshot(manifest);
+
+    const chapterInsert = mockExecute.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO chapter"),
+    );
+    const params = chapterInsert?.[1] as unknown[];
+    expect(params[10]).toBe(false);
+    expect(params[11]).toBeNull();
+    expect(params[12]).toBe(0);
+    expect(params[13]).toBe(0);
+  });
+
   it("restores media byte counts from attached media files when available", async () => {
     installTauriRuntime();
     const manifest = attachBackupChapterMediaFiles(
@@ -488,7 +519,13 @@ describe("applyBackupSnapshot", () => {
       body: [1, 2, 3],
       cacheKey: "cache",
       chapterId: 10,
+      chapterName: "Chapter 1",
+      chapterNumber: "1",
+      chapterPosition: 1,
       fileName: "image.png",
+      novelId: 1,
+      novelName: "Sample Novel",
+      sourceId: "demo",
     });
   });
 });

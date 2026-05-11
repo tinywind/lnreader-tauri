@@ -101,7 +101,7 @@ describe("packBackup", () => {
     invokeMock.mockResolvedValue(undefined);
   });
 
-  it("invokes backup_pack with a lean manifest and split chapter contents", async () => {
+  it("invokes backup_pack with metadata only", async () => {
     const manifest = makeManifest();
     await packBackup(manifest, "C:\\backup.zip");
 
@@ -116,12 +116,16 @@ describe("packBackup", () => {
       outputPath: string;
     };
     expect(typed.outputPath).toBe("C:\\backup.zip");
-    expect(typed.chapters).toEqual([{ id: 10, html: "<p>downloaded</p>" }]);
+    expect(typed.chapters).toEqual([]);
     expect(typed.chapterMedia).toEqual([]);
 
     const leanManifest = JSON.parse(typed.manifestJson) as BackupManifest;
     expect(leanManifest.chapters[0]?.content).toBeNull();
+    expect(leanManifest.chapters[0]?.isDownloaded).toBe(false);
+    expect(leanManifest.chapters[0]?.mediaBytes).toBe(0);
     expect(leanManifest.chapters[1]?.content).toBeNull();
+    expect(leanManifest.chapters[1]?.isDownloaded).toBe(false);
+    expect(leanManifest.chapters[1]?.mediaBytes).toBe(0);
     expect(leanManifest.novels).toEqual(manifest.novels);
   });
 
@@ -134,7 +138,7 @@ describe("packBackup", () => {
     expect(manifest).toEqual(before);
   });
 
-  it("emits an empty chapter list when nothing is downloaded", async () => {
+  it("emits an empty chapter payload list when nothing is downloaded", async () => {
     const manifest = makeManifest();
     manifest.chapters[0]!.content = null;
     manifest.chapters[0]!.isDownloaded = false;
@@ -146,7 +150,7 @@ describe("packBackup", () => {
     expect(typed.chapters).toEqual([]);
   });
 
-  it("includes local chapter media references from downloaded HTML", async () => {
+  it("does not include local chapter media references from downloaded HTML", async () => {
     const manifest = makeManifest();
     manifest.chapters[0]!.content =
       '<p><img src="norea-media://chapter/10/cache/image.png"></p>';
@@ -158,14 +162,7 @@ describe("packBackup", () => {
       chapterMedia: Array<{ mediaSrc: string }>;
       chapters: Array<{ id: number; html: string }>;
     };
-    expect(typed.chapters).toEqual([
-      {
-        id: 10,
-        html: '<p><img src="norea-media://chapter/10/cache/image.png"></p>',
-      },
-    ]);
-    expect(typed.chapterMedia).toEqual([
-      { mediaSrc: "norea-media://chapter/10/cache/image.png" },
-    ]);
+    expect(typed.chapters).toEqual([]);
+    expect(typed.chapterMedia).toEqual([]);
   });
 });

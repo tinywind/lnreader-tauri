@@ -9,6 +9,10 @@ vi.mock("./pack", () => ({
   packBackup: vi.fn(),
 }));
 
+vi.mock("../chapter-content-storage", () => ({
+  restoreChapterContentStorageMirror: vi.fn(),
+}));
+
 vi.mock("./snapshot", () => ({
   applyBackupSnapshot: vi.fn(),
   gatherBackupSnapshot: vi.fn(),
@@ -19,6 +23,7 @@ vi.mock("./unpack", () => ({
 }));
 
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { restoreChapterContentStorageMirror } from "../chapter-content-storage";
 import {
   BACKUP_FORMAT_VERSION,
   type BackupManifest,
@@ -40,6 +45,9 @@ const saveMock = vi.mocked(save);
 const packBackupMock = vi.mocked(packBackup);
 const applyBackupSnapshotMock = vi.mocked(applyBackupSnapshot);
 const gatherBackupSnapshotMock = vi.mocked(gatherBackupSnapshot);
+const restoreChapterContentStorageMirrorMock = vi.mocked(
+  restoreChapterContentStorageMirror,
+);
 const unpackBackupMock = vi.mocked(unpackBackup);
 
 function makeManifest(): BackupManifest {
@@ -47,7 +55,48 @@ function makeManifest(): BackupManifest {
     version: BACKUP_FORMAT_VERSION,
     exportedAt: 1_700_000_000,
     novels: [],
-    chapters: [],
+    chapters: [
+      {
+        id: 10,
+        novelId: 1,
+        path: "/c/1",
+        name: "Chapter 1",
+        chapterNumber: "1",
+        position: 1,
+        page: "1",
+        bookmark: false,
+        unread: true,
+        progress: 0,
+        isDownloaded: false,
+        contentType: "html",
+        content: null,
+        releaseTime: null,
+        readAt: null,
+        createdAt: 1_700_000_000,
+        foundAt: 1_700_000_000,
+        updatedAt: 1_700_000_000,
+      },
+      {
+        id: 11,
+        novelId: 1,
+        path: "/c/2",
+        name: "Legacy Chapter",
+        chapterNumber: "2",
+        position: 2,
+        page: "1",
+        bookmark: false,
+        unread: true,
+        progress: 0,
+        isDownloaded: true,
+        contentType: "html",
+        content: "<p>legacy</p>",
+        releaseTime: null,
+        readAt: null,
+        createdAt: 1_700_000_000,
+        foundAt: 1_700_000_000,
+        updatedAt: 1_700_000_000,
+      },
+    ],
     categories: [],
     novelCategories: [],
     repositories: [],
@@ -71,6 +120,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   packBackupMock.mockResolvedValue(undefined);
   applyBackupSnapshotMock.mockResolvedValue(undefined);
+  restoreChapterContentStorageMirrorMock.mockResolvedValue({
+    chapters: 0,
+    novels: 0,
+  });
 });
 
 describe("defaultBackupFilename", () => {
@@ -123,6 +176,10 @@ describe("backup import/export flow", () => {
     });
     expect(unpackBackupMock).toHaveBeenCalledWith("C:\\backup.zip");
     expect(applyBackupSnapshotMock).toHaveBeenCalledWith(manifest);
+    expect(restoreChapterContentStorageMirrorMock).toHaveBeenCalledWith({
+      chapterIds: new Set([10]),
+      contentOnly: true,
+    });
   });
 
   it("skips import work when the open dialog is cancelled", async () => {
@@ -133,6 +190,7 @@ describe("backup import/export flow", () => {
     expect(path).toBeNull();
     expect(unpackBackupMock).not.toHaveBeenCalled();
     expect(applyBackupSnapshotMock).not.toHaveBeenCalled();
+    expect(restoreChapterContentStorageMirrorMock).not.toHaveBeenCalled();
   });
 
   it("skips import work when an unexpected array result narrows out", async () => {
@@ -146,5 +204,6 @@ describe("backup import/export flow", () => {
     expect(path).toBeNull();
     expect(unpackBackupMock).not.toHaveBeenCalled();
     expect(applyBackupSnapshotMock).not.toHaveBeenCalled();
+    expect(restoreChapterContentStorageMirrorMock).not.toHaveBeenCalled();
   });
 });
