@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getDb } from "../db/client";
+import { beginImmediateTransaction, getDb } from "../db/client";
 import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
@@ -347,7 +347,7 @@ export async function restoreChapterContentStorageMirror(
         (novel) => !options.chapterIds || restoredNovelIds.has(novel.id),
       );
   const db = await getDb();
-  await db.execute("BEGIN IMMEDIATE");
+  await beginImmediateTransaction(db);
   try {
     for (const novel of novels) {
       await db.execute(INSERT_MIRRORED_NOVEL, [

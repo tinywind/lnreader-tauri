@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getDb } from "../../db/client";
+import { beginImmediateTransaction, getDb } from "../../db/client";
 import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
@@ -464,7 +464,7 @@ export async function applyBackupSnapshot(
       )
     : new Map<number, number>();
 
-  await db.execute("BEGIN IMMEDIATE");
+  await beginImmediateTransaction(db);
   try {
     // Wipe in dependent-first order so foreign-key cascades stay quiet.
     await db.execute("DELETE FROM novel_category");

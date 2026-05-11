@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../db/client", () => ({
+  beginImmediateTransaction: vi.fn(
+    async (db: { execute: (sql: string) => Promise<unknown> }) => {
+      await db.execute("BEGIN IMMEDIATE");
+    },
+  ),
   getDb: vi.fn(),
 }));
 
