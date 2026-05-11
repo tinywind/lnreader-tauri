@@ -31,10 +31,13 @@ type MediaSrcAttribute = (typeof MEDIA_SRC_ATTRIBUTES)[number];
 interface CacheChapterMediaOptions {
   baseUrl: string;
   chapterId: number;
+  chapterName?: string | null;
   chapterNumber?: string | null;
+  chapterPosition?: number | null;
   contextUrl?: string;
   html: string;
   novelId?: number;
+  novelName?: string | null;
   onHtmlUpdate?: (html: string) => Promise<void> | void;
   onProgress?: (progress: { current: number; total: number }) => void;
   previousHtml?: string | null;
@@ -53,8 +56,24 @@ interface ChapterMediaStoreInput {
   body: number[];
   cacheKey: string;
   chapterId: number;
+  chapterName?: string | null;
+  chapterNumber?: string | null;
+  chapterPosition?: number | null;
   fileName: string;
   novelId?: number;
+  novelName?: string | null;
+  sourceId?: string;
+}
+
+interface ChapterMediaArchiveInput {
+  cacheKey: string;
+  chapterId: number;
+  chapterName?: string | null;
+  chapterNumber?: string | null;
+  chapterPosition?: number | null;
+  novelId?: number;
+  novelName?: string | null;
+  sourceId?: string;
 }
 
 interface MediaSrcTarget {
@@ -194,29 +213,47 @@ async function storeChapterMedia({
   body,
   cacheKey,
   chapterId,
+  chapterName,
+  chapterNumber,
+  chapterPosition,
   fileName,
   novelId,
+  novelName,
+  sourceId,
 }: ChapterMediaStoreInput): Promise<string> {
   return invoke<string>("chapter_media_store", {
     body,
     cacheKey,
     chapterId,
+    ...(chapterName ? { chapterName } : {}),
+    ...(chapterNumber ? { chapterNumber } : {}),
+    ...(chapterPosition ? { chapterPosition } : {}),
     fileName,
     ...(novelId ? { novelId } : {}),
+    ...(novelName ? { novelName } : {}),
+    ...(sourceId ? { sourceId } : {}),
   });
 }
 
-async function archiveChapterMediaCache(
-  chapterId: number,
-  cacheKey: string,
-  novelId?: number,
-  chapterNumber?: string | null,
-): Promise<number> {
+async function archiveChapterMediaCache({
+  cacheKey,
+  chapterId,
+  chapterName,
+  chapterNumber,
+  chapterPosition,
+  novelId,
+  novelName,
+  sourceId,
+}: ChapterMediaArchiveInput): Promise<number> {
   return invoke<number>("chapter_media_archive_cache", {
     chapterId,
+    ...(chapterName ? { chapterName } : {}),
     ...(chapterNumber ? { chapterNumber } : {}),
+    ...(chapterPosition ? { chapterPosition } : {}),
     cacheKey,
     ...(novelId ? { novelId } : {}),
+    ...(novelName ? { novelName } : {}),
+    ...(sourceId ? { sourceId } : {}),
   });
 }
 
@@ -554,10 +591,13 @@ async function emitHtmlUpdate(
 export async function cacheHtmlChapterMedia({
   baseUrl,
   chapterId,
+  chapterName,
   chapterNumber,
+  chapterPosition,
   contextUrl,
   html,
   novelId,
+  novelName,
   onHtmlUpdate,
   onProgress,
   previousHtml,
@@ -634,7 +674,12 @@ export async function cacheHtmlChapterMedia({
         url,
         response.headers.get("content-type"),
       ),
+      chapterName,
+      chapterNumber,
+      chapterPosition,
       novelId,
+      novelName,
+      sourceId,
     });
     localSources.set(url, src);
     applyLocalMediaSource({
@@ -649,12 +694,16 @@ export async function cacheHtmlChapterMedia({
     onProgress?.({ current: index + 1, total: urls.length });
   }
 
-  const mediaBytes = await archiveChapterMediaCache(
+  const mediaBytes = await archiveChapterMediaCache({
     chapterId,
     cacheKey,
-    novelId,
+    chapterName,
     chapterNumber,
-  );
+    chapterPosition,
+    novelId,
+    novelName,
+    sourceId,
+  });
   clearMediaSourceMetadata(template.content);
 
   return {

@@ -530,7 +530,7 @@ function DataSettingsSection({
           label={t("settings.data.mediaStorage.folder.label")}
           description={
             isAndroidRuntime()
-              ? t("settings.data.mediaStorage.folder.androidDescription")
+              ? t("settings.data.mediaStorage.folder.androidDefaultDescription")
               : t("settings.data.mediaStorage.folder.description")
           }
           layout="stacked"
@@ -543,7 +543,11 @@ function DataSettingsSection({
         </SettingsFieldRow>
         <SettingsFieldRow
           label={t("settings.data.mediaStorage.change.label")}
-          description={t("settings.data.mediaStorage.change.description")}
+          description={
+            isAndroidRuntime()
+              ? t("settings.data.mediaStorage.change.androidDefaultDescription")
+              : t("settings.data.mediaStorage.change.description")
+          }
         >
           <TextButton
             loading={mediaStorageBusy}
@@ -552,7 +556,9 @@ function DataSettingsSection({
               void chooseMediaStorageRoot();
             }}
           >
-            {t("storageSetup.selectFolder")}
+            {isAndroidRuntime()
+              ? t("storageSetup.useAppStorage")
+              : t("storageSetup.selectFolder")}
           </TextButton>
         </SettingsFieldRow>
       </SettingsSection>

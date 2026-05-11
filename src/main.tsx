@@ -531,7 +531,7 @@ function ChapterMediaStorageGate({
                 {translate(
                   appLocale,
                   isAndroidRuntime()
-                    ? "storageSetup.androidDescription"
+                    ? "storageSetup.androidDefaultDescription"
                     : "storageSetup.description",
                 )}
               </Text>
@@ -547,7 +547,12 @@ function ChapterMediaStorageGate({
                 void chooseStorageRoot();
               }}
             >
-              {translate(appLocale, "storageSetup.selectFolder")}
+              {translate(
+                appLocale,
+                isAndroidRuntime()
+                  ? "storageSetup.useAppStorage"
+                  : "storageSetup.selectFolder",
+              )}
             </Button>
           </Stack>
         </Paper>

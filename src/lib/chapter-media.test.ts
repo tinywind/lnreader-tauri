@@ -95,7 +95,9 @@ describe("cacheHtmlChapterMedia", () => {
     const result = await cacheHtmlChapterMedia({
       baseUrl: "https://source.test/novel/chapter/1.html",
       chapterId: 42,
+      chapterName: "Opening",
       chapterNumber: "1",
+      chapterPosition: 1,
       html: [
         `<img src="../images/page.png">`,
         `<img src="/covers/cover.webp">`,
@@ -105,6 +107,8 @@ describe("cacheHtmlChapterMedia", () => {
         `<img src="file:///tmp/page.png">`,
       ].join(""),
       novelId: 9,
+      novelName: "Sample Novel",
+      sourceId: "demo",
     });
 
     expect(pluginFetchMock).toHaveBeenCalledTimes(2);
@@ -114,6 +118,7 @@ describe("cacheHtmlChapterMedia", () => {
       {
         contextUrl: "https://source.test/novel/chapter/1.html",
         signal: undefined,
+        sourceId: "demo",
       },
     );
     expect(pluginFetchMock).toHaveBeenNthCalledWith(
@@ -122,6 +127,7 @@ describe("cacheHtmlChapterMedia", () => {
       {
         contextUrl: "https://source.test/novel/chapter/1.html",
         signal: undefined,
+        sourceId: "demo",
       },
     );
     expect(invokeMock).toHaveBeenCalledTimes(3);
@@ -130,8 +136,13 @@ describe("cacheHtmlChapterMedia", () => {
       expect.objectContaining({
         body: [1, 2, 3],
         chapterId: 42,
+        chapterName: "Opening",
+        chapterNumber: "1",
+        chapterPosition: 1,
         fileName: "page-1.png",
         novelId: 9,
+        novelName: "Sample Novel",
+        sourceId: "demo",
       }),
     ]);
     expect(invokeMock.mock.calls[1]).toEqual([
@@ -139,16 +150,25 @@ describe("cacheHtmlChapterMedia", () => {
       expect.objectContaining({
         body: [1, 2, 3],
         chapterId: 42,
+        chapterName: "Opening",
+        chapterNumber: "1",
+        chapterPosition: 1,
         fileName: "cover-2.webp",
         novelId: 9,
+        novelName: "Sample Novel",
+        sourceId: "demo",
       }),
     ]);
     expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_archive_cache",
       expect.objectContaining({
         chapterId: 42,
+        chapterName: "Opening",
         chapterNumber: "1",
+        chapterPosition: 1,
         novelId: 9,
+        novelName: "Sample Novel",
+        sourceId: "demo",
       }),
     );
     expect(result.cacheKey).toEqual(expect.any(String));

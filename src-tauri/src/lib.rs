@@ -124,6 +124,7 @@ pub fn run() {
             chapter_media::chapter_media_set_storage_root,
             chapter_media::chapter_media_store,
             chapter_media::chapter_media_total_size,
+            chapter_media::chapter_media_use_default_storage_root,
             plugin_host::plugin_zip_list,
             plugin_host::plugin_zip_read_file,
             scraper::webview_fetch,

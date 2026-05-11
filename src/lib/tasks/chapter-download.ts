@@ -404,10 +404,13 @@ export function enqueueChapterDownload(
             const media = await cacheHtmlChapterMedia({
               baseUrl,
               chapterId: job.id,
+              chapterName: chapter.name,
               chapterNumber: chapter.chapterNumber ?? String(chapter.position),
+              chapterPosition: chapter.position,
               contextUrl: baseUrl,
               html,
               novelId: chapter.novelId,
+              novelName: job.novelName,
               onHtmlUpdate: async (partialHtml) => {
                 const partialSaveResult = await saveChapterPartialContent(
                   job.id,
