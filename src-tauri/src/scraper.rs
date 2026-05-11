@@ -273,6 +273,27 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
           }
         }
 
+        function bindPressedState(button) {
+          function setPressed(pressed) {
+            if (pressed) {
+              button.setAttribute("data-pressed", "true");
+            } else {
+              button.removeAttribute("data-pressed");
+            }
+          }
+          button.addEventListener("pointerdown", function () { setPressed(true); }, true);
+          button.addEventListener("mousedown", function () { setPressed(true); }, true);
+          button.addEventListener("touchstart", function () { setPressed(true); }, true);
+          button.addEventListener("pointerup", function () { setPressed(false); }, true);
+          button.addEventListener("pointercancel", function () { setPressed(false); }, true);
+          button.addEventListener("mouseup", function () { setPressed(false); }, true);
+          button.addEventListener("mouseleave", function () { setPressed(false); }, true);
+          button.addEventListener("touchend", function () { setPressed(false); }, true);
+          button.addEventListener("touchcancel", function () { setPressed(false); }, true);
+          button.addEventListener("blur", function () { setPressed(false); }, true);
+        }
+
+        bindPressedState(move);
         bind(move, function () {
           setEdge(edge === "top" ? "bottom" : "top");
         });
@@ -322,15 +343,21 @@ const SCRAPER_INIT_SCRIPT: &str = r##"
         document.getElementById("__norea_scraper_controls_close")
       ];
       for (var index = 0; index < buttons.length; index += 1) {
-        if (!buttons[index]) continue;
-        applyStyle(buttons[index], {
+        var button = buttons[index];
+        if (!button) continue;
+        var isMoveButton = button.id === "__norea_scraper_controls_move";
+        var isPressed = isMoveButton && button.getAttribute("data-pressed") === "true";
+        applyStyle(button, {
           "border": "1px solid rgba(255,255,255,.25)",
           "border-radius": "8px",
-          "background": "rgba(255,255,255,.12)",
+          "background": isPressed ? "rgba(255,255,255,.28)" : "rgba(255,255,255,.12)",
+          "box-shadow": isPressed ? "0 0 0 2px rgba(255,255,255,.22)" : "none",
           "color": "#fff",
           "font": "inherit",
           "padding": "5px 9px",
-          "cursor": "pointer"
+          "cursor": "pointer",
+          "transform": isPressed ? "scale(1.04)" : "scale(1)",
+          "transition": "background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease"
         });
       }
       if (host.parentNode !== document.body || document.body.lastElementChild !== host) {
