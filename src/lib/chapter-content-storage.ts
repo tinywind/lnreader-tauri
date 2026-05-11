@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { beginImmediateTransaction, getDb } from "../db/client";
+import { getDb } from "../db/client";
 import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
@@ -347,70 +347,62 @@ export async function restoreChapterContentStorageMirror(
         (novel) => !options.chapterIds || restoredNovelIds.has(novel.id),
       );
   const db = await getDb();
-  await beginImmediateTransaction(db);
-  try {
-    for (const novel of novels) {
-      await db.execute(INSERT_MIRRORED_NOVEL, [
-        novel.id,
-        novel.pluginId,
-        novel.path,
-        novel.name,
-        novel.cover,
-        novel.summary,
-        novel.author,
-        novel.artist,
-        novel.status,
-        novel.genres,
-        novel.inLibrary,
-        novel.isLocal,
-        novel.createdAt,
-        novel.updatedAt,
-        novel.libraryAddedAt,
-        novel.lastReadAt,
-      ]);
-    }
-    for (const chapter of chapters) {
-      const contentBytes =
-        chapter.contentBytes || utf8ByteLength(chapter.content);
-      const contentType = normalizeChapterContentType(
-        chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
-      );
-      if (options.contentOnly) {
-        await db.execute(UPDATE_MIRRORED_CHAPTER_CONTENT, [
-          chapter.content,
-          contentBytes,
-          chapter.mediaBytes,
-          contentType,
-          chapter.id,
-        ]);
-        continue;
-      }
-      await db.execute(INSERT_MIRRORED_CHAPTER, [
-        chapter.id,
-        chapter.novelId,
-        chapter.path,
-        chapter.name,
-        chapter.chapterNumber,
-        chapter.position,
-        chapter.page,
-        chapter.bookmark,
-        chapter.unread,
-        chapter.progress,
+  for (const novel of novels) {
+    await db.execute(INSERT_MIRRORED_NOVEL, [
+      novel.id,
+      novel.pluginId,
+      novel.path,
+      novel.name,
+      novel.cover,
+      novel.summary,
+      novel.author,
+      novel.artist,
+      novel.status,
+      novel.genres,
+      novel.inLibrary,
+      novel.isLocal,
+      novel.createdAt,
+      novel.updatedAt,
+      novel.libraryAddedAt,
+      novel.lastReadAt,
+    ]);
+  }
+  for (const chapter of chapters) {
+    const contentBytes = chapter.contentBytes || utf8ByteLength(chapter.content);
+    const contentType = normalizeChapterContentType(
+      chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+    );
+    if (options.contentOnly) {
+      await db.execute(UPDATE_MIRRORED_CHAPTER_CONTENT, [
         chapter.content,
         contentBytes,
         chapter.mediaBytes,
         contentType,
-        chapter.releaseTime,
-        chapter.readAt,
-        chapter.createdAt,
-        chapter.foundAt,
-        chapter.updatedAt,
+        chapter.id,
       ]);
+      continue;
     }
-    await db.execute("COMMIT");
-  } catch (error) {
-    await db.execute("ROLLBACK").catch(() => undefined);
-    throw error;
+    await db.execute(INSERT_MIRRORED_CHAPTER, [
+      chapter.id,
+      chapter.novelId,
+      chapter.path,
+      chapter.name,
+      chapter.chapterNumber,
+      chapter.position,
+      chapter.page,
+      chapter.bookmark,
+      chapter.unread,
+      chapter.progress,
+      chapter.content,
+      contentBytes,
+      chapter.mediaBytes,
+      contentType,
+      chapter.releaseTime,
+      chapter.readAt,
+      chapter.createdAt,
+      chapter.foundAt,
+      chapter.updatedAt,
+    ]);
   }
 
   return { chapters: chapters.length, novels: novels.length };

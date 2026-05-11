@@ -13,11 +13,14 @@
 //! `chapters/<id>.html` and `chapter-media/...` entries for backups
 //! produced before that content was externalized.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use sqlx::Sqlite;
+use tauri::{AppHandle, State};
+use tauri_plugin_sql::{DbInstances, DbPool};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -26,6 +29,7 @@ use crate::chapter_media::chapter_media_src_from_backup_entry;
 const MANIFEST_ENTRY: &str = "manifest.json";
 const CHAPTERS_PREFIX: &str = "chapters/";
 const CHAPTER_SUFFIX: &str = ".html";
+const DB_URL: &str = "sqlite:norea.db";
 
 /// One downloaded chapter body, keyed by the local chapter row id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,13 +45,6 @@ pub struct ChapterMediaContent {
     pub body: Vec<u8>,
 }
 
-/// One local chapter media reference discovered in downloaded HTML.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChapterMediaReference {
-    pub media_src: String,
-}
-
 /// Result of `backup_unpack`: the raw manifest JSON plus legacy
 /// chapter HTML and local media entries when an old archive carries them.
 #[derive(Debug, Serialize)]
@@ -55,6 +52,295 @@ pub struct UnpackedBackup {
     pub manifest_json: String,
     pub chapters: Vec<ChapterContent>,
     pub chapter_media: Vec<ChapterMediaContent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreManifest {
+    novels: Vec<BackupRestoreNovel>,
+    chapters: Vec<BackupRestoreChapter>,
+    categories: Vec<BackupRestoreCategory>,
+    novel_categories: Vec<BackupRestoreNovelCategory>,
+    repositories: Vec<BackupRestoreRepository>,
+    installed_plugins: Option<Vec<BackupRestoreInstalledPlugin>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreNovel {
+    id: i64,
+    plugin_id: String,
+    path: String,
+    name: String,
+    cover: Option<String>,
+    summary: Option<String>,
+    author: Option<String>,
+    artist: Option<String>,
+    status: Option<String>,
+    genres: Option<String>,
+    in_library: bool,
+    is_local: bool,
+    created_at: i64,
+    updated_at: i64,
+    library_added_at: Option<i64>,
+    last_read_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreChapter {
+    id: i64,
+    novel_id: i64,
+    path: String,
+    name: String,
+    chapter_number: Option<String>,
+    position: i64,
+    page: String,
+    bookmark: bool,
+    unread: bool,
+    progress: i64,
+    is_downloaded: bool,
+    content_type: Option<String>,
+    content: Option<String>,
+    media_bytes: Option<i64>,
+    release_time: Option<String>,
+    read_at: Option<i64>,
+    created_at: i64,
+    found_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreCategory {
+    id: i64,
+    name: String,
+    sort: i64,
+    is_system: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreNovelCategory {
+    id: i64,
+    novel_id: i64,
+    category_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreRepository {
+    id: i64,
+    url: String,
+    name: Option<String>,
+    added_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupRestoreInstalledPlugin {
+    id: String,
+    name: String,
+    lang: String,
+    version: String,
+    icon_url: String,
+    source_url: String,
+    source_code: String,
+    installed_at: i64,
+}
+
+fn bool_to_int(value: bool) -> i64 {
+    if value { 1 } else { 0 }
+}
+
+fn backup_content_type(value: Option<&str>) -> &str {
+    match value {
+        Some("pdf") => "pdf",
+        Some("text") => "text",
+        _ => "html",
+    }
+}
+
+fn content_byte_len(value: Option<&str>) -> i64 {
+    value.map(|content| content.as_bytes().len() as i64).unwrap_or(0)
+}
+
+fn select_backup_repository(
+    repositories: &[BackupRestoreRepository],
+) -> Option<&BackupRestoreRepository> {
+    repositories
+        .iter()
+        .max_by(|left, right| left.added_at.cmp(&right.added_at).then(left.id.cmp(&right.id)))
+}
+
+async fn execute_restore_snapshot(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    manifest: BackupRestoreManifest,
+    media_bytes_by_chapter_id: HashMap<i64, i64>,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM novel_category")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete novel_category: {err}"))?;
+    sqlx::query("DELETE FROM chapter")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete chapter: {err}"))?;
+    sqlx::query("DELETE FROM novel_stats")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete novel_stats: {err}"))?;
+    sqlx::query("DELETE FROM novel")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete novel: {err}"))?;
+    sqlx::query("DELETE FROM category")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete category: {err}"))?;
+    sqlx::query("DELETE FROM repository")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete repository: {err}"))?;
+    sqlx::query("DELETE FROM repository_index_cache")
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: delete repository_index_cache: {err}"))?;
+    if manifest.installed_plugins.is_some() {
+        sqlx::query("DELETE FROM installed_plugin")
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| format!("backup_restore_snapshot: delete installed_plugin: {err}"))?;
+    }
+
+    for category in &manifest.categories {
+        sqlx::query("INSERT INTO category (id, name, sort, is_system) VALUES ($1, $2, $3, $4)")
+            .bind(category.id)
+            .bind(&category.name)
+            .bind(category.sort)
+            .bind(bool_to_int(category.is_system))
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| format!("backup_restore_snapshot: insert category: {err}"))?;
+    }
+
+    if let Some(repository) = select_backup_repository(&manifest.repositories) {
+        sqlx::query("INSERT INTO repository (id, url, name, added_at) VALUES ($1, $2, $3, $4)")
+            .bind(1_i64)
+            .bind(repository.url.as_str())
+            .bind(repository.name.as_deref())
+            .bind(repository.added_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| format!("backup_restore_snapshot: insert repository: {err}"))?;
+    }
+
+    if let Some(installed_plugins) = &manifest.installed_plugins {
+        for plugin in installed_plugins {
+            sqlx::query(
+                "INSERT INTO installed_plugin (
+                    id, name, lang, version, icon_url, source_url, source_code, installed_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(plugin.id.as_str())
+            .bind(plugin.name.as_str())
+            .bind(plugin.lang.as_str())
+            .bind(plugin.version.as_str())
+            .bind(plugin.icon_url.as_str())
+            .bind(plugin.source_url.as_str())
+            .bind(plugin.source_code.as_str())
+            .bind(plugin.installed_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| format!("backup_restore_snapshot: insert installed_plugin: {err}"))?;
+        }
+    }
+
+    for novel in &manifest.novels {
+        sqlx::query(
+            "INSERT INTO novel (
+                id, plugin_id, path, name, cover, summary, author, artist,
+                status, genres, in_library, is_local,
+                created_at, updated_at, library_added_at, last_read_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        )
+        .bind(novel.id)
+        .bind(novel.plugin_id.as_str())
+        .bind(novel.path.as_str())
+        .bind(novel.name.as_str())
+        .bind(novel.cover.as_deref())
+        .bind(novel.summary.as_deref())
+        .bind(novel.author.as_deref())
+        .bind(novel.artist.as_deref())
+        .bind(novel.status.as_deref())
+        .bind(novel.genres.as_deref())
+        .bind(bool_to_int(novel.in_library))
+        .bind(bool_to_int(novel.is_local))
+        .bind(novel.created_at)
+        .bind(novel.updated_at)
+        .bind(novel.library_added_at)
+        .bind(novel.last_read_at)
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: insert novel: {err}"))?;
+    }
+
+    for chapter in &manifest.chapters {
+        let restored_downloaded = chapter.is_downloaded && chapter.content.is_some();
+        let restored_media_bytes = if restored_downloaded {
+            media_bytes_by_chapter_id
+                .get(&chapter.id)
+                .copied()
+                .or(chapter.media_bytes)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        sqlx::query(
+            "INSERT INTO chapter (
+                id, novel_id, path, name, chapter_number, position, page,
+                bookmark, unread, progress, is_downloaded, content, content_bytes,
+                media_bytes, content_type, release_time, read_at, created_at, found_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+        )
+        .bind(chapter.id)
+        .bind(chapter.novel_id)
+        .bind(chapter.path.as_str())
+        .bind(chapter.name.as_str())
+        .bind(chapter.chapter_number.as_deref())
+        .bind(chapter.position)
+        .bind(chapter.page.as_str())
+        .bind(bool_to_int(chapter.bookmark))
+        .bind(bool_to_int(chapter.unread))
+        .bind(chapter.progress)
+        .bind(bool_to_int(restored_downloaded))
+        .bind(chapter.content.as_deref())
+        .bind(content_byte_len(chapter.content.as_deref()))
+        .bind(restored_media_bytes)
+        .bind(backup_content_type(chapter.content_type.as_deref()))
+        .bind(chapter.release_time.as_deref())
+        .bind(chapter.read_at)
+        .bind(chapter.created_at)
+        .bind(chapter.found_at)
+        .bind(chapter.updated_at)
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: insert chapter: {err}"))?;
+    }
+
+    for link in &manifest.novel_categories {
+        sqlx::query(
+            "INSERT INTO novel_category (id, novel_id, category_id) VALUES ($1, $2, $3)",
+        )
+        .bind(link.id)
+        .bind(link.novel_id)
+        .bind(link.category_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: insert novel_category: {err}"))?;
+    }
+
+    Ok(())
 }
 
 fn write_backup_zip(manifest_json: String, output_path: String) -> Result<(), String> {
@@ -83,11 +369,41 @@ fn write_backup_zip(manifest_json: String, output_path: String) -> Result<(), St
 pub fn backup_pack(
     _app: AppHandle,
     manifest_json: String,
-    _chapters: Vec<ChapterContent>,
-    _chapter_media: Vec<ChapterMediaReference>,
     output_path: String,
 ) -> Result<(), String> {
     write_backup_zip(manifest_json, output_path)
+}
+
+#[tauri::command]
+pub async fn backup_restore_snapshot(
+    db_instances: State<'_, DbInstances>,
+    manifest_json: String,
+    media_bytes_by_chapter_id: HashMap<i64, i64>,
+) -> Result<(), String> {
+    let manifest: BackupRestoreManifest = serde_json::from_str(&manifest_json)
+        .map_err(|err| format!("backup_restore_snapshot: parse manifest: {err}"))?;
+    let pool = {
+        let instances = db_instances.0.read().await;
+        match instances.get(DB_URL) {
+            Some(DbPool::Sqlite(pool)) => pool.clone(),
+            None => return Err("backup_restore_snapshot: norea.db is not loaded".to_string()),
+        }
+    };
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: begin transaction: {err}"))?;
+
+    if let Err(error) = execute_restore_snapshot(&mut tx, manifest, media_bytes_by_chapter_id).await
+    {
+        let _ = tx.rollback().await;
+        return Err(error);
+    }
+
+    tx.commit()
+        .await
+        .map_err(|err| format!("backup_restore_snapshot: commit transaction: {err}"))?;
+    Ok(())
 }
 
 /// Read a backup zip from `input_path` and return the manifest JSON

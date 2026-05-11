@@ -1,12 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { beginImmediateTransaction, getDb } from "../../db/client";
-import {
-  DEFAULT_CHAPTER_CONTENT_TYPE,
-  normalizeChapterContentType,
-} from "../chapter-content";
+import { getDb, runExclusiveDatabaseOperation } from "../../db/client";
+import { normalizeChapterContentType } from "../chapter-content";
 import { isTauriRuntime } from "../tauri-runtime";
 import {
   BACKUP_FORMAT_VERSION,
+  encodeBackupManifest,
   type BackupCategory,
   type BackupChapter,
   type BackupInstalledPlugin,
@@ -181,40 +179,6 @@ const SELECT_INSTALLED_PLUGINS = `
   ORDER BY installed_at DESC, id ASC
 `;
 
-const INSERT_NOVEL = `
-  INSERT INTO novel (
-    id, plugin_id, path, name, cover, summary, author, artist,
-    status, genres, in_library, is_local,
-    created_at, updated_at, library_added_at, last_read_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-`;
-
-const INSERT_CHAPTER = `
-  INSERT INTO chapter (
-    id, novel_id, path, name, chapter_number, position, page,
-    bookmark, unread, progress, is_downloaded, content, content_bytes,
-    media_bytes, content_type, release_time, read_at, created_at, found_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-`;
-
-const INSERT_CATEGORY = `
-  INSERT INTO category (id, name, sort, is_system) VALUES ($1, $2, $3, $4)
-`;
-
-const INSERT_NOVEL_CATEGORY = `
-  INSERT INTO novel_category (id, novel_id, category_id) VALUES ($1, $2, $3)
-`;
-
-const INSERT_REPOSITORY = `
-  INSERT INTO repository (id, url, name, added_at) VALUES ($1, $2, $3, $4)
-`;
-
-const INSERT_INSTALLED_PLUGIN = `
-  INSERT INTO installed_plugin (
-    id, name, lang, version, icon_url, source_url, source_code, installed_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-`;
-
 function browserLocalStorage(): Storage | null {
   try {
     return globalThis.localStorage ?? null;
@@ -310,10 +274,6 @@ function toChapter(row: RawChapterRow): BackupChapter {
   };
 }
 
-function getUtf8ByteLength(value: string | null): number {
-  return value === null ? 0 : new TextEncoder().encode(value).byteLength;
-}
-
 function getBackupChapterMediaBytesByChapterId(
   files: readonly BackupChapterMediaFile[],
 ): Map<number, number> {
@@ -348,6 +308,7 @@ async function restoreBackupChapterMediaFiles(
   manifest: BackupManifest,
   files: readonly BackupChapterMediaFile[],
 ): Promise<void> {
+  if (files.length === 0) return;
   if (!isTauriRuntime()) return;
 
   const chaptersById = new Map(
@@ -401,16 +362,6 @@ function toInstalledPlugin(row: RawInstalledPluginRow): BackupInstalledPlugin {
   };
 }
 
-function selectBackupRepository(
-  repositories: readonly BackupRepository[],
-): BackupRepository | null {
-  return (
-    [...repositories].sort(
-      (a, b) => b.addedAt - a.addedAt || b.id - a.id,
-    )[0] ?? null
-  );
-}
-
 /**
  * Read every row from the backup-relevant tables and return a
  * fresh `BackupManifest` ready to feed `encodeBackupManifest` and
@@ -457,123 +408,19 @@ export async function gatherBackupSnapshot(): Promise<BackupManifest> {
 export async function applyBackupSnapshot(
   manifest: BackupManifest,
 ): Promise<void> {
-  const db = await getDb();
   const mediaBytesByChapterId = hasBackupChapterMediaFiles(manifest)
     ? getBackupChapterMediaBytesByChapterId(
         getBackupChapterMediaFiles(manifest),
       )
     : new Map<number, number>();
 
-  await beginImmediateTransaction(db);
-  try {
-    // Wipe in dependent-first order so foreign-key cascades stay quiet.
-    await db.execute("DELETE FROM novel_category");
-    await db.execute("DELETE FROM chapter");
-    await db.execute("DELETE FROM novel_stats");
-    await db.execute("DELETE FROM novel");
-    await db.execute("DELETE FROM category");
-    await db.execute("DELETE FROM repository");
-    await db.execute("DELETE FROM repository_index_cache");
-    if (manifest.installedPlugins !== undefined) {
-      await db.execute("DELETE FROM installed_plugin");
-    }
-
-    // Insert in parent-first order so foreign keys resolve.
-    for (const cat of manifest.categories) {
-      await db.execute(INSERT_CATEGORY, [
-        cat.id,
-        cat.name,
-        cat.sort,
-        cat.isSystem,
-      ]);
-    }
-    const repo = selectBackupRepository(manifest.repositories);
-    if (repo) {
-      await db.execute(INSERT_REPOSITORY, [
-        1,
-        repo.url,
-        repo.name,
-        repo.addedAt,
-      ]);
-    }
-    if (manifest.installedPlugins !== undefined) {
-      for (const plugin of manifest.installedPlugins) {
-        await db.execute(INSERT_INSTALLED_PLUGIN, [
-          plugin.id,
-          plugin.name,
-          plugin.lang,
-          plugin.version,
-          plugin.iconUrl,
-          plugin.sourceUrl,
-          plugin.sourceCode,
-          plugin.installedAt,
-        ]);
-      }
-    }
-    for (const novel of manifest.novels) {
-      await db.execute(INSERT_NOVEL, [
-        novel.id,
-        novel.pluginId,
-        novel.path,
-        novel.name,
-        novel.cover,
-        novel.summary,
-        novel.author,
-        novel.artist,
-        novel.status,
-        novel.genres,
-        novel.inLibrary,
-        novel.isLocal,
-        novel.createdAt,
-        novel.updatedAt,
-        novel.libraryAddedAt,
-        novel.lastReadAt,
-      ]);
-    }
-    for (const chapter of manifest.chapters) {
-      const restoredContent = chapter.content;
-      const restoredDownloaded =
-        chapter.isDownloaded && restoredContent !== null;
-      const restoredMediaBytes = restoredDownloaded
-        ? (mediaBytesByChapterId.get(chapter.id) ?? chapter.mediaBytes ?? 0)
-        : 0;
-      await db.execute(INSERT_CHAPTER, [
-        chapter.id,
-        chapter.novelId,
-        chapter.path,
-        chapter.name,
-        chapter.chapterNumber,
-        chapter.position,
-        chapter.page,
-        chapter.bookmark,
-        chapter.unread,
-        chapter.progress,
-        restoredDownloaded,
-        restoredContent,
-        getUtf8ByteLength(restoredContent),
-        restoredMediaBytes,
-        normalizeChapterContentType(
-          chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
-        ),
-        chapter.releaseTime,
-        chapter.readAt,
-        chapter.createdAt,
-        chapter.foundAt,
-        chapter.updatedAt,
-      ]);
-    }
-    for (const link of manifest.novelCategories) {
-      await db.execute(INSERT_NOVEL_CATEGORY, [
-        link.id,
-        link.novelId,
-        link.categoryId,
-      ]);
-    }
-    await db.execute("COMMIT");
-  } catch (error) {
-    await db.execute("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
+  await getDb();
+  await runExclusiveDatabaseOperation(() =>
+    invoke("backup_restore_snapshot", {
+      manifestJson: encodeBackupManifest(manifest),
+      mediaBytesByChapterId: Object.fromEntries(mediaBytesByChapterId),
+    }),
+  );
 
   if (hasBackupChapterMediaFiles(manifest)) {
     await restoreBackupChapterMediaFiles(

@@ -525,13 +525,6 @@ pub(crate) fn chapter_media_path_from_src(
         .join(&file_name))
 }
 
-pub(crate) fn chapter_media_backup_entry_name(media_src: &str) -> Result<String, String> {
-    let (chapter_id, cache_key, file_name) = parse_media_src(media_src)?;
-    Ok(format!(
-        "{MEDIA_ROOT_DIR}/{chapter_id}/{cache_key}/{file_name}"
-    ))
-}
-
 pub(crate) fn chapter_media_src_from_backup_entry(entry_name: &str) -> Option<String> {
     let rest = entry_name.strip_prefix(&format!("{MEDIA_ROOT_DIR}/"))?;
     let mut parts = rest.split('/');

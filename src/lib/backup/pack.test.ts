@@ -111,13 +111,11 @@ describe("packBackup", () => {
 
     const typed = args as {
       manifestJson: string;
-      chapterMedia: Array<{ mediaSrc: string }>;
-      chapters: Array<{ id: number; html: string }>;
       outputPath: string;
     };
     expect(typed.outputPath).toBe("C:\\backup.zip");
-    expect(typed.chapters).toEqual([]);
-    expect(typed.chapterMedia).toEqual([]);
+    expect(args).not.toHaveProperty("chapters");
+    expect(args).not.toHaveProperty("chapterMedia");
 
     const leanManifest = JSON.parse(typed.manifestJson) as BackupManifest;
     expect(leanManifest.chapters[0]?.content).toBeNull();
@@ -136,33 +134,5 @@ describe("packBackup", () => {
     await packBackup(manifest, "C:\\backup.zip");
 
     expect(manifest).toEqual(before);
-  });
-
-  it("emits an empty chapter payload list when nothing is downloaded", async () => {
-    const manifest = makeManifest();
-    manifest.chapters[0]!.content = null;
-    manifest.chapters[0]!.isDownloaded = false;
-
-    await packBackup(manifest, "C:\\backup.zip");
-
-    const [, args] = invokeMock.mock.calls[0]!;
-    const typed = args as { chapters: Array<{ id: number; html: string }> };
-    expect(typed.chapters).toEqual([]);
-  });
-
-  it("does not include local chapter media references from downloaded HTML", async () => {
-    const manifest = makeManifest();
-    manifest.chapters[0]!.content =
-      '<p><img src="norea-media://chapter/10/cache/image.png"></p>';
-
-    await packBackup(manifest, "C:\\backup.zip");
-
-    const [, args] = invokeMock.mock.calls[0]!;
-    const typed = args as {
-      chapterMedia: Array<{ mediaSrc: string }>;
-      chapters: Array<{ id: number; html: string }>;
-    };
-    expect(typed.chapters).toEqual([]);
-    expect(typed.chapterMedia).toEqual([]);
   });
 });

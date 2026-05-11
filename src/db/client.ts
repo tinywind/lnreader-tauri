@@ -1,26 +1,56 @@
 import Database from "@tauri-apps/plugin-sql";
+import type { QueryResult } from "@tauri-apps/plugin-sql";
 
 const DB_URL = "sqlite:norea.db";
 const DB_BUSY_TIMEOUT_MS = 5000;
-const DB_LOCK_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1200, 1600];
-const DB_LOCK_ERROR_PATTERN = /database is locked|SQLITE_BUSY|code:\s*5/i;
 
 let dbPromise: Promise<Database> | null = null;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
-}
-
-function isDatabaseLockedError(error: unknown): boolean {
-  if (error instanceof Error) {
-    return DB_LOCK_ERROR_PATTERN.test(error.message);
-  }
-  return DB_LOCK_ERROR_PATTERN.test(String(error));
-}
+let rawDbPromise: Promise<Database> | null = null;
+let dbOperationQueue: Promise<void> = Promise.resolve();
 
 async function configureDb(db: Database): Promise<Database> {
   await db.execute(`PRAGMA busy_timeout = ${DB_BUSY_TIMEOUT_MS}`);
   return db;
+}
+
+async function queueDbOperation<T>(run: () => Promise<T>): Promise<T> {
+  let releaseQueue: () => void = () => undefined;
+  const previousQueue = dbOperationQueue;
+  const currentQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+  dbOperationQueue = previousQueue
+    .catch(() => undefined)
+    .then(() => currentQueue);
+
+  await previousQueue.catch(() => undefined);
+  try {
+    return await run();
+  } finally {
+    releaseQueue();
+  }
+}
+
+function serializedDb(rawDb: Database): Database {
+  return {
+    path: rawDb.path,
+    execute(query: string, bindValues?: unknown[]): Promise<QueryResult> {
+      return queueDbOperation(() => rawDb.execute(query, bindValues));
+    },
+    select<T>(query: string, bindValues?: unknown[]): Promise<T> {
+      return queueDbOperation(() => rawDb.select<T>(query, bindValues));
+    },
+    close(db?: string): Promise<boolean> {
+      return queueDbOperation(() => rawDb.close(db));
+    },
+  } as Database;
+}
+
+function getRawDb(): Promise<Database> {
+  if (!rawDbPromise) {
+    rawDbPromise = Database.load(DB_URL).then(configureDb);
+  }
+  return rawDbPromise;
 }
 
 /**
@@ -32,22 +62,13 @@ async function configureDb(db: Database): Promise<Database> {
  */
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
-    dbPromise = Database.load(DB_URL).then(configureDb);
+    dbPromise = getRawDb().then(serializedDb);
   }
   return dbPromise;
 }
 
-export async function beginImmediateTransaction(db: Database): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await db.execute("BEGIN IMMEDIATE");
-      return;
-    } catch (error) {
-      const retryDelayMs = DB_LOCK_RETRY_DELAYS_MS[attempt];
-      if (!isDatabaseLockedError(error) || retryDelayMs === undefined) {
-        throw error;
-      }
-      await delay(retryDelayMs);
-    }
-  }
+export function runExclusiveDatabaseOperation<T>(
+  run: () => Promise<T>,
+): Promise<T> {
+  return queueDbOperation(run);
 }

@@ -24,8 +24,6 @@ export async function packBackup(
   };
   await invoke("backup_pack", {
     manifestJson: encodeBackupManifest(leanManifest),
-    chapters: [],
-    chapterMedia: [],
     outputPath,
   });
 }

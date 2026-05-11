@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../db/client", () => ({
-  beginImmediateTransaction: vi.fn(
-    async (db: { execute: (sql: string) => Promise<unknown> }) => {
-      await db.execute("BEGIN IMMEDIATE");
-    },
-  ),
-  getDb: vi.fn(),
-}));
+vi.mock("../../db/client", () => {
+  return {
+    getDb: vi.fn(),
+    runExclusiveDatabaseOperation: vi.fn(
+      async (run: () => Promise<unknown>) => run(),
+    ),
+  };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -261,89 +261,23 @@ describe("applyBackupSnapshot", () => {
     return gatherBackupSnapshot();
   }
 
-  it("deletes backup tables in dependent-first order", async () => {
-    const manifest = parseBackupManifest(
-      encodeBackupManifest(await gatherForTest()),
+  it("delegates database restore to the native transaction command", async () => {
+    const manifest = attachBackupChapterMediaFiles(
+      parseBackupManifest(encodeBackupManifest(await gatherForTest())),
+      [
+        {
+          mediaSrc: "norea-media://chapter/10/cache/image.png",
+          body: [1, 2, 3],
+        },
+      ],
     );
 
-    mockExecute.mockClear();
     await applyBackupSnapshot(manifest);
 
-    const deletes = mockExecute.mock.calls
-      .map((call) => call[0] as string)
-      .filter((sql) => sql.startsWith("DELETE"));
-    expect(deletes).toEqual([
-      "DELETE FROM novel_category",
-      "DELETE FROM chapter",
-      "DELETE FROM novel_stats",
-      "DELETE FROM novel",
-      "DELETE FROM category",
-      "DELETE FROM repository",
-      "DELETE FROM repository_index_cache",
-      "DELETE FROM installed_plugin",
-    ]);
-  });
-
-  it("wraps database restore in a transaction", async () => {
-    const manifest = parseBackupManifest(
-      encodeBackupManifest(await gatherForTest()),
-    );
-
-    mockExecute.mockClear();
-    await applyBackupSnapshot(manifest);
-
-    const sqls = mockExecute.mock.calls.map((call) => call[0] as string);
-    expect(sqls[0]).toBe("BEGIN IMMEDIATE");
-    expect(sqls.at(-1)).toBe("COMMIT");
-    expect(sqls).not.toContain("ROLLBACK");
-  });
-
-  it("inserts in parent-first order", async () => {
-    const manifest = parseBackupManifest(
-      encodeBackupManifest(await gatherForTest()),
-    );
-
-    mockExecute.mockClear();
-    await applyBackupSnapshot(manifest);
-
-    const inserts = mockExecute.mock.calls
-      .map((call) => call[0] as string)
-      .filter((sql) => sql.includes("INSERT INTO"))
-      .map((sql) => {
-        const match = /INSERT INTO (\w+)/.exec(sql);
-        return match?.[1];
-      });
-    expect(inserts).toEqual([
-      "category",
-      "repository",
-      "installed_plugin",
-      "novel",
-      "chapter",
-      "novel_category",
-    ]);
-  });
-
-  it("restores installed plugin source rows", async () => {
-    const manifest = parseBackupManifest(
-      encodeBackupManifest(await gatherForTest()),
-    );
-
-    mockExecute.mockClear();
-    await applyBackupSnapshot(manifest);
-
-    const pluginInsert = mockExecute.mock.calls.find(([sql]) =>
-      String(sql).includes("INSERT INTO installed_plugin"),
-    );
-    expect(pluginInsert?.[1]).toEqual([
-      "demo",
-      "Demo",
-      "en",
-      "1.0.0",
-      "https://example.test/icon.png",
-      "https://example.test/index.js",
-      "module.exports.default = {};",
-      1_700_000_000,
-    ]);
+    expect(invokeMock).toHaveBeenCalledWith("backup_restore_snapshot", {
+      manifestJson: encodeBackupManifest(manifest),
+      mediaBytesByChapterId: { 10: 3 },
+    });
   });
 
   it("restores backed up settings without touching unrelated localStorage", async () => {
@@ -362,7 +296,6 @@ describe("applyBackupSnapshot", () => {
       }),
     );
 
-    mockExecute.mockClear();
     await applyBackupSnapshot(manifest);
 
     expect(storage.getItem("app-appearance-settings")).toBe("new");
@@ -370,7 +303,7 @@ describe("applyBackupSnapshot", () => {
     expect(storage.getItem("unrelated")).toBe("keep");
   });
 
-  it("rolls back and leaves settings unchanged when database restore fails", async () => {
+  it("leaves settings unchanged when native database restore fails", async () => {
     const storage = installLocalStorage({
       "app-appearance-settings": "old",
       unrelated: "keep",
@@ -382,10 +315,8 @@ describe("applyBackupSnapshot", () => {
       }),
     );
     const failure = new Error("restore failed");
-
-    mockExecute.mockReset();
-    mockExecute.mockImplementation((sql: string) => {
-      if (sql.includes("INSERT INTO novel (")) {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "backup_restore_snapshot") {
         return Promise.reject(failure);
       }
       return Promise.resolve(undefined);
@@ -393,115 +324,20 @@ describe("applyBackupSnapshot", () => {
 
     await expect(applyBackupSnapshot(manifest)).rejects.toThrow(failure);
 
-    const sqls = mockExecute.mock.calls.map((call) => call[0] as string);
-    expect(sqls[0]).toBe("BEGIN IMMEDIATE");
-    expect(sqls).toContain("ROLLBACK");
-    expect(sqls).not.toContain("COMMIT");
     expect(storage.getItem("app-appearance-settings")).toBe("old");
     expect(storage.getItem("unrelated")).toBe("keep");
   });
 
-  it("restores downloaded chapter byte counts from content and media metadata", async () => {
-    const manifest = parseBackupManifest(
-      encodeBackupManifest(await gatherForTest()),
-    );
-
-    mockExecute.mockClear();
-    await applyBackupSnapshot(manifest);
-
-    const chapterInsert = mockExecute.mock.calls.find(([sql]) =>
-      String(sql).includes("INSERT INTO chapter"),
-    );
-    expect(chapterInsert?.[1]).toContain(9);
-    expect(chapterInsert?.[1]).toContain(5);
-  });
-
-  it("does not mark metadata-only chapters as downloaded", async () => {
-    const base = await gatherForTest();
-    const manifest = parseBackupManifest(
-      encodeBackupManifest({
-        ...base,
-        chapters: base.chapters.map((chapter) =>
-          chapter.id === 10
-            ? {
-                ...chapter,
-                content: null,
-                isDownloaded: true,
-                mediaBytes: 5,
-              }
-            : chapter,
-        ),
-      }),
-    );
-
-    mockExecute.mockClear();
-    await applyBackupSnapshot(manifest);
-
-    const chapterInsert = mockExecute.mock.calls.find(([sql]) =>
-      String(sql).includes("INSERT INTO chapter"),
-    );
-    const params = chapterInsert?.[1] as unknown[];
-    expect(params[10]).toBe(false);
-    expect(params[11]).toBeNull();
-    expect(params[12]).toBe(0);
-    expect(params[13]).toBe(0);
-  });
-
-  it("restores media byte counts from attached media files when available", async () => {
+  it("keeps existing storage media when unpack attached no media files", async () => {
     installTauriRuntime();
     const manifest = attachBackupChapterMediaFiles(
       parseBackupManifest(encodeBackupManifest(await gatherForTest())),
-      [
-        {
-          mediaSrc: "norea-media://chapter/10/cache/image.png",
-          body: [1, 2, 3],
-        },
-      ],
+      [],
     );
 
-    mockExecute.mockClear();
     await applyBackupSnapshot(manifest);
 
-    const chapterInsert = mockExecute.mock.calls.find(([sql]) =>
-      String(sql).includes("INSERT INTO chapter"),
-    );
-    expect(chapterInsert?.[1]).toContain(3);
-  });
-
-  it("restores only the newest repository as the singleton row", async () => {
-    const manifest = parseBackupManifest(
-      encodeBackupManifest({
-        ...(await gatherForTest()),
-        repositories: [
-          {
-            id: 2,
-            url: "https://old.example.test/p.json",
-            name: "Old",
-            addedAt: 1_600_000_000,
-          },
-          {
-            id: 3,
-            url: "https://new.example.test/p.json",
-            name: "New",
-            addedAt: 1_700_000_000,
-          },
-        ],
-      }),
-    );
-
-    mockExecute.mockClear();
-    await applyBackupSnapshot(manifest);
-
-    const repositoryInserts = mockExecute.mock.calls.filter(([sql]) =>
-      String(sql).includes("INSERT INTO repository"),
-    );
-    expect(repositoryInserts).toHaveLength(1);
-    expect(repositoryInserts[0]?.[1]).toEqual([
-      1,
-      "https://new.example.test/p.json",
-      "New",
-      1_700_000_000,
-    ]);
+    expect(invokeMock).not.toHaveBeenCalledWith("chapter_media_clear_all");
   });
 
   it("restores chapter media files attached by unpack", async () => {
@@ -516,7 +352,6 @@ describe("applyBackupSnapshot", () => {
       ],
     );
 
-    mockExecute.mockClear();
     await applyBackupSnapshot(manifest);
 
     expect(invokeMock).toHaveBeenCalledWith("chapter_media_clear_all");

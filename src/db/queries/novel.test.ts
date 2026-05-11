@@ -545,10 +545,8 @@ describe("upsertLocalNovelChapters", () => {
   it("adds downloaded chapters to an existing local novel", async () => {
     const db = stubDb();
     db.execute
-      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ rowsAffected: 1 });
     db.select.mockResolvedValueOnce([{ id: 42 }]);
 
     const result = await upsertLocalNovelChapters(42, [
@@ -562,14 +560,12 @@ describe("upsertLocalNovelChapters", () => {
       },
     ]);
 
-    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
-
     const [checkSql, checkParams] = db.select.mock.calls[0]!;
     expect(checkSql).toContain("plugin_id = $2");
     expect(checkSql).toContain("is_local = 1");
     expect(checkParams).toEqual([42, "local"]);
 
-    const [chapterSql, chapterParams] = db.execute.mock.calls[1]!;
+    const [chapterSql, chapterParams] = db.execute.mock.calls[0]!;
     expect(chapterSql).toContain("INSERT INTO chapter");
     expect(chapterSql).toContain("content_type");
     expect(chapterSql).toContain("is_downloaded");
@@ -586,7 +582,6 @@ describe("upsertLocalNovelChapters", () => {
       12,
     ]);
 
-    expect(db.execute.mock.calls[3]?.[0]).toBe("COMMIT");
     expect(result).toEqual({
       changed: true,
       changedChapters: 1,
@@ -595,17 +590,14 @@ describe("upsertLocalNovelChapters", () => {
     });
   });
 
-  it("preserves the mutation error when rollback fails", async () => {
+  it("rejects when the target novel is not local", async () => {
     const db = stubDb();
-    db.execute
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("rollback failed"));
     db.select.mockResolvedValueOnce([]);
 
     await expect(upsertLocalNovelChapters(42, [])).rejects.toThrow(
       "local novel: target novel is not local",
     );
-    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+    expect(db.execute).not.toHaveBeenCalled();
   });
 });
 
@@ -665,10 +657,8 @@ describe("upsertLocalNovel", () => {
   it("upserts a local library novel and downloaded chapters", async () => {
     const db = stubDb();
     db.execute
-      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ rowsAffected: 1 });
     db.select.mockResolvedValueOnce([{ id: 42 }]);
 
     const result = await upsertLocalNovel({
@@ -695,9 +685,7 @@ describe("upsertLocalNovel", () => {
       ],
     });
 
-    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
-
-    const [novelSql, novelParams] = db.execute.mock.calls[1]!;
+    const [novelSql, novelParams] = db.execute.mock.calls[0]!;
     expect(novelSql).toContain("INSERT INTO novel");
     expect(novelSql).toContain("ON CONFLICT(plugin_id, path) DO UPDATE");
     expect(novelSql).toContain("in_library, is_local");
@@ -719,7 +707,7 @@ describe("upsertLocalNovel", () => {
     expect(selectSql).toContain("SELECT id FROM novel");
     expect(selectParams).toEqual(["local", "/books/sample.epub"]);
 
-    const [chapterSql, chapterParams] = db.execute.mock.calls[2]!;
+    const [chapterSql, chapterParams] = db.execute.mock.calls[1]!;
     expect(chapterSql).toContain("INSERT INTO chapter");
     expect(chapterSql).toContain("content_type");
     expect(chapterSql).toContain("content_bytes");
@@ -738,7 +726,6 @@ describe("upsertLocalNovel", () => {
       12,
     ]);
 
-    expect(db.execute.mock.calls[3]?.[0]).toBe("COMMIT");
     expect(result).toEqual({
       changed: true,
       changedChapters: 1,
@@ -747,12 +734,9 @@ describe("upsertLocalNovel", () => {
     });
   });
 
-  it("rolls back when the local novel id cannot be resolved", async () => {
+  it("rejects when the local novel id cannot be resolved", async () => {
     const db = stubDb();
-    db.execute
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce(undefined);
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
     db.select.mockResolvedValueOnce([]);
 
     await expect(
@@ -763,33 +747,36 @@ describe("upsertLocalNovel", () => {
       }),
     ).rejects.toThrow("local import: failed to resolve local novel id");
 
-    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+    expect(db.execute).toHaveBeenCalledOnce();
   });
 
-  it("preserves the mutation error when rollback fails", async () => {
+  it("propagates chapter import errors", async () => {
     const db = stubDb();
     db.execute
-      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockRejectedValueOnce(new Error("rollback failed"));
-    db.select.mockResolvedValueOnce([]);
+      .mockRejectedValueOnce(new Error("chapter failed"));
+    db.select.mockResolvedValueOnce([{ id: 42 }]);
 
     await expect(
       upsertLocalNovel({
         path: "/books/missing.epub",
         name: "Missing",
-        chapters: [],
+        chapters: [
+          {
+            path: "chapter-1",
+            name: "Chapter 1",
+            position: 1,
+            content: "Chapter body",
+            contentBytes: 12,
+          },
+        ],
       }),
-    ).rejects.toThrow("local import: failed to resolve local novel id");
-    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+    ).rejects.toThrow("chapter failed");
   });
 
   it("discards remote cover sources", async () => {
     const db = stubDb();
-    db.execute
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ rowsAffected: 1 })
-      .mockResolvedValueOnce(undefined);
+    db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
     db.select.mockResolvedValueOnce([{ id: 42 }]);
 
     await upsertLocalNovel({
@@ -799,9 +786,7 @@ describe("upsertLocalNovel", () => {
       chapters: [],
     });
 
-    expect(db.execute.mock.calls[0]?.[0]).toBe("BEGIN");
-    expect(db.execute.mock.calls[1]?.[1]?.[3]).toBeNull();
-    expect(db.execute.mock.calls.at(-1)?.[0]).toBe("COMMIT");
+    expect(db.execute.mock.calls[0]?.[1]?.[3]).toBeNull();
   });
 });
 

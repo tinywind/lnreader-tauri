@@ -63,6 +63,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             backup::backup_pack,
+            backup::backup_restore_snapshot,
             backup::backup_unpack,
             chapter_media::chapter_content_mirror_clear,
             chapter_media::chapter_content_mirror_read,

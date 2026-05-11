@@ -36,10 +36,7 @@ export function attachBackupChapterMediaFiles(
 export function hasBackupChapterMediaFiles(
   manifest: BackupManifest,
 ): boolean {
-  return Object.prototype.hasOwnProperty.call(
-    manifest,
-    BACKUP_CHAPTER_MEDIA_FILES,
-  );
+  return getBackupChapterMediaFiles(manifest).length > 0;
 }
 
 export function getBackupChapterMediaFiles(

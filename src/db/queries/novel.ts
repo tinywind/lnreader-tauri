@@ -496,20 +496,18 @@ export async function upsertLocalNovelChapters(
   chapters: LocalNovelImportChapterInput[],
 ): Promise<LocalNovelImportResult> {
   const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    const novelRows = await db.select<{ id: number }[]>(
-      `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
-      [novelId, LOCAL_PLUGIN_ID],
-    );
-    if (!novelRows[0]) {
-      throw new Error("local novel: target novel is not local");
-    }
+  const novelRows = await db.select<{ id: number }[]>(
+    `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
+    [novelId, LOCAL_PLUGIN_ID],
+  );
+  if (!novelRows[0]) {
+    throw new Error("local novel: target novel is not local");
+  }
 
-    let changedChapters = 0;
-    for (const chapter of chapters) {
-      const chapterResult = await db.execute(
-        `INSERT INTO chapter
+  let changedChapters = 0;
+  for (const chapter of chapters) {
+    const chapterResult = await db.execute(
+      `INSERT INTO chapter
            (novel_id, path, name, position, chapter_number, page, release_time, content_type, content, content_bytes, is_downloaded, created_at, found_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, unixepoch(), unixepoch())
          ON CONFLICT(novel_id, path) DO UPDATE SET
@@ -533,40 +531,34 @@ export async function upsertLocalNovelChapters(
             OR content IS NOT excluded.content
             OR content_bytes IS NOT excluded.content_bytes
             OR is_downloaded IS NOT 1`,
-        [
-          novelId,
-          chapter.path,
-          chapter.name,
-          chapter.position,
-          chapter.chapterNumber ?? null,
-          chapter.page ?? "1",
-          chapter.releaseTime ?? null,
-          normalizeChapterContentType(chapter.contentType),
-          chapter.content,
-          chapter.contentBytes,
-        ],
-      );
-      if (chapterResult.rowsAffected > 0) changedChapters += 1;
-    }
+      [
+        novelId,
+        chapter.path,
+        chapter.name,
+        chapter.position,
+        chapter.chapterNumber ?? null,
+        chapter.page ?? "1",
+        chapter.releaseTime ?? null,
+        normalizeChapterContentType(chapter.contentType),
+        chapter.content,
+        chapter.contentBytes,
+      ],
+    );
+    if (chapterResult.rowsAffected > 0) changedChapters += 1;
+  }
 
-    await db.execute(
-      `UPDATE novel
+  await db.execute(
+    `UPDATE novel
        SET updated_at = unixepoch()
        WHERE id = $1`,
-      [novelId],
-    );
-    await db.execute("COMMIT");
-
-    return {
-      changed: changedChapters > 0,
-      changedChapters,
-      novelId,
-      chapterCount: chapters.length,
-    };
-  } catch (error) {
-    await db.execute("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
+    [novelId],
+  );
+  return {
+    changed: changedChapters > 0,
+    changedChapters,
+    novelId,
+    chapterCount: chapters.length,
+  };
 }
 
 export async function reorderLocalNovelChapters(
@@ -649,10 +641,8 @@ export async function upsertLocalNovel(
   input: LocalNovelImportInput,
 ): Promise<LocalNovelImportResult> {
   const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    const novelResult = await db.execute(
-      `INSERT INTO novel
+  const novelResult = await db.execute(
+    `INSERT INTO novel
          (plugin_id, path, name, cover, summary, author, artist, status, genres, in_library, is_local, library_added_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 1, unixepoch())
        ON CONFLICT(plugin_id, path) DO UPDATE SET
@@ -678,32 +668,32 @@ export async function upsertLocalNovel(
           OR in_library IS NOT 1
           OR is_local IS NOT 1
           OR library_added_at IS NULL`,
-      [
-        LOCAL_PLUGIN_ID,
-        input.path,
-        input.name,
-        nullableLocalCover(input.cover),
-        input.summary ?? null,
-        input.author ?? null,
-        input.artist ?? null,
-        input.status ?? null,
-        input.genres ?? null,
-      ],
-    );
+    [
+      LOCAL_PLUGIN_ID,
+      input.path,
+      input.name,
+      nullableLocalCover(input.cover),
+      input.summary ?? null,
+      input.author ?? null,
+      input.artist ?? null,
+      input.status ?? null,
+      input.genres ?? null,
+    ],
+  );
 
-    const rows = await db.select<{ id: number }[]>(
-      `SELECT id FROM novel WHERE plugin_id = $1 AND path = $2`,
-      [LOCAL_PLUGIN_ID, input.path],
-    );
-    const novelId = rows[0]?.id;
-    if (!novelId) {
-      throw new Error("local import: failed to resolve local novel id");
-    }
+  const rows = await db.select<{ id: number }[]>(
+    `SELECT id FROM novel WHERE plugin_id = $1 AND path = $2`,
+    [LOCAL_PLUGIN_ID, input.path],
+  );
+  const novelId = rows[0]?.id;
+  if (!novelId) {
+    throw new Error("local import: failed to resolve local novel id");
+  }
 
-    let changedChapters = 0;
-    for (const chapter of input.chapters) {
-      const chapterResult = await db.execute(
-        `INSERT INTO chapter
+  let changedChapters = 0;
+  for (const chapter of input.chapters) {
+    const chapterResult = await db.execute(
+      `INSERT INTO chapter
            (novel_id, path, name, position, chapter_number, page, release_time, content_type, content, content_bytes, is_downloaded, created_at, found_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, unixepoch(), unixepoch())
          ON CONFLICT(novel_id, path) DO UPDATE SET
@@ -727,32 +717,26 @@ export async function upsertLocalNovel(
             OR content IS NOT excluded.content
             OR content_bytes IS NOT excluded.content_bytes
             OR is_downloaded IS NOT 1`,
-        [
-          novelId,
-          chapter.path,
-          chapter.name,
-          chapter.position,
-          chapter.chapterNumber ?? null,
-          chapter.page ?? "1",
-          chapter.releaseTime ?? null,
-          normalizeChapterContentType(chapter.contentType),
-          chapter.content,
-          chapter.contentBytes,
-        ],
-      );
-      if (chapterResult.rowsAffected > 0) changedChapters += 1;
-    }
-
-    await db.execute("COMMIT");
-
-    return {
-      changed: novelResult.rowsAffected > 0 || changedChapters > 0,
-      changedChapters,
-      novelId,
-      chapterCount: input.chapters.length,
-    };
-  } catch (error) {
-    await db.execute("ROLLBACK").catch(() => undefined);
-    throw error;
+      [
+        novelId,
+        chapter.path,
+        chapter.name,
+        chapter.position,
+        chapter.chapterNumber ?? null,
+        chapter.page ?? "1",
+        chapter.releaseTime ?? null,
+        normalizeChapterContentType(chapter.contentType),
+        chapter.content,
+        chapter.contentBytes,
+      ],
+    );
+    if (chapterResult.rowsAffected > 0) changedChapters += 1;
   }
+
+  return {
+    changed: novelResult.rowsAffected > 0 || changedChapters > 0,
+    changedChapters,
+    novelId,
+    chapterCount: input.chapters.length,
+  };
 }
