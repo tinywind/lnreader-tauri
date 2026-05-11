@@ -312,6 +312,12 @@ a {
   transform: translateY(0);
 }
 
+.lnr-mobile-nav[data-reader-seekbar="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(100%);
+}
+
 .lnr-mobile-nav-link {
   align-items: center;
   color: var(--lnr-design-ink-subtle);
@@ -325,6 +331,14 @@ a {
   position: relative;
   text-decoration: none;
   white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .lnr-app-main[data-reader-seekbar="true"] {
+    --lnr-mobile-nav-content-height: 0rem;
+    --lnr-mobile-nav-height: var(--lnr-safe-area-bottom);
+    --lnr-app-bottom-inset: var(--lnr-safe-area-bottom);
+  }
 }
 
 .lnr-mobile-nav-link--active {

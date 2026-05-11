@@ -1,9 +1,9 @@
 import {
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
-  type PointerEvent,
 } from "react";
 
 type ReaderSeekbarOrientation = "horizontal" | "vertical";
@@ -26,6 +26,11 @@ interface ReaderSeekbarProps {
   progress: number;
 }
 
+interface PointerPosition {
+  clientX: number;
+  clientY: number;
+}
+
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
   return Math.max(0, Math.min(100, progress));
@@ -33,14 +38,14 @@ function clampProgress(progress: number): number {
 
 function getPointerProgress(
   element: HTMLElement,
-  event: PointerEvent<HTMLElement>,
+  pointer: PointerPosition,
   orientation: ReaderSeekbarOrientation,
 ): number {
   const rect = element.getBoundingClientRect();
   if (orientation === "vertical") {
-    return clampProgress(((event.clientY - rect.top) / rect.height) * 100);
+    return clampProgress(((pointer.clientY - rect.top) / rect.height) * 100);
   }
-  return clampProgress(((event.clientX - rect.left) / rect.width) * 100);
+  return clampProgress(((pointer.clientX - rect.left) / rect.width) * 100);
 }
 
 function ReaderSeekbar({
@@ -50,22 +55,98 @@ function ReaderSeekbar({
   orientation,
   progress,
 }: ReaderSeekbarProps) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
   const activePointerRef = useRef<number | null>(null);
+  const removeDocumentDragListenersRef = useRef<(() => void) | null>(null);
+  const onCommitRef = useRef(onCommit);
+  const onSeekRef = useRef(onSeek);
   const [active, setActive] = useState(false);
   const clampedProgress = clampProgress(progress);
 
-  function seekFromPointer(event: PointerEvent<HTMLElement>): void {
-    onSeek(getPointerProgress(event.currentTarget, event, orientation));
+  useEffect(() => {
+    onCommitRef.current = onCommit;
+    onSeekRef.current = onSeek;
+  });
+
+  useEffect(
+    () => () => {
+      removeDocumentDragListenersRef.current?.();
+      removeDocumentDragListenersRef.current = null;
+      activePointerRef.current = null;
+    },
+    [],
+  );
+
+  function removeDocumentDragListeners(): void {
+    removeDocumentDragListenersRef.current?.();
+    removeDocumentDragListenersRef.current = null;
   }
 
-  function finishPointer(event: PointerEvent<HTMLElement>): void {
-    if (activePointerRef.current !== event.pointerId) return;
+  function seekFromPointer(pointer: PointerPosition): void {
+    const element = elementRef.current;
+    if (!element) return;
+    onSeekRef.current(getPointerProgress(element, pointer, orientation));
+  }
+
+  function finishPointer(pointerId: number): void {
+    if (activePointerRef.current !== pointerId) return;
     activePointerRef.current = null;
+    removeDocumentDragListeners();
     setActive(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    onCommit?.();
+    onCommitRef.current?.();
+  }
+
+  function startDocumentDragListeners(pointerId: number): void {
+    if (typeof window === "undefined") return;
+    removeDocumentDragListeners();
+
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      if (
+        activePointerRef.current !== pointerId ||
+        event.pointerId !== pointerId
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      seekFromPointer(event);
+    };
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      if (
+        activePointerRef.current !== pointerId ||
+        event.pointerId !== pointerId
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      seekFromPointer(event);
+      finishPointer(pointerId);
+    };
+    const handlePointerCancel = (event: globalThis.PointerEvent) => {
+      if (
+        activePointerRef.current !== pointerId ||
+        event.pointerId !== pointerId
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      finishPointer(pointerId);
+    };
+    const options: AddEventListenerOptions = {
+      capture: true,
+      passive: false,
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, options);
+    window.addEventListener("pointerup", handlePointerUp, options);
+    window.addEventListener("pointercancel", handlePointerCancel, options);
+    removeDocumentDragListenersRef.current = () => {
+      window.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", handlePointerUp, true);
+      window.removeEventListener("pointercancel", handlePointerCancel, true);
+    };
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
@@ -99,6 +180,7 @@ function ReaderSeekbar({
 
   return (
     <div
+      ref={elementRef}
       aria-label={label}
       aria-orientation={orientation}
       aria-valuemax={100}
@@ -113,19 +195,17 @@ function ReaderSeekbar({
         event.stopPropagation();
       }}
       onKeyDown={handleKeyDown}
-      onLostPointerCapture={() => {
-        if (activePointerRef.current === null) return;
-        activePointerRef.current = null;
-        setActive(false);
-        onCommit?.();
+      onPointerCancel={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        finishPointer(event.pointerId);
       }}
-      onPointerCancel={finishPointer}
       onPointerDown={(event) => {
         if (event.pointerType === "mouse" && event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
         activePointerRef.current = event.pointerId;
-        event.currentTarget.setPointerCapture(event.pointerId);
+        startDocumentDragListeners(event.pointerId);
         setActive(true);
         seekFromPointer(event);
       }}
@@ -137,8 +217,10 @@ function ReaderSeekbar({
       }}
       onPointerUp={(event) => {
         if (activePointerRef.current !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
         seekFromPointer(event);
-        finishPointer(event);
+        finishPointer(event.pointerId);
       }}
       role="slider"
       style={
@@ -163,7 +245,9 @@ export function ReaderSeekbars({
   showHorizontal,
   showVertical,
 }: ReaderSeekbarsProps) {
-  if (!showHorizontal) return null;
+  if (!showHorizontal && !showVertical) return null;
+
+  const renderHorizontal = showHorizontal && !showVertical;
 
   return (
     <div
@@ -177,13 +261,15 @@ export function ReaderSeekbars({
         } as CSSProperties
       }
     >
-      <ReaderSeekbar
-        label={label}
-        onCommit={onCommit}
-        onSeek={onSeek}
-        orientation="horizontal"
-        progress={progress}
-      />
+      {renderHorizontal ? (
+        <ReaderSeekbar
+          label={label}
+          onCommit={onCommit}
+          onSeek={onSeek}
+          orientation="horizontal"
+          progress={progress}
+        />
+      ) : null}
       {showVertical ? (
         <ReaderSeekbar
           label={label}

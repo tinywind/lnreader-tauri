@@ -911,6 +911,20 @@ export function ReaderPage() {
       Boolean(chapter && !hasChapterContent));
   const readerChromeAutoHide = fullPageReader && !readerStateVisible;
   const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
+  const readerSeekbarVisible =
+    effectiveReaderGeneral.showSeekbar &&
+    readerChromeVisible &&
+    !readerStateVisible;
+  const readerContentGeneral = useMemo(
+    () =>
+      effectiveReaderGeneral.showSeekbar === readerSeekbarVisible
+        ? effectiveReaderGeneral
+        : {
+            ...effectiveReaderGeneral,
+            showSeekbar: readerSeekbarVisible,
+          },
+    [effectiveReaderGeneral, readerSeekbarVisible],
+  );
   const readerOverlayBottom =
     fullPageReader && !readerChromeVisible
       ? "calc(var(--lnr-safe-area-bottom) + 0.5rem)"
@@ -1003,7 +1017,7 @@ export function ReaderPage() {
         appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}
         dataUrl={content}
-        generalSettings={effectiveReaderGeneral}
+        generalSettings={readerContentGeneral}
         initialProgress={progress}
         onToggleChrome={
           readerChromeAutoHide ? handleToggleFullPageChrome : undefined
@@ -1019,7 +1033,7 @@ export function ReaderPage() {
         ref={contentRef}
         appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}
-        generalSettings={effectiveReaderGeneral}
+        generalSettings={readerContentGeneral}
         html={content}
         initialProgress={progress}
         onToggleChrome={
@@ -1037,6 +1051,7 @@ export function ReaderPage() {
       className="lnr-reader-shell"
       data-chrome-visible={readerChromeVisible}
       data-full-page={fullPageReader}
+      data-seekbar-visible={readerSeekbarVisible}
       aria-busy={readerBusy}
       onPointerDown={handleFullPageActivity}
       onPointerMove={handleFullPageActivity}

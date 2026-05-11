@@ -499,10 +499,9 @@
 .lnr-reader-floating-seekbar {
   --lnr-reader-seek-progress: 0%;
   appearance: none;
-  background: color-mix(in srgb, var(--lnr-design-surface) 88%, transparent);
-  border: 1px solid color-mix(in srgb, var(--lnr-design-rule-strong) 72%, transparent);
-  border-radius: 999px;
-  box-shadow: var(--lnr-design-shadow-floating);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   box-sizing: border-box;
   cursor: pointer;
   display: block;
@@ -510,35 +509,34 @@
   pointer-events: auto;
   position: absolute;
   touch-action: none;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    opacity 120ms ease;
+  transition: opacity 120ms ease;
   user-select: none;
 }
 
 .lnr-reader-floating-seekbar[data-orientation="horizontal"] {
   bottom: var(--lnr-reader-seek-bottom, 1rem);
   height: 2rem;
-  left: 1rem;
-  right: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(30rem, calc(100% - 4rem));
 }
 
 .lnr-reader-floating-seekbar[data-orientation="vertical"] {
-  bottom: calc(var(--lnr-reader-seek-bottom, 1rem) + 2.5rem);
+  height: min(
+    30rem,
+    calc(100% - var(--lnr-reader-seek-bottom, 1rem) - 4rem)
+  );
   right: 1rem;
-  top: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
   width: 2rem;
 }
 
 .lnr-reader-floating-seekbar:focus-visible,
 .lnr-reader-floating-seekbar[data-active="true"] {
-  background: color-mix(in srgb, var(--lnr-design-surface) 96%, transparent);
-  border-color: var(--lnr-design-accent);
-  box-shadow:
-    var(--lnr-design-shadow-floating),
-    0 0 0 0.1875rem color-mix(in srgb, var(--lnr-design-accent) 24%, transparent);
+  outline: 0.125rem solid
+    color-mix(in srgb, var(--lnr-design-accent) 42%, transparent);
+  outline-offset: 0.125rem;
 }
 
 .lnr-reader-floating-seekbar-track {
@@ -823,14 +821,18 @@
     grid-template-columns: minmax(0, auto) minmax(3.5rem, 1fr);
   }
 
+  .lnr-reader-shell[data-seekbar-visible="true"] .lnr-reader-bottom-strip {
+    display: none;
+  }
+
   .lnr-reader-floating-seekbar[data-orientation="horizontal"] {
-    left: 0.75rem;
-    right: 0.75rem;
+    bottom: calc(var(--lnr-safe-area-bottom) + 0.75rem);
+    width: min(18rem, calc(100% - 3rem));
   }
 
   .lnr-reader-floating-seekbar[data-orientation="vertical"] {
+    height: min(24rem, calc(100% - var(--lnr-safe-area-bottom) - 5rem));
     right: 0.75rem;
-    top: 0.75rem;
   }
 }
 
