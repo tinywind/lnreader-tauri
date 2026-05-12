@@ -16,7 +16,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { PageFrame } from "../components/AppFrame";
 import { BrowseSettingsPanel } from "../components/BrowseSettingsPanel";
@@ -222,6 +222,13 @@ async function rehydrateImportedSettings(): Promise<void> {
     useReaderStore.persist.rehydrate(),
     useUserAgentStore.persist.rehydrate(),
   ]);
+}
+
+async function refreshImportedDataQueries(
+  queryClient: QueryClient,
+): Promise<void> {
+  queryClient.removeQueries({ type: "inactive" });
+  await queryClient.invalidateQueries({ refetchType: "active" });
 }
 
 function MediaStorageSettingsSection({ isBusy }: { isBusy: boolean }) {
@@ -1259,14 +1266,7 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
           if (path) {
             await pluginManager.reloadInstalledFromDb();
             await rehydrateImportedSettings();
-            await Promise.all([
-              queryClient.invalidateQueries({
-                queryKey: ["plugin", "installed"],
-              }),
-              queryClient.invalidateQueries({
-                queryKey: ["repository", "list"],
-              }),
-            ]);
+            await refreshImportedDataQueries(queryClient);
           }
           return path;
         },
