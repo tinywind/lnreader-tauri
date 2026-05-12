@@ -1,41 +1,61 @@
 package io.github.tinywind.norea
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import android.webkit.JavascriptInterface
+import android.webkit.MimeTypeMap
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.documentfile.provider.DocumentFile
 import androidx.core.graphics.Insets
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import java.io.File
 import org.json.JSONObject
+import java.io.File
 
 class MainActivity : TauriActivity() {
   private var androidScraperBridge: AndroidScraperBridge? = null
+  private var mainWebView: WebView? = null
   private var notificationPermissionRequested = false
+  private var pendingStorageRootRequestId: String? = null
   @Volatile
   private var safeAreaInsetsJson = insetsJson(Insets.NONE)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    onBackPressedDispatcher.addCallback(
+      this,
+      object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+          if (androidScraperBridge?.handleBackPressed() == true) return
+          isEnabled = false
+          onBackPressedDispatcher.onBackPressed()
+          isEnabled = true
+        }
+      },
+    )
   }
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    mainWebView = webView
     val bridge = AndroidScraperBridge(webView)
     androidScraperBridge = bridge
     webView.addJavascriptInterface(bridge, "__NoreaAndroidScraper")
     webView.addJavascriptInterface(SafeAreaBridge(), "__NoreaAndroidSafeArea")
     webView.addJavascriptInterface(TaskNotificationBridge(), "__NoreaAndroidTasks")
     webView.addJavascriptInterface(UpdateInstallBridge(), "__NoreaAndroidUpdater")
+    webView.addJavascriptInterface(StorageBridge(), "__NoreaAndroidStorage")
     webView.addJavascriptInterface(WindowMetricsBridge(webView), "__NoreaAndroidWindow")
     webView.settings.apply {
       setSupportZoom(false)
@@ -62,6 +82,59 @@ class MainActivity : TauriActivity() {
       windowInsets
     }
     ViewCompat.requestApplyInsets(webView)
+  }
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode != REQUEST_MEDIA_STORAGE_ROOT) return
+
+    val requestId = pendingStorageRootRequestId ?: return
+    pendingStorageRootRequestId = null
+    if (resultCode != Activity.RESULT_OK) {
+      resolveStorageRootPick(
+        requestId,
+        JSONObject()
+          .put("ok", false)
+          .put("cancelled", true),
+      )
+      return
+    }
+
+    val uri = data?.data
+    if (uri == null) {
+      resolveStorageRootPick(
+        requestId,
+        JSONObject()
+          .put("ok", false)
+          .put("error", "No storage folder was selected."),
+      )
+      return
+    }
+
+    val flags = data.flags and (
+      Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+      )
+    runCatching {
+      contentResolver.takePersistableUriPermission(uri, flags)
+      uri.toString()
+    }.fold(
+      onSuccess = { root ->
+        resolveStorageRootPick(
+          requestId,
+          JSONObject()
+            .put("ok", true)
+            .put("root", root),
+        )
+      },
+      onFailure = { error ->
+        resolveStorageRootPick(
+          requestId,
+          JSONObject()
+            .put("ok", false)
+            .put("error", error.message ?: error.toString()),
+        )
+      },
+    )
   }
 
   private inner class SafeAreaBridge {
@@ -135,6 +208,131 @@ class MainActivity : TauriActivity() {
       )
   }
 
+  private inner class StorageBridge {
+    @JavascriptInterface
+    fun pickMediaStorageRoot(requestId: String) {
+      runOnUiThread {
+        if (pendingStorageRootRequestId != null) {
+          resolveStorageRootPick(
+            requestId,
+            JSONObject()
+              .put("ok", false)
+              .put("error", "A storage folder picker is already open."),
+          )
+          return@runOnUiThread
+        }
+
+        pendingStorageRootRequestId = requestId
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+          addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+          putExtra("android.content.extra.SHOW_ADVANCED", true)
+        }
+        runCatching {
+          startActivityForResult(intent, REQUEST_MEDIA_STORAGE_ROOT)
+        }.onFailure { error ->
+          pendingStorageRootRequestId = null
+          resolveStorageRootPick(
+            requestId,
+            JSONObject()
+              .put("ok", false)
+              .put("error", error.message ?: error.toString()),
+          )
+        }
+      }
+    }
+
+    @JavascriptInterface
+    fun writeBytes(
+      rootUri: String,
+      relativePath: String,
+      base64: String,
+      mimeType: String,
+    ): String = storageResponse {
+      val bytes = Base64.decode(base64, Base64.DEFAULT)
+      val file = ensureStorageFile(rootUri, relativePath, mimeTypeForPath(relativePath, mimeType))
+      contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
+        output.write(bytes)
+      } ?: throw IllegalStateException("Cannot open storage file for writing.")
+      JSONObject()
+        .put("ok", true)
+        .put("bytes", bytes.size)
+    }
+
+    @JavascriptInterface
+    fun writeText(rootUri: String, relativePath: String, text: String): String =
+      storageResponse {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        val file = ensureStorageFile(rootUri, relativePath, "text/plain")
+        contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
+          output.write(bytes)
+        } ?: throw IllegalStateException("Cannot open storage file for writing.")
+        JSONObject()
+          .put("ok", true)
+          .put("bytes", bytes.size)
+      }
+
+    @JavascriptInterface
+    fun readText(rootUri: String, relativePath: String): String = storageResponse {
+      val file = storageDocumentAt(rootUri, relativePath)
+        ?: throw IllegalArgumentException("Android storage path not found: $relativePath")
+      val text = contentResolver.openInputStream(file.uri)?.use { input ->
+        input.readBytes().toString(Charsets.UTF_8)
+      } ?: throw IllegalStateException("Cannot open storage file for reading.")
+      JSONObject()
+        .put("ok", true)
+        .put("text", text)
+    }
+
+    @JavascriptInterface
+    fun readBase64(rootUri: String, relativePath: String): String = storageResponse {
+      val file = storageDocumentAt(rootUri, relativePath)
+        ?: throw IllegalArgumentException("Android storage path not found: $relativePath")
+      val bytes = contentResolver.openInputStream(file.uri)?.use { input ->
+        input.readBytes()
+      } ?: throw IllegalStateException("Cannot open storage file for reading.")
+      JSONObject()
+        .put("ok", true)
+        .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+        .put("mimeType", mimeTypeForPath(relativePath, ""))
+    }
+
+    @JavascriptInterface
+    fun pathSize(rootUri: String, relativePath: String): String = storageResponse {
+      val document = storageDocumentAt(rootUri, relativePath)
+      JSONObject()
+        .put("ok", true)
+        .put("bytes", document?.let(::storageDocumentSize) ?: 0L)
+    }
+
+    @JavascriptInterface
+    fun deletePath(rootUri: String, relativePath: String): String = storageResponse {
+      storageDocumentAt(rootUri, relativePath)?.delete()
+      JSONObject().put("ok", true)
+    }
+
+    @JavascriptInterface
+    fun deleteChildrenExcept(rootUri: String, relativePath: String, keepName: String): String =
+      storageResponse {
+        storageDocumentAt(rootUri, relativePath)?.listFiles()?.forEach { child ->
+          if (child.name != keepName) {
+            child.delete()
+          }
+        }
+        JSONObject().put("ok", true)
+      }
+
+    @JavascriptInterface
+    fun deleteRootChildren(rootUri: String): String = storageResponse {
+      storageRoot(rootUri).listFiles().forEach { child ->
+        child.delete()
+      }
+      JSONObject().put("ok", true)
+    }
+  }
+
   private inner class WindowMetricsBridge(private val webView: WebView) {
     @JavascriptInterface
     fun getMetrics(): String = windowMetricsJson(webView)
@@ -163,6 +361,100 @@ class MainActivity : TauriActivity() {
     )
   }
 
+  private fun resolveStorageRootPick(requestId: String, payload: JSONObject) {
+    val script =
+      "window.__lnrResolveAndroidStoragePick && window.__lnrResolveAndroidStoragePick(" +
+        "${JSONObject.quote(requestId)}, $payload);"
+    mainWebView?.post {
+      mainWebView?.evaluateJavascript(script, null)
+    }
+  }
+
+  private fun storageResponse(block: () -> JSONObject): String =
+    runCatching(block).fold(
+      onSuccess = { it.toString() },
+      onFailure = { error ->
+        JSONObject()
+          .put("ok", false)
+          .put("error", error.message ?: error.toString())
+          .toString()
+      },
+    )
+
+  private fun storageRoot(rootUri: String): DocumentFile =
+    DocumentFile.fromTreeUri(this, Uri.parse(rootUri))
+      ?: throw IllegalArgumentException("Android storage folder is unavailable.")
+
+  private fun safeStorageSegments(relativePath: String): List<String> {
+    val segments = relativePath
+      .replace('\\', '/')
+      .split('/')
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+    require(segments.isNotEmpty()) { "Android storage path is empty." }
+    for (segment in segments) {
+      require(segment != "." && segment != ".." && !segment.contains('\u0000')) {
+        "Android storage path contains an invalid segment."
+      }
+    }
+    return segments
+  }
+
+  private fun storageDocumentAt(rootUri: String, relativePath: String): DocumentFile? {
+    var current = storageRoot(rootUri)
+    for (segment in safeStorageSegments(relativePath)) {
+      current = current.findFile(segment) ?: return null
+    }
+    return current
+  }
+
+  private fun ensureStorageDirectory(parent: DocumentFile, name: String): DocumentFile {
+    val existing = parent.findFile(name)
+    if (existing != null) {
+      require(existing.isDirectory) { "Android storage path segment is not a folder: $name" }
+      return existing
+    }
+    return parent.createDirectory(name)
+      ?: throw IllegalStateException("Cannot create Android storage folder: $name")
+  }
+
+  private fun ensureStorageFile(
+    rootUri: String,
+    relativePath: String,
+    mimeType: String,
+  ): DocumentFile {
+    val segments = safeStorageSegments(relativePath)
+    var current = storageRoot(rootUri)
+    for (segment in segments.dropLast(1)) {
+      current = ensureStorageDirectory(current, segment)
+    }
+    val fileName = segments.last()
+    val existing = current.findFile(fileName)
+    if (existing != null) {
+      require(existing.isFile) { "Android storage path is not a file: $relativePath" }
+      return existing
+    }
+    return current.createFile(mimeType, fileName)
+      ?: throw IllegalStateException("Cannot create Android storage file: $relativePath")
+  }
+
+  private fun mimeTypeForPath(relativePath: String, fallback: String): String {
+    if (fallback.isNotBlank()) return fallback
+    val extension = relativePath.substringAfterLast('.', "")
+      .lowercase()
+      .takeIf { it.isNotBlank() }
+    return extension
+      ?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+      ?: "application/octet-stream"
+  }
+
+  private fun storageDocumentSize(document: DocumentFile): Long =
+    if (document.isDirectory) {
+      document.listFiles().sumOf(::storageDocumentSize)
+    } else {
+      document.length().coerceAtLeast(0L)
+    }
+
   private fun windowMetricsJson(webView: WebView): String {
     val metrics = resources.displayMetrics
     val density = if (metrics.density > 0f) metrics.density else 1f
@@ -180,6 +472,7 @@ class MainActivity : TauriActivity() {
 
   companion object {
     private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+    private const val REQUEST_MEDIA_STORAGE_ROOT = 1001
     private const val REQUEST_POST_NOTIFICATIONS = 1002
 
     private fun insetsJson(insets: Insets): String {

@@ -467,6 +467,10 @@ function ChapterMediaStorageGate({
     void getChapterMediaStorageRoot()
       .then((root) => {
         if (cancelled) return;
+        if (isAndroidRuntime()) {
+          setStorageReady(root?.trim().startsWith("content://") === true);
+          return;
+        }
         setStorageReady(root !== null && root.trim() !== "");
       })
       .catch((unknownError: unknown) => {

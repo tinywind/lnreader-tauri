@@ -215,6 +215,17 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     mainHandler.post { hideScraper() }
   }
 
+  fun handleBackPressed(): Boolean {
+    if (!browserVisible) return false
+    val webView = queueState(IMMEDIATE_EXECUTOR).webView ?: return false
+    if (webView.canGoBack()) {
+      webView.goBack()
+      return true
+    }
+    hideScraper()
+    return true
+  }
+
   private fun executorFromPayload(payload: JSONObject): String {
     val value = payload.optString("queue", IMMEDIATE_EXECUTOR).trim()
     if (value == "mainForeground") return IMMEDIATE_EXECUTOR
@@ -440,8 +451,16 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     webView.isFocusableInTouchMode = false
     webView.requestLayout()
     CookieManager.getInstance().flush()
+    emitSiteBrowserHidden()
     logState(state, "hideScraper after")
     runNext(state)
+  }
+
+  private fun emitSiteBrowserHidden() {
+    mainWebView.evaluateJavascript(
+      "window.dispatchEvent(new CustomEvent('norea-site-browser-hidden'));",
+      null,
+    )
   }
 
   private fun makeClient(

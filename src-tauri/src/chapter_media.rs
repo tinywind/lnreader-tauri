@@ -55,9 +55,11 @@ fn media_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn save_configured_media_root(app: &AppHandle, root_path: &Path) -> Result<String, String> {
-    fs::create_dir_all(root_path)
-        .map_err(|err| format!("chapter media: create storage root: {err}"))?;
     let root_value = root_path.to_string_lossy().into_owned();
+    if !root_value.starts_with("content://") {
+        fs::create_dir_all(root_path)
+            .map_err(|err| format!("chapter media: create storage root: {err}"))?;
+    }
     let config_path = storage_root_config_path(app)?;
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)

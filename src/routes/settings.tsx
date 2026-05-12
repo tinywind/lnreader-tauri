@@ -224,7 +224,100 @@ async function rehydrateImportedSettings(): Promise<void> {
   ]);
 }
 
-function AppSettingsSection() {
+function MediaStorageSettingsSection({ isBusy }: { isBusy: boolean }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [mediaStorageRoot, setMediaStorageRoot] = useState<string | null>(null);
+  const [mediaStorageBusy, setMediaStorageBusy] = useState(false);
+
+  useEffect(() => {
+    void getChapterMediaStorageRoot()
+      .then(setMediaStorageRoot)
+      .catch((error: unknown) => {
+        showSettingsToast(
+          "red",
+          t("settings.data.mediaStorage.loadFailed", {
+            error: describeError(error),
+          }),
+        );
+      });
+  }, [t]);
+
+  async function chooseMediaStorageRoot(): Promise<void> {
+    setMediaStorageBusy(true);
+    try {
+      const root = await selectChapterMediaStorageRoot();
+      if (root) {
+        const result = await restoreChapterContentStorageMirror();
+        setMediaStorageRoot(root);
+        const restoredItems = result.chapters + result.novels;
+        showSettingsToast(
+          "green",
+          t("settings.toast.saved"),
+          restoredItems > 0
+            ? t("settings.data.mediaStorage.restore.done", {
+                chapters: result.chapters,
+                novels: result.novels,
+              })
+            : undefined,
+        );
+        void queryClient.invalidateQueries({ queryKey: ["novel"] });
+        void queryClient.invalidateQueries({ queryKey: ["category"] });
+      }
+    } catch (error) {
+      showSettingsToast(
+        "red",
+        t("settings.data.mediaStorage.selectFailed", {
+          error: describeError(error),
+        }),
+      );
+    } finally {
+      setMediaStorageBusy(false);
+    }
+  }
+
+  return (
+    <SettingsSection title={t("settings.data.mediaStorage.title")}>
+      <SettingsFieldRow
+        label={t("settings.data.mediaStorage.folder.label")}
+        description={
+          isAndroidRuntime()
+            ? t("settings.data.mediaStorage.folder.androidDefaultDescription")
+            : t("settings.data.mediaStorage.folder.description")
+        }
+        layout="stacked"
+      >
+        <SettingsWideField>
+          <Text className="lnr-settings-path-value">
+            {mediaStorageRoot ?? t("settings.data.mediaStorage.folder.empty")}
+          </Text>
+        </SettingsWideField>
+      </SettingsFieldRow>
+      <SettingsFieldRow
+        label={t("settings.data.mediaStorage.change.label")}
+        description={
+          isAndroidRuntime()
+            ? t("settings.data.mediaStorage.change.androidDefaultDescription")
+            : t("settings.data.mediaStorage.change.description")
+        }
+      >
+        <TextButton
+          loading={mediaStorageBusy}
+          disabled={mediaStorageBusy || isBusy}
+          onClick={() => {
+            void chooseMediaStorageRoot();
+          }}
+        >
+          {isAndroidRuntime()
+            ? t("storageSetup.useAppStorage")
+            : t("storageSetup.selectFolder")}
+        </TextButton>
+      </SettingsFieldRow>
+    </SettingsSection>
+  );
+}
+
+function AppSettingsSection({ isBusy }: { isBusy: boolean }) {
   const appearance = useAppearanceStore();
   const notificationSettings = useNotificationStore();
   const { t } = useTranslation();
@@ -326,6 +419,8 @@ function AppSettingsSection() {
           />
         </SettingsFieldRow>
       </SettingsSection>
+
+      <MediaStorageSettingsSection isBusy={isBusy} />
 
       <SettingsSection
         title={t("settings.app.localization.title")}
@@ -475,94 +570,10 @@ function DataSettingsSection({
   const resetReadingProgressState = useReaderStore(
     (state) => state.resetReadingProgress,
   );
-  const queryClient = useQueryClient();
   const [userAgentInput, setUserAgentInput] = useState(userAgent);
-  const [mediaStorageRoot, setMediaStorageRoot] = useState<string | null>(null);
-  const [mediaStorageBusy, setMediaStorageBusy] = useState(false);
-
-  useEffect(() => {
-    void getChapterMediaStorageRoot()
-      .then(setMediaStorageRoot)
-      .catch((error: unknown) => {
-        showSettingsToast(
-          "red",
-          t("settings.data.mediaStorage.loadFailed", {
-            error: describeError(error),
-          }),
-        );
-      });
-  }, [t]);
-
-  async function chooseMediaStorageRoot(): Promise<void> {
-    setMediaStorageBusy(true);
-    try {
-      const root = await selectChapterMediaStorageRoot();
-      if (root) {
-        const result = await restoreChapterContentStorageMirror();
-        setMediaStorageRoot(root);
-        showSettingsToast(
-          "green",
-          t("settings.toast.saved"),
-          t("settings.data.mediaStorage.restore.done", {
-            chapters: result.chapters,
-            novels: result.novels,
-          }),
-        );
-        void queryClient.invalidateQueries({ queryKey: ["novel"] });
-        void queryClient.invalidateQueries({ queryKey: ["category"] });
-      }
-    } catch (error) {
-      showSettingsToast(
-        "red",
-        t("settings.data.mediaStorage.selectFailed", {
-          error: describeError(error),
-        }),
-      );
-    } finally {
-      setMediaStorageBusy(false);
-    }
-  }
 
   return (
     <Stack gap="md">
-      <SettingsSection title={t("settings.data.mediaStorage.title")}>
-        <SettingsFieldRow
-          label={t("settings.data.mediaStorage.folder.label")}
-          description={
-            isAndroidRuntime()
-              ? t("settings.data.mediaStorage.folder.androidDefaultDescription")
-              : t("settings.data.mediaStorage.folder.description")
-          }
-          layout="stacked"
-        >
-          <SettingsWideField>
-            <Text className="lnr-settings-path-value">
-              {mediaStorageRoot ?? t("settings.data.mediaStorage.folder.empty")}
-            </Text>
-          </SettingsWideField>
-        </SettingsFieldRow>
-        <SettingsFieldRow
-          label={t("settings.data.mediaStorage.change.label")}
-          description={
-            isAndroidRuntime()
-              ? t("settings.data.mediaStorage.change.androidDefaultDescription")
-              : t("settings.data.mediaStorage.change.description")
-          }
-        >
-          <TextButton
-            loading={mediaStorageBusy}
-            disabled={mediaStorageBusy || isBusy}
-            onClick={() => {
-              void chooseMediaStorageRoot();
-            }}
-          >
-            {isAndroidRuntime()
-              ? t("storageSetup.useAppStorage")
-              : t("storageSetup.selectFolder")}
-          </TextButton>
-        </SettingsFieldRow>
-      </SettingsSection>
-
       <SettingsSection
         title={t("settings.data.backup.title")}
       >
@@ -1356,7 +1367,7 @@ export function SettingsPage({ section }: SettingsPageProps = {}) {
     {
       id: "app",
       title: t("settings.category.app.title"),
-      content: <AppSettingsSection />,
+      content: <AppSettingsSection isBusy={isBusy} />,
     },
     {
       id: "reader",
