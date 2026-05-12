@@ -11,6 +11,8 @@ type ReaderSeekbarOrientation = "horizontal" | "vertical";
 interface ReaderSeekbarsProps {
   bottomOffset?: number | string;
   label: string;
+  onActivity?: () => void;
+  onActiveChange?: (active: boolean) => void;
   onCommit?: () => void;
   onSeek: (progress: number) => void;
   progress: number;
@@ -20,6 +22,8 @@ interface ReaderSeekbarsProps {
 
 interface ReaderSeekbarProps {
   label: string;
+  onActivity?: () => void;
+  onActiveChange?: (active: boolean) => void;
   onCommit?: () => void;
   onSeek: (progress: number) => void;
   orientation: ReaderSeekbarOrientation;
@@ -50,6 +54,8 @@ function getPointerProgress(
 
 function ReaderSeekbar({
   label,
+  onActivity,
+  onActiveChange,
   onCommit,
   onSeek,
   orientation,
@@ -58,12 +64,16 @@ function ReaderSeekbar({
   const elementRef = useRef<HTMLDivElement | null>(null);
   const activePointerRef = useRef<number | null>(null);
   const removeDocumentDragListenersRef = useRef<(() => void) | null>(null);
+  const onActivityRef = useRef(onActivity);
+  const onActiveChangeRef = useRef(onActiveChange);
   const onCommitRef = useRef(onCommit);
   const onSeekRef = useRef(onSeek);
   const [active, setActive] = useState(false);
   const clampedProgress = clampProgress(progress);
 
   useEffect(() => {
+    onActivityRef.current = onActivity;
+    onActiveChangeRef.current = onActiveChange;
     onCommitRef.current = onCommit;
     onSeekRef.current = onSeek;
   });
@@ -72,6 +82,9 @@ function ReaderSeekbar({
     () => () => {
       removeDocumentDragListenersRef.current?.();
       removeDocumentDragListenersRef.current = null;
+      if (activePointerRef.current !== null) {
+        onActiveChangeRef.current?.(false);
+      }
       activePointerRef.current = null;
     },
     [],
@@ -80,6 +93,15 @@ function ReaderSeekbar({
   function removeDocumentDragListeners(): void {
     removeDocumentDragListenersRef.current?.();
     removeDocumentDragListenersRef.current = null;
+  }
+
+  function notifyActivity(): void {
+    onActivityRef.current?.();
+  }
+
+  function setSeekbarActive(nextActive: boolean): void {
+    setActive(nextActive);
+    onActiveChangeRef.current?.(nextActive);
   }
 
   function seekFromPointer(pointer: PointerPosition): void {
@@ -92,7 +114,7 @@ function ReaderSeekbar({
     if (activePointerRef.current !== pointerId) return;
     activePointerRef.current = null;
     removeDocumentDragListeners();
-    setActive(false);
+    setSeekbarActive(false);
     onCommitRef.current?.();
   }
 
@@ -109,6 +131,7 @@ function ReaderSeekbar({
       }
       event.preventDefault();
       event.stopPropagation();
+      notifyActivity();
       seekFromPointer(event);
     };
     const handlePointerUp = (event: globalThis.PointerEvent) => {
@@ -120,6 +143,7 @@ function ReaderSeekbar({
       }
       event.preventDefault();
       event.stopPropagation();
+      notifyActivity();
       seekFromPointer(event);
       finishPointer(pointerId);
     };
@@ -132,6 +156,7 @@ function ReaderSeekbar({
       }
       event.preventDefault();
       event.stopPropagation();
+      notifyActivity();
       finishPointer(pointerId);
     };
     const options: AddEventListenerOptions = {
@@ -174,6 +199,7 @@ function ReaderSeekbar({
 
     if (nextProgress === null) return;
     event.preventDefault();
+    notifyActivity();
     onSeek(clampProgress(nextProgress));
     onCommit?.();
   }
@@ -204,21 +230,24 @@ function ReaderSeekbar({
         if (event.pointerType === "mouse" && event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
+        notifyActivity();
         activePointerRef.current = event.pointerId;
         startDocumentDragListeners(event.pointerId);
-        setActive(true);
+        setSeekbarActive(true);
         seekFromPointer(event);
       }}
       onPointerMove={(event) => {
         if (activePointerRef.current !== event.pointerId) return;
         event.preventDefault();
         event.stopPropagation();
+        notifyActivity();
         seekFromPointer(event);
       }}
       onPointerUp={(event) => {
         if (activePointerRef.current !== event.pointerId) return;
         event.preventDefault();
         event.stopPropagation();
+        notifyActivity();
         seekFromPointer(event);
         finishPointer(event.pointerId);
       }}
@@ -239,6 +268,8 @@ function ReaderSeekbar({
 export function ReaderSeekbars({
   bottomOffset = "1rem",
   label,
+  onActivity,
+  onActiveChange,
   onCommit,
   onSeek,
   progress,
@@ -264,6 +295,8 @@ export function ReaderSeekbars({
       {renderHorizontal ? (
         <ReaderSeekbar
           label={label}
+          onActivity={onActivity}
+          onActiveChange={onActiveChange}
           onCommit={onCommit}
           onSeek={onSeek}
           orientation="horizontal"
@@ -273,6 +306,8 @@ export function ReaderSeekbars({
       {showVertical ? (
         <ReaderSeekbar
           label={label}
+          onActivity={onActivity}
+          onActiveChange={onActiveChange}
           onCommit={onCommit}
           onSeek={onSeek}
           orientation="vertical"

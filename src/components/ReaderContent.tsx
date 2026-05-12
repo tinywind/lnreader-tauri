@@ -26,7 +26,7 @@ import { ReaderSeekbars } from "./ReaderSeekbars";
 export interface ReaderContentHandle {
   completeIfAtEnd: () => boolean;
   patchMediaSources: (html: string) => void;
-  scrollByPage: (direction: 1 | -1) => void;
+  scrollByPage: (direction: 1 | -1, source?: string) => void;
   scrollToStart: () => void;
 }
 
@@ -39,6 +39,8 @@ interface ReaderContentProps {
   interactionBlocked?: boolean;
   onProgressChange?: (progress: number) => void;
   onPageIndexChange?: (pageIndex: number) => void;
+  onSeekbarActivity?: () => void;
+  onSeekbarActiveChange?: (active: boolean) => void;
   onToggleChrome?: () => void;
   onBoundaryPage?: (direction: 1 | -1) => void;
   viewportHeight?: string;
@@ -63,6 +65,7 @@ const PAGED_SCROLL_ANIMATION_MS = 120;
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
+const NATIVE_WHEEL_ACTION_LOCK_MS = 240;
 const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
 const READER_MEDIA_EVENT_SELECTOR =
@@ -81,6 +84,25 @@ const READER_MEDIA_PATCH_ATTRIBUTES = [
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
   return Math.max(0, Math.min(100, progress));
+}
+
+function getReaderDebugSnapshot(node: HTMLElement | null) {
+  if (!node) return null;
+  const maxTop = Math.max(0, node.scrollHeight - node.clientHeight);
+  return {
+    scrollTop: Math.round(node.scrollTop),
+    maxTop: Math.round(maxTop),
+    scrollLeft: Math.round(node.scrollLeft),
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    clientWidth: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+  };
+}
+
+function logReaderInput(event: string, details: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  console.warn("[reader-input:html]", event, details);
 }
 
 function easeOutCubic(progress: number): number {
@@ -321,6 +343,8 @@ function ReaderContentInner(
     interactionBlocked = false,
     onProgressChange,
     onPageIndexChange,
+    onSeekbarActivity,
+    onSeekbarActiveChange,
     onToggleChrome,
     onBoundaryPage,
     viewportHeight: requestedViewportHeight,
@@ -342,6 +366,7 @@ function ReaderContentInner(
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
+  const nativeWheelActionLockedUntilRef = useRef(0);
   const pageScrollAnimationRef = useRef<number | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [progress, setProgress] = useState(clampProgress(initialProgress));
@@ -402,7 +427,7 @@ function ReaderContentInner(
   }, []);
 
   const scrollByPage = useCallback(
-    (direction: 1 | -1) => {
+    (direction: 1 | -1, source = "imperative") => {
       const node = viewportRef.current;
       if (!node) return;
       if (direction === -1) {
@@ -411,24 +436,64 @@ function ReaderContentInner(
       if (isPagedReader) {
         const currentPage = getPagedPageIndex(node);
         const targetPage = currentPage + direction;
+        logReaderInput("page-step-request", {
+          source,
+          direction,
+          mode: "paged",
+          currentPage,
+          targetPage,
+          snapshot: getReaderDebugSnapshot(node),
+        });
         if (targetPage < 1 || targetPage > getPagedPageCount(node)) {
+          logReaderInput("page-step-boundary", {
+            source,
+            direction,
+            snapshot: getReaderDebugSnapshot(node),
+          });
           onBoundaryPage?.(direction);
           return;
         }
         scrollPagedTo(getPagedLeft(node, targetPage));
         return;
       }
+      if (performance.now() < nativeWheelActionLockedUntilRef.current) {
+        logReaderInput("page-step-suppressed", {
+          source,
+          direction,
+          reason: "native-wheel-active",
+          snapshot: getReaderDebugSnapshot(node),
+        });
+        return;
+      }
       const axisMax = node.scrollHeight - node.clientHeight;
       const current = node.scrollTop;
+      logReaderInput("page-step-request", {
+        source,
+        direction,
+        mode: "scroll",
+        axisMax: Math.round(axisMax),
+        snapshot: getReaderDebugSnapshot(node),
+      });
       if (
         (direction === 1 && current >= axisMax - 2) ||
         (direction === -1 && current <= 2)
       ) {
+        logReaderInput("page-step-boundary", {
+          source,
+          direction,
+          snapshot: getReaderDebugSnapshot(node),
+        });
         onBoundaryPage?.(direction);
         return;
       }
       const amount = node.clientHeight * SCROLL_PAGE_FRACTION;
-      node.scrollBy({ top: amount * direction, behavior: "smooth" });
+      logReaderInput("page-step-scroll", {
+        source,
+        direction,
+        amount: Math.round(amount),
+        snapshot: getReaderDebugSnapshot(node),
+      });
+      node.scrollBy({ top: amount * direction, behavior: "auto" });
     },
     [isPagedReader, onBoundaryPage, scrollPagedTo],
   );
@@ -495,7 +560,7 @@ function ReaderContentInner(
       scrollToStart() {
         const node = viewportRef.current;
         if (!node) return;
-        node.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        node.scrollTo({ top: 0, left: 0, behavior: "auto" });
       },
     }),
     [flushProgress, isPagedReader, patchMediaSources, scrollByPage],
@@ -733,10 +798,10 @@ function ReaderContentInner(
 
     switch (action) {
       case "previous":
-        scrollByPage(-1);
+        scrollByPage(-1, "tap-previous");
         break;
       case "next":
-        scrollByPage(1);
+        scrollByPage(1, "tap-next");
         break;
       case "menu":
         onToggleChrome?.();
@@ -752,17 +817,44 @@ function ReaderContentInner(
 
     const delta = getNormalizedWheelDelta(event);
     if (Math.abs(delta) < 1) return;
+    if (!isPagedReader) {
+      nativeWheelActionLockedUntilRef.current =
+        performance.now() + NATIVE_WHEEL_ACTION_LOCK_MS;
+      logReaderInput("wheel-native-scroll", {
+        delta: Math.round(delta),
+        snapshot: getReaderDebugSnapshot(viewportRef.current),
+      });
+      return;
+    }
 
     event.preventDefault();
-    if (wheelPagingLockedRef.current) return;
+    if (wheelPagingLockedRef.current) {
+      logReaderInput("wheel-suppressed", {
+        delta: Math.round(delta),
+        reason: "wheel-cooldown",
+        snapshot: getReaderDebugSnapshot(viewportRef.current),
+      });
+      return;
+    }
 
     wheelDeltaRef.current += delta;
-    if (Math.abs(wheelDeltaRef.current) < WHEEL_PAGE_DELTA_THRESHOLD) return;
+    if (Math.abs(wheelDeltaRef.current) < WHEEL_PAGE_DELTA_THRESHOLD) {
+      logReaderInput("wheel-accumulate", {
+        delta: Math.round(delta),
+        accumulated: Math.round(wheelDeltaRef.current),
+        snapshot: getReaderDebugSnapshot(viewportRef.current),
+      });
+      return;
+    }
 
     const direction: 1 | -1 = wheelDeltaRef.current > 0 ? 1 : -1;
     wheelDeltaRef.current = 0;
     wheelPagingLockedRef.current = true;
-    scrollByPage(direction);
+    logReaderInput("wheel-page-step", {
+      direction,
+      snapshot: getReaderDebugSnapshot(viewportRef.current),
+    });
+    scrollByPage(direction, "wheel-page-step");
 
     if (wheelCooldownTimerRef.current !== null) {
       window.clearTimeout(wheelCooldownTimerRef.current);
@@ -876,7 +968,7 @@ function ReaderContentInner(
           const dy = touch.clientY - touchStartRef.current.y;
           touchStartRef.current = null;
           if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
-            scrollByPage(dx < 0 ? 1 : -1);
+            scrollByPage(dx < 0 ? 1 : -1, "swipe");
           }
         }}
         style={{
@@ -886,7 +978,7 @@ function ReaderContentInner(
           overflowY: isPagedReader ? "hidden" : "auto",
           color: appearance.textColor,
           cursor: "pointer",
-          scrollBehavior: isPagedReader ? "auto" : "smooth",
+          scrollBehavior: "auto",
         }}
       >
         {appearance.customCss.trim() ? (
@@ -1002,6 +1094,8 @@ function ReaderContentInner(
       <ReaderSeekbars
         bottomOffset={overlayBottom}
         label={t("reader.progressAria", { progress: Math.round(progress) })}
+        onActivity={onSeekbarActivity}
+        onActiveChange={onSeekbarActiveChange}
         onCommit={commitSeekProgress}
         onSeek={seekToProgress}
         progress={progress}

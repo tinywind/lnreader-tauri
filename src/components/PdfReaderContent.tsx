@@ -41,6 +41,8 @@ interface PdfReaderContentProps {
   onBoundaryPage?: (direction: 1 | -1) => void;
   onPageIndexChange?: (pageIndex: number) => void;
   onProgressChange?: (progress: number) => void;
+  onSeekbarActivity?: () => void;
+  onSeekbarActiveChange?: (active: boolean) => void;
   onToggleChrome?: () => void;
   viewportHeight?: string;
 }
@@ -68,6 +70,7 @@ const TWO_PAGE_MEDIA_QUERY = "(min-width: 62em)";
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
+const NATIVE_WHEEL_ACTION_LOCK_MS = 240;
 const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
 const PDF_READER_MEDIA_EVENT_SELECTOR =
@@ -148,6 +151,27 @@ function canScrollVertically(node: HTMLElement, direction: 1 | -1): boolean {
   const maxTop = getVerticalScrollMax(node);
   if (maxTop <= 2) return false;
   return direction === 1 ? node.scrollTop < maxTop - 2 : node.scrollTop > 2;
+}
+
+function getPdfReaderDebugSnapshot(node: HTMLElement | null) {
+  if (!node) return null;
+  const maxTop = getVerticalScrollMax(node);
+  return {
+    scrollTop: Math.round(node.scrollTop),
+    maxTop: Math.round(maxTop),
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    clientWidth: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+  };
+}
+
+function logPdfReaderInput(
+  event: string,
+  details: Record<string, unknown>,
+): void {
+  if (!import.meta.env.DEV) return;
+  console.warn("[reader-input:pdf]", event, details);
 }
 
 function getScrollProgress(node: HTMLElement): number {
@@ -398,6 +422,8 @@ function PdfReaderContentInner(
     onBoundaryPage,
     onPageIndexChange,
     onProgressChange,
+    onSeekbarActivity,
+    onSeekbarActiveChange,
     onToggleChrome,
     viewportHeight: requestedViewportHeight,
     appearanceSettings,
@@ -424,6 +450,8 @@ function PdfReaderContentInner(
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
+  const nativeWheelActionLockedUntilRef = useRef(0);
+  const scrollDebugLastAtRef = useRef(0);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const onBoundaryPageRef = useRef(onBoundaryPage);
   const onPageIndexChangeRef = useRef(onPageIndexChange);
@@ -522,6 +550,16 @@ function PdfReaderContentInner(
     }
   }, []);
 
+  const cancelPendingScrollRestore = useCallback((source: string) => {
+    if (isPagedReader || !restorePendingRef.current) return false;
+    logPdfReaderInput("restore-cancel", {
+      source,
+      snapshot: getPdfReaderDebugSnapshot(viewportRef.current),
+    });
+    restorePendingRef.current = false;
+    return true;
+  }, [isPagedReader]);
+
   const scheduleProgressSave = useCallback(
     (value: number) => {
       if (progressTimerRef.current !== null) {
@@ -541,10 +579,24 @@ function PdfReaderContentInner(
     if (
       !node ||
       currentPageCount <= 0 ||
-      restorePendingRef.current ||
       completedForNavigationRef.current
     ) {
       return;
+    }
+    if (restorePendingRef.current) {
+      if (isPagedReader || node.scrollTop <= 2) {
+        logPdfReaderInput("scroll-suppressed", {
+          reason: "restore-pending",
+          mode: isPagedReader ? "paged" : "scroll",
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
+        return;
+      }
+      logPdfReaderInput("restore-cancel", {
+        source: "native-scroll",
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
+      restorePendingRef.current = false;
     }
     const currentPageNumber = pageNumberRef.current;
     const currentVisiblePageCount = visiblePageCountRef.current;
@@ -557,6 +609,19 @@ function PdfReaderContentInner(
     );
     latestProgressRef.current = nextProgress;
     setProgress(nextProgress);
+    const now = performance.now();
+    if (now - scrollDebugLastAtRef.current >= 120) {
+      scrollDebugLastAtRef.current = now;
+      logPdfReaderInput("scroll-progress", {
+        mode: isPagedReader ? "paged" : "scroll",
+        progress: Math.round(nextProgress * 100) / 100,
+        pageIndex: isPagedReader
+          ? currentPageNumber
+          : getScrollPageIndex(nextProgress, currentPageCount),
+        pageCount: currentPageCount,
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
+    }
     onPageIndexChangeRef.current?.(
       isPagedReader
         ? currentPageNumber
@@ -569,6 +634,11 @@ function PdfReaderContentInner(
     const node = viewportRef.current;
     if (!node) return;
     const maxTop = getVerticalScrollMax(node);
+    logPdfReaderInput("paged-inner-scroll-apply", {
+      position,
+      targetTop: position === "end" ? Math.round(maxTop) : 0,
+      snapshot: getPdfReaderDebugSnapshot(node),
+    });
     node.scrollTo({
       top: position === "end" ? maxTop : 0,
       left: 0,
@@ -590,6 +660,14 @@ function PdfReaderContentInner(
         renderedPagesRef.current = new Set();
         setLayoutVersion((current) => current + 1);
       }
+      logPdfReaderInput("move-to-page", {
+        requestedPage: nextPageNumber,
+        nextPage,
+        currentPageNumber,
+        position,
+        pageCount: currentPageCount,
+        visiblePageCount: visiblePageCountRef.current,
+      });
       pendingPageScrollRef.current = position;
       pageNumberRef.current = nextPage;
       setPageNumber(nextPage);
@@ -603,37 +681,87 @@ function PdfReaderContentInner(
   );
 
   const scrollByPage = useCallback(
-    (direction: 1 | -1) => {
+    (direction: 1 | -1, source = "imperative") => {
       const node = viewportRef.current;
       const currentPageCount = pageCountRef.current;
       if (!node || currentPageCount <= 0) return;
-      if (isPagedReader && pendingPageScrollRef.current) return;
+      if (isPagedReader && pendingPageScrollRef.current) {
+        logPdfReaderInput("page-step-suppressed", {
+          source,
+          direction,
+          reason: "pending-page-scroll",
+          pageNumber: pageNumberRef.current,
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
+        return;
+      }
+      if (
+        !isPagedReader &&
+        performance.now() < nativeWheelActionLockedUntilRef.current
+      ) {
+        logPdfReaderInput("page-step-suppressed", {
+          source,
+          direction,
+          reason: "native-wheel-active",
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
+        return;
+      }
+      cancelPendingScrollRestore(source);
       if (direction === -1) {
         completedForNavigationRef.current = false;
       }
 
       if (canScrollVertically(node, direction)) {
+        logPdfReaderInput("page-step-scroll", {
+          source,
+          direction,
+          mode: isPagedReader ? "paged-inner-scroll" : "scroll",
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
         node.scrollBy({
           top: node.clientHeight * SCROLL_PAGE_FRACTION * direction,
-          behavior: "smooth",
+          behavior: "auto",
         });
         return;
       }
 
       if (!isPagedReader) {
+        logPdfReaderInput("page-step-boundary", {
+          source,
+          direction,
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
         onBoundaryPageRef.current?.(direction);
         return;
       }
 
       const step = visiblePageCountRef.current;
       const targetPage = pageNumberRef.current + step * direction;
+      logPdfReaderInput("page-step-request", {
+        source,
+        direction,
+        mode: "paged",
+        pageNumber: pageNumberRef.current,
+        targetPage,
+        pageCount: currentPageCount,
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
       if (targetPage < 1 || targetPage > currentPageCount) {
+        logPdfReaderInput("page-step-boundary", {
+          source,
+          direction,
+          pageNumber: pageNumberRef.current,
+          targetPage,
+          pageCount: currentPageCount,
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
         onBoundaryPageRef.current?.(direction);
         return;
       }
       moveToPage(targetPage, direction === -1 ? "end" : "start");
     },
-    [isPagedReader, moveToPage],
+    [cancelPendingScrollRestore, isPagedReader, moveToPage],
   );
 
   useImperativeHandle(
@@ -675,7 +803,7 @@ function PdfReaderContentInner(
           moveToPage(1);
           return;
         }
-        viewportRef.current?.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        viewportRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       },
     }),
     [flushProgress, isPagedReader, moveToPage, scrollByPage],
@@ -814,8 +942,16 @@ function PdfReaderContentInner(
 
   const handlePageRendered = useCallback((renderedPageNumber: number) => {
     renderedPagesRef.current.add(renderedPageNumber);
+    if (restorePendingRef.current) {
+      logPdfReaderInput("page-rendered-while-restore-pending", {
+        renderedPageNumber,
+        renderedPageCount: renderedPagesRef.current.size,
+        expectedPages: pageNumbers,
+        snapshot: getPdfReaderDebugSnapshot(viewportRef.current),
+      });
+    }
     setLayoutVersion((current) => current + 1);
-  }, []);
+  }, [pageNumbers]);
 
   useEffect(() => {
     if (
@@ -833,6 +969,13 @@ function PdfReaderContentInner(
     if (!node) return;
     const value = latestProgressRef.current;
     const applyRestore = () => {
+      if (!restorePendingRef.current) {
+        logPdfReaderInput("restore-suppressed", {
+          reason: "canceled-before-frame",
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
+        return;
+      }
       if (isPagedReader) {
         const restoredPage = getPageFromProgress(
           value,
@@ -840,6 +983,14 @@ function PdfReaderContentInner(
           visiblePageCount,
         );
         if (restoredPage !== pageNumberRef.current) {
+          logPdfReaderInput("restore-page-switch", {
+            progress: Math.round(value * 100) / 100,
+            restoredPage,
+            currentPage: pageNumberRef.current,
+            pageCount,
+            visiblePageCount,
+            snapshot: getPdfReaderDebugSnapshot(node),
+          });
           renderedPagesRef.current = new Set();
           setLayoutVersion((current) => current + 1);
           pageNumberRef.current = restoredPage;
@@ -852,14 +1003,30 @@ function PdfReaderContentInner(
           pageCount,
           visiblePageCount,
         );
+        const targetTop = getVerticalScrollMax(node) * offset;
+        logPdfReaderInput("restore-apply", {
+          mode: "paged",
+          progress: Math.round(value * 100) / 100,
+          targetTop: Math.round(targetTop),
+          restoredPage,
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
         node.scrollTo({
-          top: getVerticalScrollMax(node) * offset,
+          top: targetTop,
           left: 0,
           behavior: "auto",
         });
       } else {
+        const targetTop =
+          getVerticalScrollMax(node) * (clampProgress(value) / 100);
+        logPdfReaderInput("restore-apply", {
+          mode: "scroll",
+          progress: Math.round(value * 100) / 100,
+          targetTop: Math.round(targetTop),
+          snapshot: getPdfReaderDebugSnapshot(node),
+        });
         node.scrollTo({
-          top: getVerticalScrollMax(node) * (clampProgress(value) / 100),
+          top: targetTop,
           left: 0,
           behavior: "auto",
         });
@@ -929,13 +1096,19 @@ function PdfReaderContentInner(
     );
     const resolvedAction =
       general.tapToScroll || action === "menu" ? action : "none";
+    logPdfReaderInput("tap-action", {
+      action,
+      resolvedAction,
+      mode: isPagedReader ? "paged" : "scroll",
+      snapshot: getPdfReaderDebugSnapshot(node),
+    });
 
     switch (resolvedAction) {
       case "previous":
-        scrollByPage(-1);
+        scrollByPage(-1, "tap-previous");
         break;
       case "next":
-        scrollByPage(1);
+        scrollByPage(1, "tap-next");
         break;
       case "menu":
         onToggleChrome?.();
@@ -947,27 +1120,62 @@ function PdfReaderContentInner(
 
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (event.ctrlKey || isInteractiveTarget(event.target)) return;
-
     const delta = getNormalizedWheelDelta(event);
     if (Math.abs(delta) < 1) return;
 
     const node = viewportRef.current;
     if (!node) return;
+    if (!isPagedReader) {
+      nativeWheelActionLockedUntilRef.current =
+        performance.now() + NATIVE_WHEEL_ACTION_LOCK_MS;
+      const canceledRestore = cancelPendingScrollRestore("wheel-native-scroll");
+      logPdfReaderInput("wheel-native-scroll", {
+        delta: Math.round(delta),
+        canceledRestore,
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
+      return;
+    }
+
     const direction: 1 | -1 = delta > 0 ? 1 : -1;
     if (canScrollVertically(node, direction)) {
       wheelDeltaRef.current = 0;
+      logPdfReaderInput("wheel-inner-scroll", {
+        delta: Math.round(delta),
+        direction,
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
       return;
     }
 
     event.preventDefault();
-    if (wheelPagingLockedRef.current) return;
+    if (wheelPagingLockedRef.current) {
+      logPdfReaderInput("wheel-suppressed", {
+        delta: Math.round(delta),
+        direction,
+        reason: "wheel-cooldown",
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
+      return;
+    }
 
     wheelDeltaRef.current += delta;
-    if (Math.abs(wheelDeltaRef.current) < WHEEL_PAGE_DELTA_THRESHOLD) return;
+    if (Math.abs(wheelDeltaRef.current) < WHEEL_PAGE_DELTA_THRESHOLD) {
+      logPdfReaderInput("wheel-accumulate", {
+        delta: Math.round(delta),
+        accumulated: Math.round(wheelDeltaRef.current),
+        snapshot: getPdfReaderDebugSnapshot(node),
+      });
+      return;
+    }
 
     wheelDeltaRef.current = 0;
     wheelPagingLockedRef.current = true;
-    scrollByPage(direction);
+    logPdfReaderInput("wheel-page-step", {
+      direction,
+      snapshot: getPdfReaderDebugSnapshot(node),
+    });
+    scrollByPage(direction, "wheel-page-step");
 
     if (wheelCooldownTimerRef.current !== null) {
       window.clearTimeout(wheelCooldownTimerRef.current);
@@ -1064,6 +1272,11 @@ function PdfReaderContentInner(
             touchStartRef.current = { x: touch.clientX, y: touch.clientY };
           }
         }}
+        onTouchMove={() => {
+          nativeWheelActionLockedUntilRef.current =
+            performance.now() + NATIVE_WHEEL_ACTION_LOCK_MS;
+          cancelPendingScrollRestore("touch-native-scroll");
+        }}
         onTouchEnd={(event) => {
           if (!general.swipeGestures || !touchStartRef.current) {
             touchStartRef.current = null;
@@ -1075,7 +1288,7 @@ function PdfReaderContentInner(
           const dy = touch.clientY - touchStartRef.current.y;
           touchStartRef.current = null;
           if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
-            scrollByPage(dx < 0 ? 1 : -1);
+            scrollByPage(dx < 0 ? 1 : -1, "swipe");
           }
         }}
         onWheel={handleWheel}
@@ -1113,6 +1326,8 @@ function PdfReaderContentInner(
       <ReaderSeekbars
         bottomOffset={bottomOverlayOffset}
         label={t("reader.progressAria", { progress: Math.round(progress) })}
+        onActivity={onSeekbarActivity}
+        onActiveChange={onSeekbarActiveChange}
         onCommit={commitSeekProgress}
         onSeek={seekToProgress}
         progress={progress}

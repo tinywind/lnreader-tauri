@@ -40,6 +40,12 @@ import "../styles/reader.css";
 
 const FINISHED_PROGRESS = 100;
 const FULL_PAGE_CHROME_HIDE_DELAY_MS = 5000;
+const READER_SEEKBAR_HIDE_DELAY_MS = 1000;
+
+function logReaderRouteInput(event: string, details: Record<string, unknown>) {
+  if (!import.meta.env.DEV) return;
+  console.warn("[reader-input:route]", event, details);
+}
 
 const SAMPLE_CHAPTER_HTML = `
 <h1>Chapter 1 - A long road begins</h1>
@@ -409,8 +415,13 @@ export function ReaderPage() {
   const openRequestRef = useRef(0);
   const autoDownloadingChapterRef = useRef<number | null>(null);
   const chromeHideTimerRef = useRef<number | null>(null);
+  const readerSeekbarHideTimerRef = useRef<number | null>(null);
+  const readerSeekbarEnabledRef = useRef(false);
+  const readerSeekbarActiveRef = useRef(false);
   const readerWriteQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [fullPageChromeVisible, setFullPageChromeVisible] = useState(false);
+  const [readerSeekbarActivityVisible, setReaderSeekbarActivityVisible] =
+    useState(false);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [autoDownloadingChapterId, setAutoDownloadingChapterId] = useState<
     number | null
@@ -419,6 +430,10 @@ export function ReaderPage() {
     chapterId: number;
     contentType: ChapterRow["contentType"];
     html: string;
+  } | null>(null);
+  const [initialProgressOverride, setInitialProgressOverride] = useState<{
+    chapterId: number;
+    progress: number;
   } | null>(null);
 
   const chapterQuery = useQuery({
@@ -517,11 +532,51 @@ export function ReaderPage() {
     }, FULL_PAGE_CHROME_HIDE_DELAY_MS);
   }, [clearFullPageChromeTimer, fullPageReader]);
 
+  const clearReaderSeekbarHideTimer = useCallback(() => {
+    if (readerSeekbarHideTimerRef.current !== null) {
+      window.clearTimeout(readerSeekbarHideTimerRef.current);
+      readerSeekbarHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleReaderSeekbarHide = useCallback(() => {
+    clearReaderSeekbarHideTimer();
+    readerSeekbarHideTimerRef.current = window.setTimeout(() => {
+      readerSeekbarHideTimerRef.current = null;
+      if (readerSeekbarActiveRef.current) return;
+      setReaderSeekbarActivityVisible(false);
+    }, READER_SEEKBAR_HIDE_DELAY_MS);
+  }, [clearReaderSeekbarHideTimer]);
+
+  const showReaderSeekbarForActivity = useCallback(() => {
+    if (!readerSeekbarEnabledRef.current) return;
+    setReaderSeekbarActivityVisible(true);
+    scheduleReaderSeekbarHide();
+  }, [scheduleReaderSeekbarHide]);
+
   const handleFullPageActivity = useCallback(() => {
     if (fullPageReader && fullPageChromeVisible) {
       scheduleFullPageChromeHide();
     }
   }, [fullPageChromeVisible, fullPageReader, scheduleFullPageChromeHide]);
+
+  const handleReaderActivity = useCallback(() => {
+    handleFullPageActivity();
+    showReaderSeekbarForActivity();
+  }, [handleFullPageActivity, showReaderSeekbarForActivity]);
+
+  const handleReaderSeekbarActiveChange = useCallback(
+    (active: boolean) => {
+      readerSeekbarActiveRef.current = active;
+      if (active) {
+        clearReaderSeekbarHideTimer();
+        setReaderSeekbarActivityVisible(true);
+        return;
+      }
+      showReaderSeekbarForActivity();
+    },
+    [clearReaderSeekbarHideTimer, showReaderSeekbarForActivity],
+  );
 
   const handleToggleFullPageChrome = useCallback(() => {
     if (!fullPageReader) return;
@@ -645,7 +700,19 @@ export function ReaderPage() {
   });
 
   const openChapter = useCallback(
-    (targetChapter: ChapterListRow) => {
+    (
+      targetChapter: ChapterListRow,
+      options?: { initialProgress?: number },
+    ) => {
+      if (options?.initialProgress !== undefined) {
+        setInitialProgressOverride({
+          chapterId: targetChapter.id,
+          progress: options.initialProgress,
+        });
+      } else if (targetChapter.id !== chapterId) {
+        setInitialProgressOverride(null);
+      }
+
       if (
         targetChapter.id === chapterId &&
         (targetChapter.isDownloaded ||
@@ -736,7 +803,10 @@ export function ReaderPage() {
       if (direction === 1) {
         contentRef.current?.completeIfAtEnd();
       }
-      openChapter(adjacent);
+      openChapter(
+        adjacent,
+        direction === 1 ? { initialProgress: 0 } : undefined,
+      );
     },
     [chapter?.novelId, chapter?.position, openChapter],
   );
@@ -804,7 +874,7 @@ export function ReaderPage() {
       switch (event.key) {
         case "Escape":
           event.preventDefault();
-          handleFullPageActivity();
+          handleReaderActivity();
           handleReaderBack();
           break;
         case "PageDown":
@@ -812,19 +882,29 @@ export function ReaderPage() {
         case " ":
         case "ArrowRight":
           event.preventDefault();
-          handleFullPageActivity();
-          contentRef.current?.scrollByPage(1);
+          handleReaderActivity();
+          logReaderRouteInput("key-page-step", {
+            key: event.key,
+            direction: 1,
+            hasContentRef: Boolean(contentRef.current),
+          });
+          contentRef.current?.scrollByPage(1, `key-${event.key}`);
           break;
         case "PageUp":
         case "ArrowUp":
         case "ArrowLeft":
           event.preventDefault();
-          handleFullPageActivity();
-          contentRef.current?.scrollByPage(-1);
+          handleReaderActivity();
+          logReaderRouteInput("key-page-step", {
+            key: event.key,
+            direction: -1,
+            hasContentRef: Boolean(contentRef.current),
+          });
+          contentRef.current?.scrollByPage(-1, `key-${event.key}`);
           break;
         case "Home":
           event.preventDefault();
-          handleFullPageActivity();
+          handleReaderActivity();
           contentRef.current?.scrollToStart();
           break;
         default:
@@ -835,7 +915,7 @@ export function ReaderPage() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [
     closeReaderSettingsPanel,
-    handleFullPageActivity,
+    handleReaderActivity,
     handleReaderBack,
     readerSettingsOpen,
   ]);
@@ -905,6 +985,12 @@ export function ReaderPage() {
   const content = activeReaderHtml ?? SAMPLE_CHAPTER_HTML;
   const isPdfChapter = hasChapterContent && chapter?.contentType === "pdf";
   const progress = chapter?.progress ?? 0;
+  const activeInitialProgressOverride =
+    initialProgressOverride &&
+    initialProgressOverride.chapterId === chapter?.id
+      ? initialProgressOverride.progress
+      : null;
+  const readerProgress = activeInitialProgressOverride ?? progress;
   const chapterNovelId = chapter?.novelId;
   const readerStateVisible =
     chapterId > 0 &&
@@ -914,10 +1000,10 @@ export function ReaderPage() {
       Boolean(chapter && !hasChapterContent));
   const readerChromeAutoHide = fullPageReader && !readerStateVisible;
   const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
+  const readerSeekbarEnabled =
+    effectiveReaderGeneral.showSeekbar && !readerStateVisible;
   const readerSeekbarVisible =
-    effectiveReaderGeneral.showSeekbar &&
-    readerChromeVisible &&
-    !readerStateVisible;
+    readerSeekbarEnabled && readerSeekbarActivityVisible;
   const readerContentGeneral = useMemo(
     () =>
       effectiveReaderGeneral.showSeekbar === readerSeekbarVisible
@@ -934,6 +1020,30 @@ export function ReaderPage() {
       : "calc(var(--lnr-app-bottom-inset) + 2rem)";
   const sharedFullPageReaderChromeVisible =
     fullPageReader && readerChromeVisible;
+
+  useEffect(() => {
+    readerSeekbarEnabledRef.current = readerSeekbarEnabled;
+    if (!readerSeekbarEnabled) {
+      clearReaderSeekbarHideTimer();
+      readerSeekbarActiveRef.current = false;
+      setReaderSeekbarActivityVisible(false);
+      return;
+    }
+    setReaderSeekbarActivityVisible(true);
+    scheduleReaderSeekbarHide();
+  }, [
+    chapterId,
+    clearReaderSeekbarHideTimer,
+    readerSeekbarEnabled,
+    scheduleReaderSeekbarHide,
+  ]);
+
+  useEffect(
+    () => () => {
+      clearReaderSeekbarHideTimer();
+    },
+    [clearReaderSeekbarHideTimer],
+  );
 
   useEffect(() => {
     setFullPageReaderChromeVisible(sharedFullPageReaderChromeVisible);
@@ -957,6 +1067,11 @@ export function ReaderPage() {
   const handleProgressChange = useCallback(
     (nextProgress: number) => {
       if (chapterId > 0) {
+        setInitialProgressOverride((current) =>
+          current?.chapterId === chapterId
+            ? { ...current, progress: nextProgress }
+            : current,
+        );
         progressMutateRef.current(nextProgress);
       }
     },
@@ -1028,13 +1143,15 @@ export function ReaderPage() {
         bottomOverlayOffset={readerOverlayBottom}
         dataUrl={content}
         generalSettings={readerContentGeneral}
-        initialProgress={progress}
+        initialProgress={readerProgress}
         onToggleChrome={
           readerChromeAutoHide ? handleToggleFullPageChrome : undefined
         }
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
         onBoundaryPage={handleBoundaryPage}
+        onSeekbarActivity={showReaderSeekbarForActivity}
+        onSeekbarActiveChange={handleReaderSeekbarActiveChange}
         viewportHeight="100%"
       />
     ) : (
@@ -1045,13 +1162,15 @@ export function ReaderPage() {
         bottomOverlayOffset={readerOverlayBottom}
         generalSettings={readerContentGeneral}
         html={content}
-        initialProgress={progress}
+        initialProgress={readerProgress}
         onToggleChrome={
           readerChromeAutoHide ? handleToggleFullPageChrome : undefined
         }
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
         onBoundaryPage={handleBoundaryPage}
+        onSeekbarActivity={showReaderSeekbarForActivity}
+        onSeekbarActiveChange={handleReaderSeekbarActiveChange}
         viewportHeight="100%"
       />
     );
@@ -1063,9 +1182,9 @@ export function ReaderPage() {
       data-full-page={fullPageReader}
       data-seekbar-visible={readerSeekbarVisible}
       aria-busy={readerBusy}
-      onPointerDown={handleFullPageActivity}
-      onPointerMove={handleFullPageActivity}
-      onWheel={handleFullPageActivity}
+      onPointerDown={handleReaderActivity}
+      onPointerMove={handleReaderActivity}
+      onWheel={handleReaderActivity}
     >
       <ReaderTopChrome
         chapter={chapter}
@@ -1077,7 +1196,7 @@ export function ReaderPage() {
         onBack={handleReaderBack}
         onOpenSettings={openReaderSettingsPanel}
         onToggleBookmark={() => bookmarkMutation.mutate()}
-        progress={progress}
+        progress={readerProgress}
         settingsOpen={readerSettingsOpen}
       />
       <Box className="lnr-reader-body">
@@ -1113,7 +1232,7 @@ export function ReaderPage() {
         previousLabel={
           previousChapter ? getChapterLabel(previousChapter, t) : t("common.previous")
         }
-        progress={progress}
+        progress={readerProgress}
       />
 
     </Box>
