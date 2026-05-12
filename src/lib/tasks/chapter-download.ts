@@ -426,6 +426,7 @@ export function enqueueChapterDownload(
                 setProgress({ current, total: progressTotal });
               },
               previousHtml: chapter.content,
+              requestInit: plugin.imageRequestInit,
               scraperExecutor: executor ?? "immediate",
               signal,
               sourceId: job.pluginId,

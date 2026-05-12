@@ -4,7 +4,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 import { invoke } from "@tauri-apps/api/core";
-import { appFetchText, pluginFetch, pluginFetchText } from "./http";
+import {
+  appFetchText,
+  pluginFetch,
+  pluginFetchText,
+  pluginMediaFetch,
+} from "./http";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -274,6 +279,72 @@ describe("pluginFetch", () => {
     await expect(pluginFetch("https://ok.test/")).rejects.toThrow(
       "scraper not ready",
     );
+  });
+});
+
+describe("pluginMediaFetch", () => {
+  it("falls back to native media fetch when the WebView cannot read media bytes", async () => {
+    const debugSpy = vi
+      .spyOn(console, "debug")
+      .mockImplementation(() => undefined);
+    invokeMock
+      .mockRejectedValueOnce(new Error("Failed to fetch"))
+      .mockResolvedValueOnce(
+        wireOk("image", {
+          finalUrl: "https://cdn.test/page.png",
+          headers: { "content-type": "image/png" },
+        }),
+      );
+
+    try {
+      const response = await pluginMediaFetch("https://cdn.test/page.png", {
+        contextUrl: "https://novel.naver.com/webnovel/list",
+        headers: {
+          Referer: "https://novel.naver.com/",
+          "User-Agent": "Plugin UA",
+        },
+        timeoutMs: 12_345,
+      });
+
+      expect(invokeMock).toHaveBeenNthCalledWith(1, "webview_fetch", {
+        url: "https://cdn.test/page.png",
+        init: {
+          headers: {
+            Referer: "https://novel.naver.com/",
+            "User-Agent": "Plugin UA",
+          },
+          method: undefined,
+          body: undefined,
+        },
+        contextUrl: "https://novel.naver.com/webnovel/list",
+        queue: "immediate",
+        timeoutMs: 12_345,
+        userAgent: "Plugin UA",
+      });
+      expect(invokeMock).toHaveBeenNthCalledWith(2, "scraper_media_fetch", {
+        url: "https://cdn.test/page.png",
+        init: {
+          headers: {
+            Referer: "https://novel.naver.com/",
+            "User-Agent": "Plugin UA",
+          },
+          method: undefined,
+          body: undefined,
+        },
+        timeoutMs: 12_345,
+        userAgent: "Plugin UA",
+      });
+      expect(debugSpy).toHaveBeenCalledWith(
+        "[plugin-media-fetch] browser fetch failed; using native media fetch",
+        expect.objectContaining({
+          host: "cdn.test",
+        }),
+      );
+      expect(response.url).toBe("https://cdn.test/page.png");
+      expect(await response.text()).toBe("image");
+    } finally {
+      debugSpy.mockRestore();
+    }
   });
 });
 

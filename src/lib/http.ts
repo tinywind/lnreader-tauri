@@ -62,6 +62,7 @@ interface AppFetchSendResult {
 
 const EMPTY_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
 const REQUEST_CANCELLED_ERROR = "Request cancelled";
+const nativeMediaFallbackHosts = new Set<string>();
 
 function resolveContextUrl(
   contextUrl: ContextUrlProvider | undefined,
@@ -147,6 +148,27 @@ function bodyFromWire(result: FetchResultWire): BodyInit {
   return result.body ?? "";
 }
 
+function responseFromWire(result: FetchResultWire): Response {
+  const response = new Response(bodyFromWire(result), {
+    status: result.status,
+    statusText: result.statusText,
+    headers: result.headers,
+  });
+  Object.defineProperty(response, "url", {
+    value: result.finalUrl,
+    configurable: true,
+  });
+  return response;
+}
+
+function mediaFallbackHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
 async function cancelScraperExecutor(
   executor: ScraperExecutorId,
 ): Promise<boolean> {
@@ -196,6 +218,43 @@ async function desktopWebviewFetch(
       void cancelScraperExecutor(scraperExecutor);
       reject(requestAbortedError());
     };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) abortListener();
+  });
+
+  try {
+    return await Promise.race([request, abort]);
+  } catch (error) {
+    if (signal.aborted) throw requestAbortedError();
+    throw error;
+  } finally {
+    if (abortListener) signal.removeEventListener("abort", abortListener);
+    request.catch(() => undefined);
+  }
+}
+
+async function nativeMediaFetch(
+  url: string,
+  init: FetchInitWire,
+  userAgent: string | null,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<FetchResultWire> {
+  if (signal?.aborted) {
+    throw requestAbortedError();
+  }
+
+  const request = invoke<FetchResultWire>("scraper_media_fetch", {
+    url,
+    init,
+    userAgent,
+    timeoutMs,
+  });
+  if (!signal) return request;
+
+  let abortListener: (() => void) | undefined;
+  const abort = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(requestAbortedError());
     signal.addEventListener("abort", abortListener, { once: true });
     if (signal.aborted) abortListener();
   });
@@ -372,16 +431,51 @@ export async function pluginFetch(
     }
     throw error;
   }
-  const response = new Response(bodyFromWire(result), {
-    status: result.status,
-    statusText: result.statusText,
-    headers: result.headers,
-  });
-  Object.defineProperty(response, "url", {
-    value: result.finalUrl,
-    configurable: true,
-  });
-  return response;
+  return responseFromWire(result);
+}
+
+/**
+ * Fetch chapter-local media. The browser WebView path is still tried first so
+ * ordinary plugin traffic keeps browser session behavior. Some image CDNs allow
+ * `<img>` loads but block JS `fetch()` reads; those static media requests fall
+ * back to the scraper-owned native media fetch with plugin-declared headers.
+ */
+export async function pluginMediaFetch(
+  url: string,
+  init: HttpInit = {},
+): Promise<Response> {
+  try {
+    return await pluginFetch(url, init);
+  } catch (error) {
+    if (isRequestAbortError(error)) {
+      throw error;
+    }
+    const host = mediaFallbackHost(url);
+    const fallbackKey = host || url;
+    if (!nativeMediaFallbackHosts.has(fallbackKey)) {
+      nativeMediaFallbackHosts.add(fallbackKey);
+      console.debug(
+        "[plugin-media-fetch] browser fetch failed; using native media fetch",
+        {
+          error: error instanceof Error ? error.message : String(error),
+          host,
+          sourceId: init.sourceId,
+        },
+      );
+    }
+  }
+
+  const wireInit = toWireInit(init);
+  const userAgent = scraperUserAgent(wireInit.headers);
+  const timeoutMs = requestTimeoutMs(init.timeoutMs);
+  const result = await nativeMediaFetch(
+    url,
+    wireInit,
+    userAgent,
+    timeoutMs,
+    init.signal,
+  );
+  return responseFromWire(result);
 }
 
 /**

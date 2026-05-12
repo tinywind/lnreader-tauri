@@ -36,8 +36,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(desktop)]
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 #[cfg(desktop)]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(desktop)]
 use std::path::PathBuf;
@@ -475,7 +476,6 @@ fn emit_site_browser_hidden(app: &AppHandle) {
     }
 }
 
-#[cfg(desktop)]
 fn normalize_user_agent(user_agent: Option<String>) -> Option<String> {
     user_agent.and_then(|value| {
         let trimmed = value.trim();
@@ -1104,7 +1104,6 @@ fn cookie_details_for_log(cookies: &[tauri::webview::Cookie<'static>]) -> Vec<St
         .collect()
 }
 
-#[cfg(desktop)]
 fn fetch_init_for_log(init: &Option<FetchInit>) -> String {
     let Some(init) = init else {
         return "none".to_string();
@@ -1119,6 +1118,56 @@ fn fetch_init_for_log(init: &Option<FetchInit>) -> String {
         init.method.as_deref(),
         header_names,
         init.body.as_ref().map(|body| body.len()).unwrap_or(0)
+    )
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[(((first & 0b0000_0011) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(third & 0b0011_1111) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+
+    output
+}
+
+fn native_media_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.unwrap_or(60_000).max(1))
+}
+
+fn skip_native_media_header(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "accept-charset"
+            | "accept-encoding"
+            | "connection"
+            | "content-length"
+            | "cookie"
+            | "cookie2"
+            | "host"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "via"
     )
 }
 
@@ -1777,6 +1826,88 @@ pub async fn webview_fetch(
     _timeout_ms: Option<u64>,
 ) -> Result<FetchResult, String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
+}
+
+#[tauri::command]
+pub async fn scraper_media_fetch(
+    url: String,
+    init: Option<FetchInit>,
+    user_agent: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<FetchResult, String> {
+    let user_agent = normalize_user_agent(user_agent);
+    let init_log = fetch_init_for_log(&init);
+    log::debug!(
+        "[scraper:media_fetch] request url={url} timeout_ms={timeout_ms:?} user_agent={user_agent:?} init={init_log}"
+    );
+
+    let init = init.unwrap_or_default();
+    let method = init.method.as_deref().unwrap_or("GET");
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|err| format!("scraper: invalid media fetch method '{method}': {err}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(native_media_timeout(timeout_ms))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|err| format!("scraper: media fetch client: {err}"))?;
+
+    let mut request = client.request(method, &url);
+    if let Some(user_agent) = user_agent {
+        request = request.header(reqwest::header::USER_AGENT, user_agent);
+    }
+    if let Some(headers) = init.headers {
+        for (name, value) in headers {
+            if skip_native_media_header(&name) {
+                continue;
+            }
+            let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|err| format!("scraper: invalid media fetch header '{name}': {err}"))?;
+            let header_value = reqwest::header::HeaderValue::from_str(&value).map_err(|err| {
+                format!("scraper: invalid media fetch value for header '{name}': {err}")
+            })?;
+            request = request.header(header_name, header_value);
+        }
+    }
+    if let Some(body) = init.body {
+        request = request.body(body);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("scraper: native media fetch to {url} failed: {err}"))?;
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let status_text = status.canonical_reason().unwrap_or("").to_string();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let header_names: Vec<&String> = headers.keys().collect();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|err| format!("scraper: native media fetch body from {url} failed: {err}"))?;
+
+    log::debug!(
+        "[scraper:media_fetch] response url={url} status={} final_url={final_url} header_names={header_names:?} body_len={}",
+        status.as_u16(),
+        body.len()
+    );
+
+    Ok(FetchResult {
+        status: status.as_u16(),
+        status_text,
+        body_base64: encode_base64(&body),
+        headers,
+        final_url,
+    })
 }
 
 #[cfg(desktop)]

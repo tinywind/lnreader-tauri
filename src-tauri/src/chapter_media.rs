@@ -1057,6 +1057,60 @@ fn archive_contains_file(archive_path: &Path, file_name: &str) -> Result<bool, S
     contains_file
 }
 
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[(((first & 0b0000_0011) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(third & 0b0011_1111) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+
+    output
+}
+
+fn media_mime_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("apng") => "image/apng",
+        Some("avif") => "image/avif",
+        Some("bmp") => "image/bmp",
+        Some("gif") => "image/gif",
+        Some("ico") => "image/x-icon",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a") => "audio/mp4",
+        Some("oga") | Some("ogg") => "audio/ogg",
+        Some("wav") => "audio/wav",
+        Some("mp4") => "video/mp4",
+        Some("ogv") => "video/ogg",
+        Some("webm") => "video/webm",
+        _ => "application/octet-stream",
+    }
+}
+
 #[tauri::command]
 pub fn chapter_media_path(app: AppHandle, media_src: String) -> Result<String, String> {
     let path = chapter_media_path_from_src(&app, &media_src)?;
@@ -1064,6 +1118,24 @@ pub fn chapter_media_path(app: AppHandle, media_src: String) -> Result<String, S
         return Err("chapter media: file not found".to_string());
     }
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn chapter_media_data_url(app: AppHandle, media_src: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = chapter_media_path_from_src(&app, &media_src)?;
+        if !path.is_file() {
+            return Err("chapter media: file not found".to_string());
+        }
+        let body = fs::read(&path).map_err(|err| format!("chapter media: read media: {err}"))?;
+        Ok(format!(
+            "data:{};base64,{}",
+            media_mime_type(&path),
+            encode_base64(&body)
+        ))
+    })
+    .await
+    .map_err(|err| format!("chapter media: read media task: {err}"))?
 }
 
 #[tauri::command]

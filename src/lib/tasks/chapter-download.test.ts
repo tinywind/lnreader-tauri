@@ -71,6 +71,7 @@ beforeEach(() => {
   );
   const plugin = {
     id: "source-a",
+    imageRequestInit: { headers: { Referer: "https://source.test/" } },
     name: "Source A",
     getBaseUrl: () => "https://source.test",
     parseChapter: pluginMocks.parseChapter,
@@ -149,6 +150,7 @@ describe("enqueueChapterDownload", () => {
     expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         previousHtml: `<img src="norea-media://chapter/7/old/page.png">`,
+        requestInit: { headers: { Referer: "https://source.test/" } },
         scraperExecutor: "pool:1",
         sourceId: "source-a",
       }),
