@@ -347,6 +347,7 @@ export interface LibraryUpdateEntry {
   chapterPath: string;
   novelId: number;
   pluginId: string;
+  novelPath: string;
   chapterName: string;
   contentType: ChapterContentType;
   position: number;
@@ -415,6 +416,7 @@ export async function listLibraryUpdates(
        c.path            AS chapterPath,
        c.novel_id        AS novelId,
        n.plugin_id       AS pluginId,
+       n.path            AS novelPath,
        c.name            AS chapterName,
        c.content_type    AS contentType,
        c.position,

@@ -489,9 +489,17 @@ function ChapterMediaStorageGate({
   useEffect(() => {
     if (!storageReady || !isTauriRuntime()) return;
 
+    void restoreChapterContentStorageMirror()
+      .catch((unknownError: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn("[bootstrap] failed to restore stored chapters", unknownError);
+      });
     void pluginManager.loadInstalledFromDb().catch((unknownError: unknown) => {
       // eslint-disable-next-line no-console
-      console.warn("[bootstrap] failed to rehydrate installed plugins", unknownError);
+      console.warn(
+        "[bootstrap] failed to rehydrate installed plugins",
+        unknownError,
+      );
     });
   }, [storageReady]);
 

@@ -7,6 +7,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("./http", () => ({
   pluginMediaFetch: vi.fn(),
 }));
+vi.mock("../db/queries/chapter", () => ({
+  getChapterById: vi.fn(),
+}));
+vi.mock("../db/queries/novel", () => ({
+  getNovelById: vi.fn(),
+}));
 
 import { invoke } from "@tauri-apps/api/core";
 import { pluginMediaFetch } from "./http";
@@ -107,6 +113,7 @@ describe("cacheHtmlChapterMedia", () => {
       ].join(""),
       novelId: 9,
       novelName: "Sample Novel",
+      novelPath: "/novel/sample",
       sourceId: "demo",
     });
 
@@ -143,6 +150,7 @@ describe("cacheHtmlChapterMedia", () => {
         fileName: "page-1.png",
         novelId: 9,
         novelName: "Sample Novel",
+        novelPath: "/novel/sample",
         sourceId: "demo",
       }),
     ]);
@@ -157,6 +165,7 @@ describe("cacheHtmlChapterMedia", () => {
         fileName: "cover-2.webp",
         novelId: 9,
         novelName: "Sample Novel",
+        novelPath: "/novel/sample",
         sourceId: "demo",
       }),
     ]);
@@ -169,6 +178,7 @@ describe("cacheHtmlChapterMedia", () => {
         chapterPosition: 1,
         novelId: 9,
         novelName: "Sample Novel",
+        novelPath: "/novel/sample",
         sourceId: "demo",
       }),
     );
@@ -316,6 +326,7 @@ describe("cacheHtmlChapterMedia", () => {
       });
     });
     invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_total_size") return 7;
       if (command === "chapter_media_archive_cache") return 5;
       const input = args as {
         cacheKey: string;
@@ -361,6 +372,52 @@ describe("cacheHtmlChapterMedia", () => {
     expect(result.html).toContain("norea-media://chapter/42/old/page-2-2.png");
     expect(result.html).not.toContain("data-norea-media-source-url");
   });
+
+  it("refetches reusable media when the stored local file is missing", async () => {
+    pluginMediaFetchMock.mockImplementation(async () => {
+      return new Response(new Uint8Array([4, 5]), {
+        headers: { "content-type": "image/png" },
+        status: 200,
+        statusText: "OK",
+      });
+    });
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_total_size") return 0;
+      if (command === "chapter_media_archive_cache") return 5;
+      const input = args as {
+        cacheKey: string;
+        chapterId: number;
+        fileName: string;
+      };
+      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+    });
+
+    const result = await cacheHtmlChapterMedia({
+      baseUrl: "https://source.test/chapter/1",
+      chapterId: 42,
+      html: `<img src="/page-1.png">`,
+      previousHtml: `<img src="norea-media://chapter/42/old/page-1.png">`,
+    });
+
+    expect(pluginMediaFetchMock).toHaveBeenCalledTimes(1);
+    expect(pluginMediaFetchMock).toHaveBeenCalledWith(
+      "https://source.test/page-1.png",
+      expect.objectContaining({
+        contextUrl: "https://source.test/chapter/1",
+        headers: expect.objectContaining({ Accept: expect.any(String) }),
+        signal: undefined,
+      }),
+    );
+    expect(invokeMock).toHaveBeenCalledWith(
+      "chapter_media_store",
+      expect.objectContaining({
+        fileName: "page-1-1.png",
+      }),
+    );
+    expect(result.cacheKey).not.toBe("old");
+    expect(result.html).not.toContain("norea-media://chapter/42/old/page-1.png");
+    expect(result.html).toContain("norea-media://chapter/42/");
+  });
 });
 
 describe("stored chapter media byte stats", () => {
@@ -394,7 +451,10 @@ describe("resolveLocalChapterMedia", () => {
       [
         `<img src="norea-media://chapter/42/cache/page.png">`,
         `<img data-src="norea-media://chapter/42/cache/lazy.png">`,
-        `<img srcset="norea-media://chapter/42/cache/small.png 1x, norea-media://chapter/42/cache/large.png 2x">`,
+        [
+          `<img srcset="norea-media://chapter/42/cache/small.png 1x, `,
+          `norea-media://chapter/42/cache/large.png 2x">`,
+        ].join(""),
         `<video poster="norea-media://chapter/42/cache/poster.png"></video>`,
         `<object data="norea-media://chapter/42/cache/panel.svg"></object>`,
         `<link rel="preload" as="image" href="norea-media://chapter/42/cache/preload.png">`,

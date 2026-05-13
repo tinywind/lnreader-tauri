@@ -1,3 +1,5 @@
+import groovy.json.JsonSlurper
+import java.io.File
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -24,6 +26,55 @@ val releaseKeyAlias = envOrNull("ANDROID_RELEASE_KEY_ALIAS") ?: "androiddebugkey
 val releaseStorePassword = envOrNull("ANDROID_RELEASE_STORE_PASSWORD") ?: "android"
 val releaseKeyPassword = envOrNull("ANDROID_RELEASE_KEY_PASSWORD") ?: "android"
 val buildChannel = envOrNull("NOREA_BUILD_CHANNEL") ?: "release"
+
+data class RustlsPlatformVerifierAndroidDependency(
+    val repository: File,
+    val version: String,
+)
+
+fun findRustlsPlatformVerifierAndroidDependency(): RustlsPlatformVerifierAndroidDependency {
+    val dependencyText = providers.exec {
+        workingDir = projectDir
+        commandLine(
+            "cargo",
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--filter-platform",
+            "aarch64-linux-android",
+            "--manifest-path",
+            file("../../../Cargo.toml").absolutePath,
+        )
+    }.standardOutput.asText.get()
+
+    @Suppress("UNCHECKED_CAST")
+    val packages = (JsonSlurper().parseText(dependencyText) as Map<String, Any>)["packages"]
+        as List<Map<String, Any>>
+    val dependency = packages.first { it["name"] == "rustls-platform-verifier-android" }
+    val manifestPath = dependency["manifest_path"]?.toString()
+        ?: error("rustls-platform-verifier-android manifest path was not found")
+    val version = dependency["version"]?.toString()
+        ?: error("rustls-platform-verifier-android version was not found")
+
+    return RustlsPlatformVerifierAndroidDependency(
+        repository = File(File(manifestPath).parentFile, "maven"),
+        version = version,
+    )
+}
+
+val rustlsPlatformVerifierAndroid by lazy {
+    findRustlsPlatformVerifierAndroidDependency()
+}
+
+repositories {
+    maven {
+        url = uri(rustlsPlatformVerifierAndroid.repository)
+        metadataSources {
+            artifact()
+        }
+    }
+}
 
 fun applyLauncherPlaceholders(
     placeholders: MutableMap<String, Any>,
@@ -120,6 +171,7 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    implementation("rustls:rustls-platform-verifier:${rustlsPlatformVerifierAndroid.version}")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

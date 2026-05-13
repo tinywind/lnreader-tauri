@@ -365,6 +365,7 @@ describe("applyBackupSnapshot", () => {
       fileName: "image.png",
       novelId: 1,
       novelName: "Sample Novel",
+      novelPath: "/n/1",
       sourceId: "demo",
     });
   });

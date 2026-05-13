@@ -44,7 +44,14 @@ interface RawDownloadCacheChapter
 
 export interface DownloadCacheMediaBackfillCandidate {
   id: number;
+  chapterName: string;
+  chapterNumber: string | null;
   content: string;
+  novelId: number;
+  novelName: string;
+  novelPath: string;
+  pluginId: string;
+  position: number;
 }
 
 export async function listDownloadCacheNovels(): Promise<DownloadCacheNovel[]> {
@@ -188,7 +195,16 @@ export async function listDownloadCacheMediaBackfillCandidates(
   const db = await getDb();
   const novelFilter = novelId === undefined ? "" : "AND c.novel_id = $1";
   return db.select<DownloadCacheMediaBackfillCandidate[]>(
-    `SELECT c.id, c.content
+    `SELECT
+       c.id,
+       c.name           AS chapterName,
+       c.chapter_number AS chapterNumber,
+       c.content,
+       c.novel_id       AS novelId,
+       c.position,
+       n.name           AS novelName,
+       n.path           AS novelPath,
+       n.plugin_id      AS pluginId
      FROM chapter c
      JOIN novel n ON n.id = c.novel_id
      WHERE c.is_downloaded = 1

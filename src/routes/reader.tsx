@@ -441,9 +441,19 @@ export function ReaderPage() {
     queryFn: async () => {
       const chapter = await getChapterById(chapterId);
       if (!chapter?.content) return chapter;
+      const novel = await getNovelById(chapter.novelId);
       return {
         ...chapter,
-        content: await resolveLocalChapterMedia(chapter.content),
+        content: await resolveLocalChapterMedia(chapter.content, {
+          chapterId: chapter.id,
+          chapterName: chapter.name,
+          chapterNumber: chapter.chapterNumber,
+          chapterPosition: chapter.position,
+          novelId: novel?.id ?? chapter.novelId,
+          novelName: novel?.name,
+          novelPath: novel?.path,
+          sourceId: novel?.pluginId,
+        }),
       };
     },
     enabled: chapterId > 0,
@@ -753,6 +763,7 @@ export function ReaderPage() {
             contentType: targetChapter.contentType,
             novelId: novel.id,
             novelName: novel.name,
+            novelPath: novel.path,
             priority: "interactive",
             title: t("tasks.task.downloadChapter", { name: targetChapter.name }),
           }).promise;

@@ -216,14 +216,20 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   }
 
   fun handleBackPressed(): Boolean {
-    if (!browserVisible) return false
     val webView = queueState(IMMEDIATE_EXECUTOR).webView ?: return false
+    if (!browserVisible && !isForegroundBrowser(webView)) return false
     if (webView.canGoBack()) {
       webView.goBack()
       return true
     }
     hideScraper()
     return true
+  }
+
+  private fun isForegroundBrowser(webView: WebView): Boolean {
+    return webView.visibility == View.VISIBLE &&
+      webView.alpha > 0f &&
+      webView.isClickable
   }
 
   private fun executorFromPayload(payload: JSONObject): String {

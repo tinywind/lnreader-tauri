@@ -104,6 +104,7 @@ export interface TaskSubject {
   categoryId?: number | null;
   novelId?: number;
   novelName?: string;
+  novelPath?: string;
   path?: string;
   pluginId?: string;
   url?: string;

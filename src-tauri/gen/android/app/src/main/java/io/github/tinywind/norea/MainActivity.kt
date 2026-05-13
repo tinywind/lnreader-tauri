@@ -24,6 +24,7 @@ import java.io.File
 
 class MainActivity : TauriActivity() {
   private var androidScraperBridge: AndroidScraperBridge? = null
+  private var scraperBackPressedCallback: OnBackPressedCallback? = null
   private var mainWebView: WebView? = null
   private var notificationPermissionRequested = false
   private var pendingStorageRootRequestId: String? = null
@@ -31,19 +32,9 @@ class MainActivity : TauriActivity() {
   private var safeAreaInsetsJson = insetsJson(Insets.NONE)
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    RustlsPlatformVerifierBridge.init(applicationContext)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    onBackPressedDispatcher.addCallback(
-      this,
-      object : OnBackPressedCallback(true) {
-        override fun handleOnBackPressed() {
-          if (androidScraperBridge?.handleBackPressed() == true) return
-          isEnabled = false
-          onBackPressedDispatcher.onBackPressed()
-          isEnabled = true
-        }
-      },
-    )
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -66,6 +57,7 @@ class MainActivity : TauriActivity() {
       textZoom = 100
     }
     webView.setInitialScale(100)
+    installScraperBackHandler()
 
     ViewCompat.setOnApplyWindowInsetsListener(webView) { _, windowInsets ->
       val types = WindowInsetsCompat.Type.systemBars() or
@@ -82,6 +74,24 @@ class MainActivity : TauriActivity() {
       windowInsets
     }
     ViewCompat.requestApplyInsets(webView)
+  }
+
+  private fun installScraperBackHandler() {
+    scraperBackPressedCallback?.remove()
+    scraperBackPressedCallback = object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        if (androidScraperBridge?.handleBackPressed() == true) return
+        isEnabled = false
+        try {
+          onBackPressedDispatcher.onBackPressed()
+        } finally {
+          isEnabled = true
+        }
+      }
+    }.also { callback ->
+      // Register after Tauri creates its WebView so source-browser back wins.
+      onBackPressedDispatcher.addCallback(this, callback)
+    }
   }
 
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -265,7 +275,11 @@ class MainActivity : TauriActivity() {
     fun writeText(rootUri: String, relativePath: String, text: String): String =
       storageResponse {
         val bytes = text.toByteArray(Charsets.UTF_8)
-        val file = ensureStorageFile(rootUri, relativePath, "text/plain")
+        val file = ensureStorageFile(
+          rootUri,
+          relativePath,
+          textMimeTypeForPath(relativePath),
+        )
         contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
           output.write(bytes)
         } ?: throw IllegalStateException("Cannot open storage file for writing.")
@@ -434,8 +448,19 @@ class MainActivity : TauriActivity() {
       require(existing.isFile) { "Android storage path is not a file: $relativePath" }
       return existing
     }
-    return current.createFile(mimeType, fileName)
-      ?: throw IllegalStateException("Cannot create Android storage file: $relativePath")
+    val created = current.createFile(mimeType, fileName)
+    if (created != null) return created
+    val raced = current.findFile(fileName)
+    if (raced != null) {
+      require(raced.isFile) { "Android storage path is not a file: $relativePath" }
+      return raced
+    }
+    throw IllegalStateException("Cannot create Android storage file: $relativePath")
+  }
+
+  private fun textMimeTypeForPath(relativePath: String): String {
+    val mimeType = mimeTypeForPath(relativePath, "")
+    return if (mimeType == "application/octet-stream") "text/plain" else mimeType
   }
 
   private fun mimeTypeForPath(relativePath: String, fallback: String): String {

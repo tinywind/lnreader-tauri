@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getChapterById } from "../db/queries/chapter";
+import { getNovelById } from "../db/queries/novel";
 import {
   androidStoragePathSize,
   clearAndroidStorageRoot,
@@ -7,6 +9,12 @@ import {
   readAndroidStorageDataUrl,
   writeAndroidStorageBytes,
 } from "./android-storage";
+import {
+  chapterMediaDirectoryRelativePath,
+  chapterMediaRelativePath,
+  type ChapterStorageChapterPathInput,
+  type ChapterStorageNovelPathInput,
+} from "./chapter-storage-path";
 import { pluginMediaFetch, type HttpInit } from "./http";
 import type { ScraperExecutorId } from "./tasks/scraper-queue";
 import { isAndroidRuntime, isTauriRuntime } from "./tauri-runtime";
@@ -85,6 +93,7 @@ interface CacheChapterMediaOptions {
   html: string;
   novelId?: number;
   novelName?: string | null;
+  novelPath?: string | null;
   onHtmlUpdate?: (html: string) => Promise<void> | void;
   onProgress?: (progress: { current: number; total: number }) => void;
   previousHtml?: string | null;
@@ -110,6 +119,7 @@ interface ChapterMediaStoreInput {
   fileName: string;
   novelId?: number;
   novelName?: string | null;
+  novelPath?: string | null;
   sourceId?: string;
 }
 
@@ -121,7 +131,19 @@ interface ChapterMediaArchiveInput {
   chapterPosition?: number | null;
   novelId?: number;
   novelName?: string | null;
+  novelPath?: string | null;
   sourceId?: string;
+}
+
+export interface ChapterMediaStorageContext {
+  chapterId: number;
+  chapterName?: string | null;
+  chapterNumber?: string | null;
+  chapterPosition?: number | null;
+  novelId?: number | null;
+  novelName?: string | null;
+  novelPath?: string | null;
+  sourceId?: string | null;
 }
 
 interface MediaSrcTarget {
@@ -342,35 +364,169 @@ function androidChapterMediaRelativePath(
   return fileName ? `${base}/${fileName}` : base;
 }
 
-function androidRelativePathFromLocalMediaSrc(src: string): string | null {
+function parseLocalChapterMediaSrc(src: string): {
+  cacheKey: string;
+  chapterId: number;
+  fileName: string;
+} | null {
   const match = src.match(LOCAL_CHAPTER_MEDIA_SRC_DETAIL_PATTERN);
   if (!match) return null;
-  return androidChapterMediaRelativePath(Number(match[1]), match[2]!, match[3]!);
+  return {
+    chapterId: Number(match[1]),
+    cacheKey: match[2]!,
+    fileName: match[3]!,
+  };
+}
+
+function hasStorageContext(
+  context: ChapterMediaStorageContext | null | undefined,
+): context is ChapterMediaStorageContext & {
+  novelPath: string;
+  sourceId: string;
+} {
+  return !!context?.novelPath?.trim() && !!context.sourceId?.trim();
+}
+
+function storageNovelPathInput(
+  context: ChapterMediaStorageContext,
+): ChapterStorageNovelPathInput {
+  return {
+    id: context.novelId,
+    name: context.novelName,
+    path: context.novelPath,
+    pluginId: context.sourceId,
+  };
+}
+
+function storageChapterPathInput(
+  context: ChapterMediaStorageContext,
+): ChapterStorageChapterPathInput {
+  return {
+    chapterNumber: context.chapterNumber,
+    id: context.chapterId,
+    name: context.chapterName,
+    position: context.chapterPosition,
+  };
+}
+
+async function storageContextForChapter(
+  chapterId: number,
+): Promise<ChapterMediaStorageContext | null> {
+  const chapter = await getChapterById(chapterId);
+  if (!chapter) return null;
+  const novel = await getNovelById(chapter.novelId);
+  if (!novel) return null;
+  return {
+    chapterId,
+    chapterName: chapter.name,
+    chapterNumber: chapter.chapterNumber,
+    chapterPosition: chapter.position,
+    novelId: novel.id,
+    novelName: novel.name,
+    novelPath: novel.path,
+    sourceId: novel.pluginId,
+  };
+}
+
+function androidChapterMediaRelativePathForContext(
+  context: ChapterMediaStorageContext | null | undefined,
+  cacheKey: string,
+  fileName?: string,
+): string {
+  if (!hasStorageContext(context)) {
+    return androidChapterMediaRelativePath(
+      context?.chapterId ?? 0,
+      cacheKey,
+      fileName,
+    );
+  }
+  return chapterMediaRelativePath(
+    storageNovelPathInput(context),
+    storageChapterPathInput(context),
+    cacheKey,
+    fileName,
+  );
+}
+
+async function androidRelativePathFromLocalMediaSrc(
+  src: string,
+  context?: ChapterMediaStorageContext,
+): Promise<string | null> {
+  const parsed = parseLocalChapterMediaSrc(src);
+  if (!parsed) return null;
+  const resolvedContext =
+    context?.chapterId === parsed.chapterId
+      ? context
+      : await storageContextForChapter(parsed.chapterId);
+  if (hasStorageContext(resolvedContext)) {
+    return chapterMediaRelativePath(
+      storageNovelPathInput(resolvedContext),
+      storageChapterPathInput(resolvedContext),
+      parsed.cacheKey,
+      parsed.fileName,
+    );
+  }
+  return androidChapterMediaRelativePath(
+    parsed.chapterId,
+    parsed.cacheKey,
+    parsed.fileName,
+  );
 }
 
 export function localChapterMediaSources(html: string): string[] {
   return [...new Set(html.match(LOCAL_CHAPTER_MEDIA_SRC_PATTERN) ?? [])];
 }
 
-export async function getStoredChapterMediaBytes(html: string): Promise<number> {
+export async function getStoredChapterMediaBytes(
+  html: string,
+  context?: ChapterMediaStorageContext,
+): Promise<number> {
   if (!isTauriRuntime()) return 0;
   const mediaSrcs = localChapterMediaSources(html);
   if (mediaSrcs.length === 0) return 0;
+  const firstMedia = mediaSrcs[0]
+    ? parseLocalChapterMediaSrc(mediaSrcs[0])
+    : null;
+  const resolvedContext =
+    context ??
+    (firstMedia
+      ? await storageContextForChapter(firstMedia.chapterId)
+      : undefined);
   if (isAndroidRuntime()) {
     let total = 0;
-    const paths = [
-      ...new Set(
-        mediaSrcs
-          .map(androidRelativePathFromLocalMediaSrc)
-          .filter((path): path is string => path !== null),
-      ),
-    ];
+    const paths = new Set<string>();
+    for (const source of mediaSrcs) {
+      const path = await androidRelativePathFromLocalMediaSrc(
+        source,
+        resolvedContext ?? undefined,
+      );
+      if (path) paths.add(path);
+    }
     for (const path of paths) {
       total += await androidStoragePathSize(path);
     }
     return total;
   }
-  return invoke<number>("chapter_media_total_size", { mediaSrcs });
+  return invoke<number>("chapter_media_total_size", {
+    mediaSrcs,
+    ...(resolvedContext?.chapterName
+      ? { chapterName: resolvedContext.chapterName }
+      : {}),
+    ...(resolvedContext?.chapterNumber
+      ? { chapterNumber: resolvedContext.chapterNumber }
+      : {}),
+    ...(resolvedContext?.chapterPosition
+      ? { chapterPosition: resolvedContext.chapterPosition }
+      : {}),
+    ...(resolvedContext?.novelId ? { novelId: resolvedContext.novelId } : {}),
+    ...(resolvedContext?.novelName
+      ? { novelName: resolvedContext.novelName }
+      : {}),
+    ...(resolvedContext?.novelPath
+      ? { novelPath: resolvedContext.novelPath }
+      : {}),
+    ...(resolvedContext?.sourceId ? { sourceId: resolvedContext.sourceId } : {}),
+  });
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -392,12 +548,23 @@ async function storeChapterMedia({
   fileName,
   novelId,
   novelName,
+  novelPath,
   sourceId,
 }: ChapterMediaStoreInput): Promise<string> {
   if (isAndroidRuntime()) {
     const src = localChapterMediaSrc(chapterId, cacheKey, fileName);
+    const context = {
+      chapterId,
+      chapterName,
+      chapterNumber,
+      chapterPosition,
+      novelId,
+      novelName,
+      novelPath,
+      sourceId,
+    };
     await writeAndroidStorageBytes(
-      androidChapterMediaRelativePath(chapterId, cacheKey, fileName),
+      androidChapterMediaRelativePathForContext(context, cacheKey, fileName),
       body,
       mimeTypeFromFileName(fileName),
     );
@@ -413,6 +580,7 @@ async function storeChapterMedia({
     fileName,
     ...(novelId ? { novelId } : {}),
     ...(novelName ? { novelName } : {}),
+    ...(novelPath ? { novelPath } : {}),
     ...(sourceId ? { sourceId } : {}),
   });
 }
@@ -425,10 +593,23 @@ async function archiveChapterMediaCache({
   chapterPosition,
   novelId,
   novelName,
+  novelPath,
   sourceId,
 }: ChapterMediaArchiveInput): Promise<number> {
   if (isAndroidRuntime()) {
-    return androidStoragePathSize(androidChapterMediaRelativePath(chapterId, cacheKey));
+    const context = {
+      chapterId,
+      chapterName,
+      chapterNumber,
+      chapterPosition,
+      novelId,
+      novelName,
+      novelPath,
+      sourceId,
+    };
+    return androidStoragePathSize(
+      androidChapterMediaRelativePathForContext(context, cacheKey),
+    );
   }
   return invoke<number>("chapter_media_archive_cache", {
     chapterId,
@@ -438,6 +619,7 @@ async function archiveChapterMediaCache({
     cacheKey,
     ...(novelId ? { novelId } : {}),
     ...(novelName ? { novelName } : {}),
+    ...(novelPath ? { novelPath } : {}),
     ...(sourceId ? { sourceId } : {}),
   });
 }
@@ -760,6 +942,19 @@ function collectReusableMediaSources({
   return reusable;
 }
 
+async function filterExistingReusableMediaSources(
+  reusableSources: Map<string, string>,
+  context: ChapterMediaStorageContext,
+): Promise<Map<string, string>> {
+  const existing = new Map<string, string>();
+  for (const [url, src] of reusableSources) {
+    if ((await getStoredChapterMediaBytes(src, context)) > 0) {
+      existing.set(url, src);
+    }
+  }
+  return existing;
+}
+
 function chooseCacheKey(
   chapterId: number,
   reusableSources: Iterable<string>,
@@ -841,6 +1036,7 @@ export async function cacheHtmlChapterMedia({
   html,
   novelId,
   novelName,
+  novelPath,
   onHtmlUpdate,
   onProgress,
   previousHtml,
@@ -864,15 +1060,28 @@ export async function cacheHtmlChapterMedia({
     return { cacheKey: null, html: template.innerHTML, mediaBytes: 0 };
   }
 
-  const reusableSources = collectReusableMediaSources({
-    baseUrl,
+  const storageContext: ChapterMediaStorageContext = {
     chapterId,
-    previousHtml,
-    srcTargets,
-    srcsetTargets,
-    styleTargets,
-    urls,
-  });
+    chapterName,
+    chapterNumber,
+    chapterPosition,
+    novelId,
+    novelName,
+    novelPath,
+    sourceId,
+  };
+  const reusableSources = await filterExistingReusableMediaSources(
+    collectReusableMediaSources({
+      baseUrl,
+      chapterId,
+      previousHtml,
+      srcTargets,
+      srcsetTargets,
+      styleTargets,
+      urls,
+    }),
+    storageContext,
+  );
   const cacheKey = chooseCacheKey(chapterId, reusableSources.values());
   const localSources = new Map<string, string>(reusableSources);
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
@@ -930,6 +1139,7 @@ export async function cacheHtmlChapterMedia({
       chapterPosition,
       novelId,
       novelName,
+      novelPath,
       sourceId,
     });
     localSources.set(url, src);
@@ -954,6 +1164,7 @@ export async function cacheHtmlChapterMedia({
     chapterPosition,
     novelId,
     novelName,
+    novelPath,
     sourceId,
   });
   clearMediaSourceMetadata(template.content);
@@ -965,7 +1176,10 @@ export async function cacheHtmlChapterMedia({
   };
 }
 
-export async function resolveLocalChapterMedia(html: string): Promise<string> {
+export async function resolveLocalChapterMedia(
+  html: string,
+  context?: ChapterMediaStorageContext,
+): Promise<string> {
   if (
     !isTauriRuntime() ||
     typeof document === "undefined" ||
@@ -986,12 +1200,26 @@ export async function resolveLocalChapterMedia(html: string): Promise<string> {
   const resolveMediaSrc = async (src: string): Promise<string | null> => {
     if (!src.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return src;
     if (isAndroidRuntime()) {
-      const relativePath = androidRelativePathFromLocalMediaSrc(src);
+      const relativePath = await androidRelativePathFromLocalMediaSrc(
+        src,
+        context,
+      );
       return relativePath ? readAndroidStorageDataUrl(relativePath) : null;
     }
     try {
       return await invoke<string>("chapter_media_data_url", {
         mediaSrc: src,
+        ...(context?.chapterName ? { chapterName: context.chapterName } : {}),
+        ...(context?.chapterNumber
+          ? { chapterNumber: context.chapterNumber }
+          : {}),
+        ...(context?.chapterPosition
+          ? { chapterPosition: context.chapterPosition }
+          : {}),
+        ...(context?.novelId ? { novelId: context.novelId } : {}),
+        ...(context?.novelName ? { novelName: context.novelName } : {}),
+        ...(context?.novelPath ? { novelPath: context.novelPath } : {}),
+        ...(context?.sourceId ? { sourceId: context.sourceId } : {}),
       });
     } catch {
       return null;
@@ -1066,25 +1294,91 @@ export async function resolveLocalChapterMedia(html: string): Promise<string> {
 export async function pruneChapterMedia(
   chapterId: number,
   keepCacheKey: string,
+  context?: ChapterMediaStorageContext,
 ): Promise<void> {
   if (!isTauriRuntime()) return;
+  const resolvedContext = context ?? (await storageContextForChapter(chapterId));
   if (isAndroidRuntime()) {
+    if (hasStorageContext(resolvedContext)) {
+      await deleteAndroidStorageChildrenExcept(
+        chapterMediaDirectoryRelativePath(
+          storageNovelPathInput(resolvedContext),
+          storageChapterPathInput(resolvedContext),
+        ),
+        keepCacheKey,
+      );
+    }
     await deleteAndroidStorageChildrenExcept(
       `chapter-media/${chapterId}`,
       keepCacheKey,
     );
     return;
   }
-  await invoke("chapter_media_prune", { chapterId, keepCacheKey });
+  await invoke("chapter_media_prune", {
+    chapterId,
+    keepCacheKey,
+    ...(resolvedContext?.chapterName
+      ? { chapterName: resolvedContext.chapterName }
+      : {}),
+    ...(resolvedContext?.chapterNumber
+      ? { chapterNumber: resolvedContext.chapterNumber }
+      : {}),
+    ...(resolvedContext?.chapterPosition
+      ? { chapterPosition: resolvedContext.chapterPosition }
+      : {}),
+    ...(resolvedContext?.novelId ? { novelId: resolvedContext.novelId } : {}),
+    ...(resolvedContext?.novelName
+      ? { novelName: resolvedContext.novelName }
+      : {}),
+    ...(resolvedContext?.novelPath
+      ? { novelPath: resolvedContext.novelPath }
+      : {}),
+    ...(resolvedContext?.sourceId
+      ? { sourceId: resolvedContext.sourceId }
+      : {}),
+  });
 }
 
-export async function clearChapterMedia(chapterId: number): Promise<void> {
+export async function clearChapterMedia(
+  chapterId: number,
+  context?: ChapterMediaStorageContext,
+): Promise<void> {
   if (!isTauriRuntime()) return;
+  const resolvedContext = context ?? (await storageContextForChapter(chapterId));
   if (isAndroidRuntime()) {
+    if (hasStorageContext(resolvedContext)) {
+      await deleteAndroidStoragePath(
+        chapterMediaDirectoryRelativePath(
+          storageNovelPathInput(resolvedContext),
+          storageChapterPathInput(resolvedContext),
+        ),
+      );
+    }
     await deleteAndroidStoragePath(`chapter-media/${chapterId}`);
     return;
   }
-  await invoke("chapter_media_clear", { chapterId });
+  await invoke("chapter_media_clear", {
+    chapterId,
+    ...(resolvedContext?.chapterName
+      ? { chapterName: resolvedContext.chapterName }
+      : {}),
+    ...(resolvedContext?.chapterNumber
+      ? { chapterNumber: resolvedContext.chapterNumber }
+      : {}),
+    ...(resolvedContext?.chapterPosition
+      ? { chapterPosition: resolvedContext.chapterPosition }
+      : {}),
+    ...(resolvedContext?.novelId ? { novelId: resolvedContext.novelId } : {}),
+    ...(resolvedContext?.novelName
+      ? { novelName: resolvedContext.novelName }
+      : {}),
+    ...(resolvedContext?.novelPath
+      ? { novelPath: resolvedContext.novelPath }
+      : {}),
+    ...(resolvedContext?.sourceId
+      ? { sourceId: resolvedContext.sourceId }
+      : {}),
+  });
 }
 
 export async function clearAllChapterMedia(): Promise<void> {

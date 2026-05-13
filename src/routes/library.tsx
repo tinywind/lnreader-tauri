@@ -406,6 +406,7 @@ export function LibraryPage({ active = true }: LibraryPageProps) {
             contentType: chapter.contentType,
             novelId: novel.id,
             novelName: novel.name,
+            novelPath: novel.path,
             title: t("tasks.task.downloadChapter", { name: chapter.name }),
           });
         }

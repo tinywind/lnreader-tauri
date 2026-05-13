@@ -1,5 +1,7 @@
 mod backup;
 mod chapter_media;
+#[cfg(target_os = "android")]
+mod android_tls;
 mod plugin_host;
 mod scraper;
 mod tray;
@@ -67,6 +69,7 @@ pub fn run() {
             backup::backup_unpack,
             chapter_media::chapter_content_mirror_clear,
             chapter_media::chapter_content_mirror_read,
+            chapter_media::chapter_content_mirror_read_file,
             chapter_media::chapter_content_mirror_store,
             chapter_media::chapter_media_archive_cache,
             chapter_media::chapter_media_clear,

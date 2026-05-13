@@ -3,6 +3,7 @@ import {
   saveChapterContent,
   saveChapterPartialContent,
 } from "../../db/queries/chapter";
+import { getNovelById } from "../../db/queries/novel";
 import { useBrowseStore } from "../../store/browse";
 import {
   chapterContentToHtml,
@@ -40,6 +41,7 @@ export interface ChapterDownloadJob {
   contentType?: ChapterContentType;
   novelId?: number;
   novelName?: string;
+  novelPath?: string;
   priority?: TaskPriority;
   title: string;
 }
@@ -206,6 +208,7 @@ function normalizePersistedChapterDownloadJob(
     ),
     novelId: readPositiveIntegerField(record, "novelId"),
     novelName: readStringField(record, "novelName"),
+    novelPath: readStringField(record, "novelPath"),
     priority: "background",
     title,
   };
@@ -338,6 +341,7 @@ function eventFromTask(task: TaskRecord): ChapterDownloadEvent | null {
       contentType: normalizeChapterContentType(task.subject?.contentType),
       novelId: task.subject?.novelId,
       novelName: task.subject?.novelName,
+      novelPath: task.subject?.novelPath,
       title: task.title,
     },
   };
@@ -362,6 +366,7 @@ export function enqueueChapterDownload(
       contentType: job.contentType,
       novelId: job.novelId,
       novelName: job.novelName,
+      novelPath: job.novelPath,
       path: job.chapterPath,
       pluginId: job.pluginId,
       batchId: job.batchId,
@@ -385,6 +390,17 @@ export function enqueueChapterDownload(
         if (!chapter) {
           throw missingLocalChapterError(job);
         }
+        const novel =
+          job.novelPath && job.novelName && job.novelId
+            ? {
+                id: job.novelId,
+                name: job.novelName,
+                path: job.novelPath,
+                pluginId: job.pluginId,
+              }
+            : job.novelId
+              ? await getNovelById(job.novelId)
+              : null;
         const contentType = normalizeChapterContentType(
           job.contentType ?? chapter.contentType,
         );
@@ -410,7 +426,8 @@ export function enqueueChapterDownload(
               contextUrl: baseUrl,
               html,
               novelId: chapter.novelId,
-              novelName: job.novelName,
+              novelName: novel?.name ?? job.novelName,
+              novelPath: novel?.path ?? job.novelPath,
               onHtmlUpdate: async (partialHtml) => {
                 const partialSaveResult = await saveChapterPartialContent(
                   job.id,
@@ -444,9 +461,27 @@ export function enqueueChapterDownload(
         }
         await mirrorStoredChapterContent(job.id);
         if (mediaCacheKey) {
-          await pruneChapterMedia(job.id, mediaCacheKey);
+          await pruneChapterMedia(job.id, mediaCacheKey, {
+            chapterId: job.id,
+            chapterName: chapter.name,
+            chapterNumber: chapter.chapterNumber,
+            chapterPosition: chapter.position,
+            novelId: novel?.id ?? chapter.novelId,
+            novelName: novel?.name ?? job.novelName,
+            novelPath: novel?.path ?? job.novelPath,
+            sourceId: job.pluginId,
+          });
         } else {
-          await clearChapterMedia(job.id);
+          await clearChapterMedia(job.id, {
+            chapterId: job.id,
+            chapterName: chapter.name,
+            chapterNumber: chapter.chapterNumber,
+            chapterPosition: chapter.position,
+            novelId: novel?.id ?? chapter.novelId,
+            novelName: novel?.name ?? job.novelName,
+            novelPath: novel?.path ?? job.novelPath,
+            sourceId: job.pluginId,
+          });
         }
         settleChapterDownloadBatchJob(job.batchId, job.id, "succeeded");
         setProgress({ current: progressTotal, total: progressTotal });

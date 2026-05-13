@@ -12,7 +12,16 @@ export async function backfillDownloadCacheMediaBytes(
 
   const candidates = await listDownloadCacheMediaBackfillCandidates(novelId);
   for (const candidate of candidates) {
-    const mediaBytes = await getStoredChapterMediaBytes(candidate.content);
+    const mediaBytes = await getStoredChapterMediaBytes(candidate.content, {
+      chapterId: candidate.id,
+      chapterName: candidate.chapterName,
+      chapterNumber: candidate.chapterNumber,
+      chapterPosition: candidate.position,
+      novelId: candidate.novelId,
+      novelName: candidate.novelName,
+      novelPath: candidate.novelPath,
+      sourceId: candidate.pluginId,
+    });
     await updateDownloadCacheChapterMediaBytes(candidate.id, mediaBytes);
   }
 }

@@ -17,6 +17,9 @@ vi.mock("../../db/queries/chapter", () => ({
   saveChapterContent: vi.fn(),
   saveChapterPartialContent: vi.fn(),
 }));
+vi.mock("../../db/queries/novel", () => ({
+  getNovelById: vi.fn(),
+}));
 vi.mock("../../store/browse", () => ({
   useBrowseStore: {
     getState: vi.fn(() => ({ chapterDownloadCooldownSeconds: 0 })),
@@ -119,7 +122,10 @@ describe("enqueueChapterDownload", () => {
       "text",
       { mediaBytes: 0 },
     );
-    expect(clearChapterMedia).toHaveBeenCalledWith(7);
+    expect(clearChapterMedia).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ chapterId: 7, sourceId: "source-a" }),
+    );
   });
 
   it("keeps chapter media downloads on the assigned scraper executor", async () => {

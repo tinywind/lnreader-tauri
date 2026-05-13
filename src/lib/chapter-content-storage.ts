@@ -9,6 +9,12 @@ import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
 } from "./chapter-content";
+import { getStoredChapterMediaBytes } from "./chapter-media";
+import {
+  chapterContentRelativePath as buildChapterContentRelativePath,
+  type ChapterStorageChapterPathInput,
+  type ChapterStorageNovelPathInput,
+} from "./chapter-storage-path";
 import { isAndroidRuntime, isTauriRuntime } from "./tauri-runtime";
 
 interface ChapterStorageRow {
@@ -144,9 +150,24 @@ const SELECT_CHAPTER_STORAGE_ROW = `
     n.last_read_at   AS lastReadAt
   FROM chapter c
   JOIN novel n ON n.id = c.novel_id
+`;
+
+const SELECT_DOWNLOADED_CHAPTER_STORAGE_ROW = `
+  ${SELECT_CHAPTER_STORAGE_ROW}
   WHERE c.id = $1
     AND c.is_downloaded = 1
     AND c.content IS NOT NULL
+`;
+
+const SELECT_CHAPTER_STORAGE_METADATA_ROW = `
+  ${SELECT_CHAPTER_STORAGE_ROW}
+  WHERE c.id = $1
+`;
+
+const SELECT_RESTORABLE_CHAPTER_STORAGE_ROWS = `
+  ${SELECT_CHAPTER_STORAGE_ROW}
+  WHERE c.content IS NULL
+  ORDER BY c.novel_id, c.position, c.id
 `;
 
 const SELECT_DOWNLOADED_CHAPTER_IDS_BY_NOVEL = `
@@ -226,85 +247,11 @@ const UPDATE_MIRRORED_CHAPTER_CONTENT = `
    WHERE id = $5
 `;
 
-const CONTENTS_ROOT_DIR = "contents";
-const STORAGE_MANIFEST_FILE = "storage-manifest.json";
+const LEGACY_STORAGE_MANIFEST_FILE = "storage-manifest.json";
+let legacyAndroidStorageManifestCleanup: Promise<void> | null = null;
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
-}
-
-function defaultStorageManifest(): MirroredStorageManifest & {
-  contentRoot: string;
-  version: number;
-} {
-  return {
-    version: 1,
-    contentRoot: CONTENTS_ROOT_DIR,
-    novels: {},
-    chapters: {},
-  };
-}
-
-function safeSegment(value: string, fallback: string): string {
-  const sanitized = value
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 96);
-  return sanitized === "" || sanitized === "." || sanitized === ".."
-    ? fallback
-    : sanitized;
-}
-
-function isUnsafeUnicodeFormat(ch: string): boolean {
-  const code = ch.codePointAt(0) ?? 0;
-  return (
-    code === 0x180e ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2060 && code <= 0x206f) ||
-    code === 0xfeff
-  );
-}
-
-function safeLabelSegment(value: string | null | undefined, fallback: string) {
-  const raw = value?.trim() || fallback;
-  const sanitized = [...raw]
-    .map((ch) =>
-      /[\s/:*?"<>|\\]/.test(ch) || isUnsafeUnicodeFormat(ch) ? "-" : ch,
-    )
-    .join("")
-    .replace(/^[.-]+|[.-]+$/g, "")
-    .slice(0, 96);
-  return sanitized === "" || sanitized === "." || sanitized === ".."
-    ? fallback
-    : sanitized;
-}
-
-function labelWithId(value: string | null | undefined, fallback: string, id: number) {
-  return `${safeLabelSegment(value, fallback)}-${id}`;
-}
-
-function chapterFolderLabel(chapter: Pick<MirroredChapter, "chapterNumber" | "id" | "name" | "position">) {
-  if (chapter.chapterNumber?.trim()) return `chapter${chapter.chapterNumber.trim()}`;
-  if (chapter.name.trim()) return chapter.name;
-  return chapter.position > 0 ? `chapter${chapter.position}` : `chapter${chapter.id}`;
-}
-
-function contentChapterRelativeDir(novel: MirroredNovel, chapter: MirroredChapter): string {
-  const sourceId = safeSegment(novel.pluginId, "source");
-  const novelSegment = labelWithId(novel.name, "novel", novel.id);
-  const chapterSegment = labelWithId(
-    chapterFolderLabel(chapter),
-    "chapter",
-    chapter.id,
-  );
-  return `${CONTENTS_ROOT_DIR}/${sourceId}/${novelSegment}/${chapterSegment}`;
-}
-
-function chapterFileStem(chapter: Pick<MirroredChapter, "chapterNumber" | "id" | "position">): string {
-  const fallback = chapter.position > 0 ? String(chapter.position) : String(chapter.id);
-  const raw = chapter.chapterNumber?.trim() || fallback;
-  return `chapter${safeSegment(raw, fallback)}`;
 }
 
 function chapterContentExtension(contentType: string | undefined): string {
@@ -314,58 +261,20 @@ function chapterContentExtension(contentType: string | undefined): string {
 }
 
 function chapterContentRelativePath(
-  novel: MirroredNovel,
-  chapter: MirroredChapter,
+  novel: ChapterStorageNovelPathInput,
+  chapter: ChapterStorageChapterPathInput & { contentType?: string },
 ): string {
   const extension = chapterContentExtension(chapter.contentType);
-  return `${contentChapterRelativeDir(novel, chapter)}/${chapterFileStem(
-    chapter,
-  )}.${extension}`;
+  return buildChapterContentRelativePath(novel, chapter, extension);
 }
 
-async function readAndroidStorageManifest(): Promise<MirroredStorageManifest> {
-  const raw = await readAndroidStorageText(STORAGE_MANIFEST_FILE);
-  if (!raw) return defaultStorageManifest();
-  const manifest = JSON.parse(raw) as MirroredStorageManifest;
-  return {
-    ...defaultStorageManifest(),
-    ...manifest,
-    chapters: manifest.chapters ?? {},
-    novels: manifest.novels ?? {},
-  };
-}
-
-async function writeAndroidStorageManifest(
-  manifest: MirroredStorageManifest,
-): Promise<void> {
-  await writeAndroidStorageText(
-    STORAGE_MANIFEST_FILE,
-    JSON.stringify(
-      {
-        ...manifest,
-        version: 1,
-        contentRoot: CONTENTS_ROOT_DIR,
-        updatedAt: Math.floor(Date.now() / 1000),
-      },
-      null,
-      2,
-    ),
-  );
-}
-
-async function readAndroidStorageManifestWithContent(): Promise<MirroredStorageManifest> {
-  const manifest = await readAndroidStorageManifest();
-  for (const chapter of Object.values(manifest.chapters ?? {})) {
-    if (!chapter.contentFile) {
-      throw new Error(`Mirrored chapter ${chapter.id} is missing a content file.`);
-    }
-    const content = await readAndroidStorageText(chapter.contentFile);
-    if (content === null) {
-      throw new Error(`Mirrored chapter content is missing: ${chapter.contentFile}`);
-    }
-    chapter.content = content;
-  }
-  return manifest;
+async function deleteLegacyAndroidStorageManifest(): Promise<void> {
+  legacyAndroidStorageManifestCleanup ??= deleteAndroidStoragePath(
+    LEGACY_STORAGE_MANIFEST_FILE,
+  ).catch(() => {
+    legacyAndroidStorageManifestCleanup = null;
+  });
+  await legacyAndroidStorageManifestCleanup;
 }
 
 function storageMetadata(row: ChapterStorageRow) {
@@ -414,6 +323,65 @@ function storageMetadata(row: ChapterStorageRow) {
   };
 }
 
+async function readStoredChapterContentFile(
+  contentFile: string,
+): Promise<string | null> {
+  if (isAndroidRuntime()) {
+    return readAndroidStorageText(contentFile);
+  }
+  return invoke<string | null>("chapter_content_mirror_read_file", {
+    contentFile,
+  });
+}
+
+async function restoreStoredChapterContentRows(
+  options: ChapterStorageRestoreOptions,
+): Promise<ChapterStorageRestoreResult> {
+  const db = await getDb();
+  const rows = await db.select<ChapterStorageRow[]>(
+    SELECT_RESTORABLE_CHAPTER_STORAGE_ROWS,
+  );
+  const candidates = options.chapterIds
+    ? rows.filter((row) => options.chapterIds?.has(row.chapterId) === true)
+    : rows;
+  let restoredChapters = 0;
+
+  if (isAndroidRuntime()) await deleteLegacyAndroidStorageManifest();
+
+  for (const row of candidates) {
+    const metadata = storageMetadata(row);
+    const contentFile = chapterContentRelativePath(
+      metadata.novel,
+      metadata.chapter,
+    );
+    const content = await readStoredChapterContentFile(contentFile);
+    if (content === null) continue;
+    const contentType = normalizeChapterContentType(
+      metadata.chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+    );
+    const mediaBytes = await getStoredChapterMediaBytes(content, {
+      chapterId: row.chapterId,
+      chapterName: row.chapterName,
+      chapterNumber: row.chapterNumber,
+      chapterPosition: row.position,
+      novelId: row.novelId,
+      novelName: row.novelName,
+      novelPath: row.novelPath,
+      sourceId: row.pluginId,
+    });
+    await db.execute(UPDATE_MIRRORED_CHAPTER_CONTENT, [
+      content,
+      utf8ByteLength(content),
+      mediaBytes,
+      contentType,
+      row.chapterId,
+    ]);
+    restoredChapters += 1;
+  }
+
+  return { chapters: restoredChapters, novels: 0 };
+}
+
 export async function mirrorStoredChapterContent(
   chapterId: number,
 ): Promise<void> {
@@ -421,33 +389,20 @@ export async function mirrorStoredChapterContent(
 
   const db = await getDb();
   const rows = await db.select<ChapterStorageRow[]>(
-    SELECT_CHAPTER_STORAGE_ROW,
+    SELECT_DOWNLOADED_CHAPTER_STORAGE_ROW,
     [chapterId],
   );
   const row = rows[0];
   if (!row?.content) return;
+  const content = row.content;
 
   if (isAndroidRuntime()) {
     const metadata = storageMetadata(row);
     const novel = metadata.novel;
     const chapter = metadata.chapter;
     const contentFile = chapterContentRelativePath(novel, chapter);
-    const manifest = await readAndroidStorageManifest();
-    const previousContentFile =
-      manifest.chapters?.[String(chapterId)]?.contentFile;
-
-    await writeAndroidStorageText(contentFile, row.content);
-    manifest.novels ??= {};
-    manifest.chapters ??= {};
-    manifest.novels[String(novel.id)] = novel;
-    manifest.chapters[String(chapterId)] = {
-      ...chapter,
-      contentFile,
-    };
-    if (previousContentFile && previousContentFile !== contentFile) {
-      await deleteAndroidStoragePath(previousContentFile);
-    }
-    await writeAndroidStorageManifest(manifest);
+    await deleteLegacyAndroidStorageManifest();
+    await writeAndroidStorageText(contentFile, content);
     return;
   }
 
@@ -491,15 +446,18 @@ export async function clearStoredChapterContentMirror(
 ): Promise<void> {
   if (!isTauriRuntime()) return;
   if (isAndroidRuntime()) {
-    const manifest = await readAndroidStorageManifest();
-    const chapter = manifest.chapters?.[String(chapterId)];
-    if (chapter?.contentFile) {
-      await deleteAndroidStoragePath(chapter.contentFile);
-    }
-    if (manifest.chapters) {
-      delete manifest.chapters[String(chapterId)];
-      await writeAndroidStorageManifest(manifest);
-    }
+    const db = await getDb();
+    const rows = await db.select<ChapterStorageRow[]>(
+      SELECT_CHAPTER_STORAGE_METADATA_ROW,
+      [chapterId],
+    );
+    const row = rows[0];
+    if (!row) return;
+    const metadata = storageMetadata(row);
+    await deleteLegacyAndroidStorageManifest();
+    await deleteAndroidStoragePath(
+      chapterContentRelativePath(metadata.novel, metadata.chapter),
+    );
     return;
   }
   await invoke("chapter_content_mirror_clear", { chapterId });
@@ -509,10 +467,17 @@ export async function restoreChapterContentStorageMirror(
   options: ChapterStorageRestoreOptions = {},
 ): Promise<ChapterStorageRestoreResult> {
   if (!isTauriRuntime()) return { chapters: 0, novels: 0 };
+  const restoredRows = await restoreStoredChapterContentRows(options);
+  if (isAndroidRuntime()) {
+    return restoredRows;
+  }
+  if (options.contentOnly) {
+    return restoredRows;
+  }
 
-  const manifest = isAndroidRuntime()
-    ? await readAndroidStorageManifestWithContent()
-    : await invoke<MirroredStorageManifest>("chapter_content_mirror_read");
+  const manifest = await invoke<MirroredStorageManifest>(
+    "chapter_content_mirror_read",
+  );
   const chapterValues = Object.values(manifest.chapters ?? {});
   const chapters = options.chapterIds
     ? chapterValues.filter(
@@ -585,5 +550,8 @@ export async function restoreChapterContentStorageMirror(
     ]);
   }
 
-  return { chapters: chapters.length, novels: novels.length };
+  return {
+    chapters: restoredRows.chapters + chapters.length,
+    novels: restoredRows.novels + novels.length,
+  };
 }

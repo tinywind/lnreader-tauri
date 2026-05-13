@@ -1642,6 +1642,7 @@ export function NovelDetailPage() {
       contentType: chapter.contentType,
       novelId: novel.id,
       novelName: novel.name,
+      novelPath: novel.path,
       priority: "interactive",
       title: t("tasks.task.downloadChapter", { name: chapter.name }),
     })
@@ -1684,6 +1685,7 @@ export function NovelDetailPage() {
       contentType: chapter.contentType,
       novelId: novel.id,
       novelName: novel.name,
+      novelPath: novel.path,
       priority: "user",
       title: t("tasks.task.downloadChapter", { name: chapter.name }),
     }).promise.catch(() => undefined);
@@ -1702,6 +1704,7 @@ export function NovelDetailPage() {
         contentType: chapter.contentType,
         novelId: novel.id,
         novelName: novel.name,
+        novelPath: novel.path,
         title: t("tasks.task.downloadChapter", { name: chapter.name }),
       })),
       title: t("tasks.task.downloadChapterBatch", {

@@ -335,6 +335,7 @@ async function restoreBackupChapterMediaFiles(
       fileName,
       ...(chapter ? { novelId: chapter.novelId } : {}),
       ...(novel ? { novelName: novel.name } : {}),
+      ...(novel ? { novelPath: novel.path } : {}),
       ...(novel ? { sourceId: novel.pluginId } : {}),
     });
   }

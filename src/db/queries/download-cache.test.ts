@@ -113,6 +113,10 @@ describe("download cache media byte backfill", () => {
     await listDownloadCacheMediaBackfillCandidates(7);
 
     const [sql, params] = mockSelect.mock.calls[0]!;
+    expect(sql).toContain("c.name           AS chapterName");
+    expect(sql).toContain("c.chapter_number AS chapterNumber");
+    expect(sql).toContain("n.path           AS novelPath");
+    expect(sql).toContain("n.plugin_id      AS pluginId");
     expect(sql).toContain("c.media_bytes = 0");
     expect(sql).toContain("c.content LIKE '%norea-media://chapter/%'");
     expect(sql).toContain("n.is_local = 0");

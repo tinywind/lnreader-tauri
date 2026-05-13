@@ -703,6 +703,7 @@ export function UpdatesPage({ active = true }: UpdatesPageProps) {
       contentType: entry.contentType,
       novelId: entry.novelId,
       novelName: entry.novelName,
+      novelPath: entry.novelPath,
       priority: "user",
       title: t("tasks.task.downloadChapter", { name: entry.chapterName }),
     }).promise.catch(() => undefined);
