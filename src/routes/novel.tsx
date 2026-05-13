@@ -110,7 +110,6 @@ import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { pluginManager } from "../lib/plugins/manager";
 import {
   DEFAULT_CHAPTER_SORT_LABEL_KEYS,
-  DEFAULT_CHAPTER_SORT_ORDERS,
 } from "../lib/library-settings-options";
 import { novelRoute } from "../router";
 import { useTranslation } from "../i18n";
@@ -1022,49 +1021,20 @@ interface ChapterSortPickerProps {
 
 function ChapterSortPicker({ onChange, value }: ChapterSortPickerProps) {
   const { t } = useTranslation();
-  const [opened, setOpened] = useState(false);
   const activeLabel = t(DEFAULT_CHAPTER_SORT_LABEL_KEYS[value]);
+  const nextValue: DefaultChapterSort = value === "desc" ? "asc" : "desc";
 
   return (
-    <Popover
-      opened={opened}
-      onChange={setOpened}
-      position="bottom-end"
-      shadow="md"
-      width={180}
+    <IconButton
+      active={value === "desc"}
+      className="lnr-novel-icon-button lnr-novel-chapter-sort-button"
+      label={activeLabel}
+      onClick={() => onChange(nextValue)}
+      size="lg"
+      title={`${t("librarySettings.defaultChapterSort")}: ${activeLabel}`}
     >
-      <Popover.Target>
-        <IconButton
-          active={opened}
-          className="lnr-novel-chapter-sort-button"
-          label={t("librarySettings.defaultChapterSort")}
-          onClick={() => setOpened((current) => !current)}
-          size="sm"
-          title={activeLabel}
-        >
-          <SortGlyph />
-        </IconButton>
-      </Popover.Target>
-      <Popover.Dropdown className="lnr-novel-chapter-sort-menu">
-        {DEFAULT_CHAPTER_SORT_ORDERS.map((option) => {
-          const label = t(DEFAULT_CHAPTER_SORT_LABEL_KEYS[option]);
-          return (
-            <button
-              className="lnr-novel-chapter-sort-option"
-              data-active={value === option}
-              key={option}
-              onClick={() => {
-                onChange(option);
-                setOpened(false);
-              }}
-              type="button"
-            >
-              {label}
-            </button>
-          );
-        })}
-      </Popover.Dropdown>
-    </Popover>
+      <SortGlyph />
+    </IconButton>
   );
 }
 
