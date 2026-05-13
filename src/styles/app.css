@@ -335,7 +335,7 @@ a {
   display: block;
 }
 
-@media (min-width: 1201px) {
+@media (min-width: 1200px) {
   .lnr-app-rail[data-show-labels="true"] .lnr-rail-brand {
     justify-content: flex-start;
   }

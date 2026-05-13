@@ -580,7 +580,7 @@
   }
 }
 
-@media (max-width: 420px) {
+@media (max-width: 575px) {
   .lnr-settings-form-row {
     align-items: stretch;
     gap: 0.5rem;

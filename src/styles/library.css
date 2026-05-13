@@ -1058,7 +1058,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 991px) {
   .lnr-library-subpanel {
     display: none;
   }
@@ -1076,7 +1076,7 @@
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 767px) {
   .lnr-library-page {
     height: auto;
     min-height: var(--lnr-app-content-height);
@@ -1226,7 +1226,7 @@
   }
 }
 
-@media (max-width: 420px) {
+@media (max-width: 575px) {
   .lnr-library-main-header {
     --lnr-library-mobile-title-width: min(8.5rem, 42vw);
   }
