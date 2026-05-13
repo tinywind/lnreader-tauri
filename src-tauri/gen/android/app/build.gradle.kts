@@ -71,7 +71,7 @@ repositories {
     maven {
         url = uri(rustlsPlatformVerifierAndroid.repository)
         metadataSources {
-            artifact()
+            mavenPom()
         }
     }
 }
