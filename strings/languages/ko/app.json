@@ -823,6 +823,7 @@
   "novel.removeFromLibrary": "서재에서 제거",
   "novel.addToLibrary": "서재에 추가",
   "novel.openSource": "소스 열기",
+  "novel.refreshMetadata": "캐시된 정보 갱신",
   "novel.readerSettings": "리더 설정",
   "novel.author": "작가: {name}",
   "novel.artist": "일러스트: {name}",

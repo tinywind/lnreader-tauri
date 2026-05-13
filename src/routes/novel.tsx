@@ -52,6 +52,7 @@ import {
   PlayGlyph,
   PlusGlyph,
   ReaderSettingsGlyph,
+  RefreshGlyph,
   SortGlyph,
 } from "../components/ActionGlyphs";
 import {
@@ -83,6 +84,7 @@ import {
   type NovelDetailRecord,
 } from "../db/queries/novel";
 import { convertLocalImportFile } from "../lib/local-import";
+import { syncNovelFromSource } from "../lib/plugins/sync-novel";
 import { clearChapterMedia } from "../lib/chapter-media";
 import {
   clearStoredChapterContentMirror,
@@ -100,7 +102,10 @@ import {
   type ChapterDownloadStatus,
 } from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
-import { enqueueOpenSiteTask } from "../lib/tasks/source-tasks";
+import {
+  enqueueOpenSiteTask,
+  enqueueSourceTask,
+} from "../lib/tasks/source-tasks";
 import { getPluginBaseUrl } from "../lib/plugins/base-url";
 import { pluginManager } from "../lib/plugins/manager";
 import {
@@ -1152,6 +1157,7 @@ interface NovelWorkspaceProps {
   downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>;
   lastReadChapterId: number | undefined;
   localChapterAdding: boolean;
+  metadataRefreshing: boolean;
   novel: NovelDetailRecord;
   onBack: () => void;
   onAddLocalChapters: () => void;
@@ -1160,6 +1166,7 @@ interface NovelWorkspaceProps {
   onOpenReaderSettings: () => void;
   onOpenSource: () => void;
   onRead: (chapter: ChapterListRow) => void;
+  onRefreshMetadata: () => void;
   onToggleLibrary: () => void;
   sourceUrl: string | null;
   toggleBusy: boolean;
@@ -1170,6 +1177,7 @@ function NovelWorkspace({
   downloadStatuses,
   lastReadChapterId,
   localChapterAdding,
+  metadataRefreshing,
   novel,
   onBack,
   onAddLocalChapters,
@@ -1178,6 +1186,7 @@ function NovelWorkspace({
   onOpenReaderSettings,
   onOpenSource,
   onRead,
+  onRefreshMetadata,
   onToggleLibrary,
   sourceUrl,
   toggleBusy,
@@ -1285,11 +1294,20 @@ function NovelWorkspace({
           </NovelActionButton>
         </>
       ) : (
-        <NovelBatchDownloadMenu
-          disabled={!hasBatchDownloadTargets}
-          onDownload={onBatchDownload}
-          options={batchDownloadOptions}
-        />
+        <>
+          <NovelBatchDownloadMenu
+            disabled={!hasBatchDownloadTargets}
+            onDownload={onBatchDownload}
+            options={batchDownloadOptions}
+          />
+          <NovelActionButton
+            disabled={metadataRefreshing}
+            label={t("novel.refreshMetadata")}
+            onClick={onRefreshMetadata}
+          >
+            {metadataRefreshing ? <Loader size={14} /> : <RefreshGlyph />}
+          </NovelActionButton>
+        </>
       )}
       <NovelActionButton
         label={t("novel.readerSettings")}
@@ -1535,6 +1553,48 @@ export function NovelDetailPage() {
     onSuccess: () => {
       setLocalMetadataOpen(false);
       void queryClient.invalidateQueries({ queryKey: novelKey(id) });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+    },
+  });
+
+  const refreshMetadata = useMutation({
+    mutationFn: async () => {
+      const novel = novelQuery.data;
+      if (!novel || novel.isLocal) return null;
+      const plugin = pluginManager.getPlugin(novel.pluginId);
+      if (!plugin) {
+        throw new Error(t("source.pluginNotLoaded"));
+      }
+
+      return enqueueSourceTask({
+        plugin,
+        kind: "source.refreshNovel",
+        priority: "user",
+        title: t("tasks.task.refreshNovelMetadata", { name: novel.name }),
+        subject: {
+          novelId: novel.id,
+          novelName: novel.name,
+          path: novel.path,
+        },
+        dedupeKey: `source.refreshNovel:${novel.pluginId}:${novel.path}`,
+        run: (context) =>
+          syncNovelFromSource(
+            pluginManager.getPluginForExecutor(
+              novel.pluginId,
+              context.executor ?? "immediate",
+            ),
+            {
+              cover: novel.cover ?? undefined,
+              name: novel.name,
+              path: novel.path,
+            },
+            { preserveMissingMetadata: true },
+          ),
+      }).promise;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: novelKey(id) });
+      void queryClient.invalidateQueries({ queryKey: chaptersKey(id) });
       void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
     },
   });
@@ -1876,6 +1936,7 @@ export function NovelDetailPage() {
             downloadStatuses={statuses}
             lastReadChapterId={lastReadChapterId}
             localChapterAdding={addLocalChapters.isPending}
+            metadataRefreshing={refreshMetadata.isPending}
             onBack={goBack}
             onAddLocalChapters={openLocalChapterInput}
             onBatchDownload={downloadChapters}
@@ -1883,6 +1944,7 @@ export function NovelDetailPage() {
             onOpenReaderSettings={() => setReaderSettingsOpen(true)}
             onRead={openChapter}
             onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
+            onRefreshMetadata={() => refreshMetadata.mutate()}
             onToggleLibrary={() => toggle.mutate()}
             sourceUrl={sourceUrl}
             toggleBusy={toggle.isPending}
@@ -1908,6 +1970,14 @@ export function NovelDetailPage() {
             {localChapterError ? (
               <Text c="red" className="lnr-novel-local-error" size="sm">
                 {localChapterError}
+              </Text>
+            ) : null}
+
+            {refreshMetadata.error ? (
+              <Text c="red" className="lnr-novel-local-error" size="sm">
+                {refreshMetadata.error instanceof Error
+                  ? refreshMetadata.error.message
+                  : String(refreshMetadata.error)}
               </Text>
             ) : null}
 

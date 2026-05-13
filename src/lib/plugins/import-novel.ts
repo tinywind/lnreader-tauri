@@ -1,19 +1,28 @@
+import { findNovelBySource } from "../../db/queries/novel";
 import type { NovelItem, Plugin } from "./types";
 import { syncNovelFromSource } from "./sync-novel";
 
+export interface ImportNovelFromSourceOptions {
+  forceRefresh?: boolean;
+}
+
 /**
- * Pull a novel + its chapter list from a plugin source and upsert
- * into the local DB. Returns the local `novel.id` so callers can
- * navigate to `/novel?id=N` immediately.
+ * Resolve a plugin novel into the local DB and return its `novel.id`.
  *
- * Idempotent — repeated imports of the same `(pluginId, path)` row
- * update the metadata in place and INSERT-OR-IGNORE the chapter
- * list, leaving any local progress intact.
+ * Repeated imports use the cached `(pluginId, path)` row by default.
+ * Pass `forceRefresh` when the caller explicitly wants source metadata
+ * and chapter list refresh.
  */
 export async function importNovelFromSource(
   plugin: Plugin,
   item: NovelItem,
+  options: ImportNovelFromSourceOptions = {},
 ): Promise<number> {
+  if (!options.forceRefresh) {
+    const cached = await findNovelBySource(plugin.id, item.path);
+    if (cached) return cached.id;
+  }
+
   const result = await syncNovelFromSource(plugin, item);
   return result.novelId;
 }

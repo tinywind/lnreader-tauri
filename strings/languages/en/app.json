@@ -823,6 +823,7 @@
   "novel.removeFromLibrary": "Remove from library",
   "novel.addToLibrary": "Add to library",
   "novel.openSource": "Open source",
+  "novel.refreshMetadata": "Refresh cached details",
   "novel.readerSettings": "Reader settings",
   "novel.author": "Author: {name}",
   "novel.artist": "Artist: {name}",
