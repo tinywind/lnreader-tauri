@@ -2,16 +2,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { getChapterById } from "../db/queries/chapter";
 import { getNovelById } from "../db/queries/novel";
 import {
+  androidStorageZipEntryExists,
+  archiveAndroidStorageDirectory,
   androidStoragePathSize,
   clearAndroidStorageRoot,
   deleteAndroidStorageChildrenExcept,
   deleteAndroidStoragePath,
   readAndroidStorageDataUrl,
+  readAndroidStorageText,
+  readAndroidStorageZipEntryDataUrl,
   writeAndroidStorageBytes,
+  writeAndroidStorageText,
 } from "./android-storage";
 import {
   chapterMediaDirectoryRelativePath,
   chapterMediaRelativePath,
+  chapterStorageRelativeDir,
   type ChapterStorageChapterPathInput,
   type ChapterStorageNovelPathInput,
 } from "./chapter-storage-path";
@@ -75,11 +81,35 @@ const MEDIA_SOURCE_SELECTOR = [
   "source[srcset]",
 ].join(",");
 const MEDIA_STYLE_SELECTOR = "[style]";
+const MEDIA_PATCH_SELECTOR = [MEDIA_SOURCE_SELECTOR, MEDIA_STYLE_SELECTOR].join(
+  ",",
+);
+const MEDIA_PATCH_ATTRIBUTES = [
+  "src",
+  "srcset",
+  "poster",
+  "data",
+  "href",
+  "data-src",
+  "data-original",
+  "data-lazy-src",
+  "data-orig-src",
+  "style",
+] as const;
 const STYLE_URL_PATTERN =
   /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")]*?))\s*\)/gi;
 const DEFAULT_MEDIA_EXTENSION = "bin";
 const DEFAULT_MEDIA_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,audio/*,*/*;q=0.8";
+const CHAPTER_MEDIA_MANIFEST_FILE = "media-manifest.json";
+const MEDIA_PENDING_ATTRIBUTE = "data-norea-media-pending";
+const MEDIA_PENDING_ASPECT_ATTRIBUTE = "data-norea-media-pending-aspect";
+const MEDIA_PENDING_BACKGROUND_ATTRIBUTE = "data-norea-media-pending-bg";
+const MEDIA_PENDING_DISPLAY_ATTRIBUTE = "data-norea-media-pending-display";
+const MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE = "data-norea-media-pending-height";
+const MEDIA_PENDING_PLACEHOLDER_SRC =
+  "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221000%22%20height%3D%221400%22%20viewBox%3D%220%200%201000%201400%22%2F%3E";
+const MEDIA_PENDING_PLACEHOLDER_HEIGHT = "min(72vh, 56rem)";
 
 type ChapterMediaRequestInit = Pick<HttpInit, "body" | "headers" | "method">;
 
@@ -95,12 +125,18 @@ interface CacheChapterMediaOptions {
   novelName?: string | null;
   novelPath?: string | null;
   onHtmlUpdate?: (html: string) => Promise<void> | void;
+  onMediaPatch?: (patches: ChapterMediaElementPatch[]) => Promise<void> | void;
   onProgress?: (progress: { current: number; total: number }) => void;
   previousHtml?: string | null;
   requestInit?: ChapterMediaRequestInit;
   scraperExecutor?: ScraperExecutorId;
   signal?: AbortSignal;
   sourceId?: string;
+}
+
+export interface ChapterMediaElementPatch {
+  attributes: Record<string, string>;
+  index: number;
 }
 
 interface CacheChapterMediaResult {
@@ -116,11 +152,13 @@ interface ChapterMediaStoreInput {
   chapterName?: string | null;
   chapterNumber?: string | null;
   chapterPosition?: number | null;
+  contentType?: string | null;
   fileName: string;
   novelId?: number;
   novelName?: string | null;
   novelPath?: string | null;
   sourceId?: string;
+  sourceUrl?: string;
 }
 
 interface ChapterMediaArchiveInput {
@@ -144,6 +182,22 @@ export interface ChapterMediaStorageContext {
   novelName?: string | null;
   novelPath?: string | null;
   sourceId?: string | null;
+}
+
+interface ChapterMediaManifestFile {
+  archivePath: string;
+  cacheKey: string;
+  contentType?: string;
+  fileName: string;
+  path: string;
+  sourceUrl: string;
+  updatedAt: number;
+}
+
+interface ChapterMediaManifest {
+  files: ChapterMediaManifestFile[];
+  updatedAt: number;
+  version: 1;
 }
 
 interface MediaSrcTarget {
@@ -317,8 +371,17 @@ function safeFileStem(value: string, fallback: string): string {
     .replace(/\.[^.]*$/, "")
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+    .slice(0, 56);
   return stem === "" || stem === "." || stem === ".." ? fallback : stem;
+}
+
+function shortUrlHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function mediaFileName(index: number, url: string, contentType: string | null) {
@@ -334,7 +397,9 @@ function mediaFileName(index: number, url: string, contentType: string | null) {
     extensionFromUrl(url) ??
     extensionFromContentType(contentType) ??
     DEFAULT_MEDIA_EXTENSION;
-  return `${safeFileStem(leaf, `image-${index + 1}`)}-${index + 1}.${extension}`;
+  const order = String(index + 1).padStart(4, "0");
+  const stem = safeFileStem(leaf, `image-${index + 1}`);
+  return `${order}-${stem}-${shortUrlHash(url)}.${extension}`;
 }
 
 function makeCacheKey(): string {
@@ -448,6 +513,144 @@ function androidChapterMediaRelativePathForContext(
   );
 }
 
+function androidChapterMediaArchiveRelativePathForContext(
+  context: ChapterMediaStorageContext | null | undefined,
+  cacheKey: string,
+): string {
+  if (!hasStorageContext(context)) {
+    return `chapter-media/${context?.chapterId ?? 0}/${cacheKey}.zip`;
+  }
+  return `${chapterStorageRelativeDir(
+    storageNovelPathInput(context),
+    storageChapterPathInput(context),
+  )}/${cacheKey}.zip`;
+}
+
+function androidChapterMediaManifestRelativePath(
+  context: ChapterMediaStorageContext | null | undefined,
+): string {
+  if (!hasStorageContext(context)) {
+    return `chapter-media/${context?.chapterId ?? 0}/${CHAPTER_MEDIA_MANIFEST_FILE}`;
+  }
+  return `${chapterStorageRelativeDir(
+    storageNovelPathInput(context),
+    storageChapterPathInput(context),
+  )}/${CHAPTER_MEDIA_MANIFEST_FILE}`;
+}
+
+function emptyChapterMediaManifest(): ChapterMediaManifest {
+  return {
+    files: [],
+    updatedAt: 0,
+    version: 1,
+  };
+}
+
+function parseChapterMediaManifest(raw: string | null): ChapterMediaManifest {
+  if (!raw) return emptyChapterMediaManifest();
+  try {
+    const parsed = JSON.parse(raw) as Partial<ChapterMediaManifest>;
+    return {
+      files: Array.isArray(parsed.files)
+        ? parsed.files.filter(
+            (file): file is ChapterMediaManifestFile =>
+              typeof file === "object" &&
+              file !== null &&
+              typeof file.archivePath === "string" &&
+              typeof file.cacheKey === "string" &&
+              typeof file.fileName === "string" &&
+              typeof file.path === "string" &&
+              typeof file.sourceUrl === "string" &&
+              typeof file.updatedAt === "number",
+          )
+        : [],
+      updatedAt:
+        typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+      version: 1,
+    };
+  } catch {
+    return emptyChapterMediaManifest();
+  }
+}
+
+async function writeAndroidChapterMediaManifest({
+  cacheKey,
+  context,
+  contentType,
+  fileName,
+  sourceUrl,
+}: {
+  cacheKey: string;
+  context: ChapterMediaStorageContext;
+  contentType?: string | null;
+  fileName: string;
+  sourceUrl?: string;
+}): Promise<void> {
+  if (!sourceUrl) return;
+  const manifestPath = androidChapterMediaManifestRelativePath(context);
+  const now = Date.now();
+  const manifest = parseChapterMediaManifest(
+    await readAndroidStorageText(manifestPath),
+  );
+  const nextFile: ChapterMediaManifestFile = {
+    archivePath: `${cacheKey}.zip`,
+    cacheKey,
+    ...(contentType ? { contentType } : {}),
+    fileName,
+    path: `media/${cacheKey}/${fileName}`,
+    sourceUrl,
+    updatedAt: now,
+  };
+  manifest.files = [
+    ...manifest.files.filter((file) => file.sourceUrl !== sourceUrl),
+    nextFile,
+  ].sort((left, right) => left.fileName.localeCompare(right.fileName));
+  manifest.updatedAt = now;
+  manifest.version = 1;
+  await writeAndroidStorageText(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
+async function pruneAndroidChapterMediaManifest(
+  context: ChapterMediaStorageContext,
+  keepCacheKey: string,
+): Promise<void> {
+  const manifestPath = androidChapterMediaManifestRelativePath(context);
+  const raw = await readAndroidStorageText(manifestPath);
+  if (!raw) return;
+  const manifest = parseChapterMediaManifest(raw);
+  manifest.files = manifest.files.filter(
+    (file) => file.cacheKey === keepCacheKey,
+  );
+  manifest.updatedAt = Date.now();
+  await writeAndroidStorageText(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
+function androidArchiveRelativePathFromMediaRelativePath(
+  relativePath: string,
+  cacheKey: string,
+): string | null {
+  const normalized = relativePath.replace(/\\/g, "/");
+  const mediaCacheSegment = `/media/${cacheKey}/`;
+  const mediaCacheIndex = normalized.lastIndexOf(mediaCacheSegment);
+  if (mediaCacheIndex >= 0) {
+    return `${normalized.slice(0, mediaCacheIndex)}/${cacheKey}.zip`;
+  }
+
+  const legacyCacheSegment = `/${cacheKey}/`;
+  const legacyCacheIndex = normalized.lastIndexOf(legacyCacheSegment);
+  if (normalized.startsWith("chapter-media/") && legacyCacheIndex >= 0) {
+    return `${normalized.slice(0, legacyCacheIndex)}/${cacheKey}.zip`;
+  }
+
+  return null;
+}
+
 async function androidRelativePathFromLocalMediaSrc(
   src: string,
   context?: ChapterMediaStorageContext,
@@ -494,16 +697,37 @@ export async function getStoredChapterMediaBytes(
       : undefined);
   if (isAndroidRuntime()) {
     let total = 0;
-    const paths = new Set<string>();
+    const paths = new Map<string, string>();
+    const countedArchives = new Set<string>();
     for (const source of mediaSrcs) {
       const path = await androidRelativePathFromLocalMediaSrc(
         source,
         resolvedContext ?? undefined,
       );
-      if (path) paths.add(path);
+      if (path) paths.set(path, source);
     }
-    for (const path of paths) {
-      total += await androidStoragePathSize(path);
+    for (const [path, source] of paths) {
+      const directSize = await androidStoragePathSize(path);
+      if (directSize > 0) {
+        total += directSize;
+        continue;
+      }
+
+      const parsed = parseLocalChapterMediaSrc(source);
+      if (!parsed) continue;
+      const archivePath = androidArchiveRelativePathFromMediaRelativePath(
+        path,
+        parsed.cacheKey,
+      );
+      if (!archivePath) continue;
+      if (
+        countedArchives.has(archivePath) ||
+        !(await androidStorageZipEntryExists(archivePath, parsed.fileName))
+      ) {
+        continue;
+      }
+      total += await androidStoragePathSize(archivePath);
+      countedArchives.add(archivePath);
     }
     return total;
   }
@@ -545,11 +769,13 @@ async function storeChapterMedia({
   chapterName,
   chapterNumber,
   chapterPosition,
+  contentType,
   fileName,
   novelId,
   novelName,
   novelPath,
   sourceId,
+  sourceUrl,
 }: ChapterMediaStoreInput): Promise<string> {
   if (isAndroidRuntime()) {
     const src = localChapterMediaSrc(chapterId, cacheKey, fileName);
@@ -568,6 +794,17 @@ async function storeChapterMedia({
       body,
       mimeTypeFromFileName(fileName),
     );
+    try {
+      await writeAndroidChapterMediaManifest({
+        cacheKey,
+        context,
+        contentType,
+        fileName,
+        sourceUrl,
+      });
+    } catch (error) {
+      console.warn("[chapter-media] manifest update failed", error);
+    }
     return src;
   }
   return invoke<string>("chapter_media_store", {
@@ -582,6 +819,7 @@ async function storeChapterMedia({
     ...(novelName ? { novelName } : {}),
     ...(novelPath ? { novelPath } : {}),
     ...(sourceId ? { sourceId } : {}),
+    ...(sourceUrl ? { sourceUrl } : {}),
   });
 }
 
@@ -607,8 +845,9 @@ async function archiveChapterMediaCache({
       novelPath,
       sourceId,
     };
-    return androidStoragePathSize(
+    return archiveAndroidStorageDirectory(
       androidChapterMediaRelativePathForContext(context, cacheKey),
+      androidChapterMediaArchiveRelativePathForContext(context, cacheKey),
     );
   }
   return invoke<number>("chapter_media_archive_cache", {
@@ -765,23 +1004,148 @@ function tagCollectedMediaTargets(
   }
 }
 
+function positiveDimensionAttribute(
+  element: Element,
+  attribute: "height" | "width",
+): number | null {
+  const value = Number.parseFloat(element.getAttribute(attribute) ?? "");
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function mediaElementTagName(element: Element): string {
+  const candidate = element as Element & {
+    name?: string;
+    nodeName?: string;
+    tagName?: string;
+  };
+  return (candidate.tagName ?? candidate.nodeName ?? candidate.name ?? "")
+    .toLowerCase()
+    .trim();
+}
+
+function mediaElementStyle(element: Element): CSSStyleDeclaration | null {
+  return (element as Element & { style?: CSSStyleDeclaration }).style ?? null;
+}
+
+function mediaElementHasAttribute(element: Element, attribute: string): boolean {
+  const nativeHasAttribute = (element as Element & {
+    hasAttribute?: (name: string) => boolean;
+  }).hasAttribute;
+  return nativeHasAttribute
+    ? nativeHasAttribute.call(element, attribute)
+    : element.getAttribute(attribute) !== null;
+}
+
+function mediaPlaceholderElement(element: Element): Element | null {
+  const tagName = mediaElementTagName(element);
+  if (tagName === "source") {
+    const parent = (element as Element & { parentElement?: Element | null })
+      .parentElement;
+    if (!parent || mediaElementTagName(parent) === "audio") return null;
+    return parent;
+  }
+  if (tagName === "audio") return null;
+  return element;
+}
+
+function reservePendingMediaLayout(element: Element): void {
+  const target = mediaPlaceholderElement(element);
+  if (!target || mediaElementHasAttribute(target, MEDIA_PENDING_ATTRIBUTE)) {
+    return;
+  }
+  const dimensionElement =
+    mediaElementTagName(target) === "picture"
+      ? (target.querySelector("img") ?? target)
+      : target;
+  const width = positiveDimensionAttribute(dimensionElement, "width");
+  const height = positiveDimensionAttribute(dimensionElement, "height");
+  const isSmallMedia =
+    width !== null && height !== null && Math.max(width, height) <= 128;
+  const style = mediaElementStyle(target);
+
+  target.setAttribute(MEDIA_PENDING_ATTRIBUTE, "true");
+  if (
+    mediaElementTagName(target) === "img" &&
+    (target.getAttribute("src") ?? "").trim() === ""
+  ) {
+    target.setAttribute("src", MEDIA_PENDING_PLACEHOLDER_SRC);
+  }
+  if (!style) return;
+  if (!isSmallMedia && style.display === "") {
+    style.display = "block";
+    target.setAttribute(MEDIA_PENDING_DISPLAY_ATTRIBUTE, "true");
+  }
+  if (width !== null && height !== null && style.aspectRatio === "") {
+    style.aspectRatio = `${width} / ${height}`;
+    target.setAttribute(MEDIA_PENDING_ASPECT_ATTRIBUTE, "true");
+  }
+  if (width === null || height === null) {
+    if (style.minHeight === "") {
+      style.minHeight = MEDIA_PENDING_PLACEHOLDER_HEIGHT;
+      target.setAttribute(MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE, "true");
+    }
+    if (style.backgroundColor === "") {
+      style.backgroundColor = "rgba(148, 163, 184, 0.12)";
+      target.setAttribute(MEDIA_PENDING_BACKGROUND_ATTRIBUTE, "true");
+    }
+  }
+}
+
+function clearPendingMediaLayout(element: Element): void {
+  const target = mediaPlaceholderElement(element);
+  if (!target || !mediaElementHasAttribute(target, MEDIA_PENDING_ATTRIBUTE)) {
+    return;
+  }
+  const style = mediaElementStyle(target);
+  target.removeAttribute(MEDIA_PENDING_ATTRIBUTE);
+  if (style && mediaElementHasAttribute(target, MEDIA_PENDING_ASPECT_ATTRIBUTE)) {
+    style.removeProperty("aspect-ratio");
+    target.removeAttribute(MEDIA_PENDING_ASPECT_ATTRIBUTE);
+  }
+  if (
+    style &&
+    mediaElementHasAttribute(target, MEDIA_PENDING_BACKGROUND_ATTRIBUTE)
+  ) {
+    style.removeProperty("background-color");
+    target.removeAttribute(MEDIA_PENDING_BACKGROUND_ATTRIBUTE);
+  }
+  if (style && mediaElementHasAttribute(target, MEDIA_PENDING_DISPLAY_ATTRIBUTE)) {
+    style.removeProperty("display");
+    target.removeAttribute(MEDIA_PENDING_DISPLAY_ATTRIBUTE);
+  }
+  if (
+    style &&
+    mediaElementHasAttribute(target, MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE)
+  ) {
+    style.removeProperty("min-height");
+    target.removeAttribute(MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE);
+  }
+}
+
 function blankCollectedMediaTargets(
   baseUrl: string,
   srcTargets: MediaSrcTarget[],
   srcsetTargets: MediaSrcsetTarget[],
   styleTargets: MediaStyleTarget[],
 ): void {
+  const placeholderElements = new Set<Element>();
   for (const target of srcTargets) {
     target.element.setAttribute(target.attribute, "");
+    placeholderElements.add(target.element);
   }
   for (const target of srcsetTargets) {
     target.element.setAttribute("srcset", "");
+    placeholderElements.add(target.element);
   }
   for (const target of styleTargets) {
     target.element.setAttribute(
       "style",
       rewriteStyleMediaUrls(target.style, baseUrl, () => ""),
     );
+    placeholderElements.add(target.element);
+  }
+  for (const element of placeholderElements) {
+    reservePendingMediaLayout(element);
   }
 }
 
@@ -982,7 +1346,8 @@ function applyLocalMediaSource({
   srcsetTargets: MediaSrcsetTarget[];
   styleTargets: MediaStyleTarget[];
   url: string;
-}): void {
+}): Set<Element> {
+  const changedElements = new Set<Element>();
   for (const target of srcTargets) {
     if (target.url !== url) continue;
     const outputAttribute = mediaOutputAttribute(target.attribute);
@@ -990,9 +1355,18 @@ function applyLocalMediaSource({
     if (target.attribute !== outputAttribute) {
       target.element.removeAttribute(target.attribute);
     }
+    clearPendingMediaLayout(target.element);
+    changedElements.add(target.element);
   }
 
   for (const target of srcsetTargets) {
+    if (
+      !target.candidates.some(
+        (candidate) => absoluteMediaUrl(candidate.source, baseUrl) === url,
+      )
+    ) {
+      continue;
+    }
     const candidates = target.candidates
       .map((candidate) => {
         const candidateUrl = absoluteMediaUrl(candidate.source, baseUrl);
@@ -1004,6 +1378,8 @@ function applyLocalMediaSource({
       })
       .filter((candidate) => candidate.source !== "");
     target.element.setAttribute("srcset", formatSrcset(candidates));
+    clearPendingMediaLayout(target.element);
+    changedElements.add(target.element);
   }
 
   for (const target of styleTargets) {
@@ -1016,7 +1392,10 @@ function applyLocalMediaSource({
         (styleUrl) => localSources.get(styleUrl) ?? "",
       ),
     );
+    clearPendingMediaLayout(target.element);
+    changedElements.add(target.element);
   }
+  return changedElements;
 }
 
 async function emitHtmlUpdate(
@@ -1024,6 +1403,64 @@ async function emitHtmlUpdate(
   template: HTMLTemplateElement,
 ): Promise<void> {
   await onHtmlUpdate?.(template.innerHTML);
+}
+
+function collectMediaElementPatches(
+  root: DocumentFragment,
+  changedElements: Set<Element>,
+): ChapterMediaElementPatch[] {
+  if (changedElements.size === 0) return [];
+  const elements = [...root.querySelectorAll<Element>(MEDIA_PATCH_SELECTOR)];
+  const patches: ChapterMediaElementPatch[] = [];
+  elements.forEach((element, index) => {
+    if (!changedElements.has(element)) return;
+    const attributes: Record<string, string> = {};
+    for (const attribute of MEDIA_PATCH_ATTRIBUTES) {
+      const value = element.getAttribute(attribute);
+      if (value?.trim()) attributes[attribute] = value;
+    }
+    if (Object.keys(attributes).length > 0) {
+      patches.push({ index, attributes });
+    }
+  });
+  return patches;
+}
+
+export function collectChapterMediaElementPatches(
+  html: string,
+): ChapterMediaElementPatch[] {
+  if (typeof document === "undefined") return [];
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return collectMediaElementPatches(
+    template.content,
+    collectAllMediaPatchElements(template.content),
+  );
+}
+
+function collectAllMediaPatchElements(root: DocumentFragment): Set<Element> {
+  const changedElements = new Set<Element>();
+  for (const element of root.querySelectorAll<Element>(MEDIA_PATCH_SELECTOR)) {
+    if (
+      MEDIA_PATCH_ATTRIBUTES.some(
+        (attribute) => (element.getAttribute(attribute) ?? "").trim() !== "",
+      )
+    ) {
+      changedElements.add(element);
+    }
+  }
+  return changedElements;
+}
+
+async function emitMediaPatchUpdate(
+  onMediaPatch: CacheChapterMediaOptions["onMediaPatch"],
+  template: HTMLTemplateElement,
+  changedElements: Set<Element>,
+): Promise<void> {
+  const patches = collectMediaElementPatches(template.content, changedElements);
+  if (patches.length > 0) {
+    await onMediaPatch?.(patches);
+  }
 }
 
 export async function cacheHtmlChapterMedia({
@@ -1038,6 +1475,7 @@ export async function cacheHtmlChapterMedia({
   novelName,
   novelPath,
   onHtmlUpdate,
+  onMediaPatch,
   onProgress,
   previousHtml,
   requestInit,
@@ -1086,8 +1524,9 @@ export async function cacheHtmlChapterMedia({
   const localSources = new Map<string, string>(reusableSources);
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
   blankCollectedMediaTargets(baseUrl, srcTargets, srcsetTargets, styleTargets);
+  const reusableChangedElements = new Set<Element>();
   for (const [url, src] of localSources) {
-    applyLocalMediaSource({
+    const changedElements = applyLocalMediaSource({
       baseUrl,
       localSources,
       src,
@@ -1096,8 +1535,12 @@ export async function cacheHtmlChapterMedia({
       styleTargets,
       url,
     });
+    for (const element of changedElements) {
+      reusableChangedElements.add(element);
+    }
   }
   await emitHtmlUpdate(onHtmlUpdate, template);
+  await emitMediaPatchUpdate(onMediaPatch, template, reusableChangedElements);
 
   for (let index = 0; index < urls.length; index += 1) {
     throwIfAborted(signal);
@@ -1125,15 +1568,13 @@ export async function cacheHtmlChapterMedia({
     throwIfAborted(signal);
     const body = bytesFromArrayBuffer(await response.arrayBuffer());
     throwIfAborted(signal);
+    const contentType = response.headers.get("content-type");
     const src = await storeChapterMedia({
       body,
       cacheKey,
       chapterId,
-      fileName: mediaFileName(
-        index,
-        url,
-        response.headers.get("content-type"),
-      ),
+      contentType,
+      fileName: mediaFileName(index, url, contentType),
       chapterName,
       chapterNumber,
       chapterPosition,
@@ -1141,9 +1582,10 @@ export async function cacheHtmlChapterMedia({
       novelName,
       novelPath,
       sourceId,
+      sourceUrl: url,
     });
     localSources.set(url, src);
-    applyLocalMediaSource({
+    const changedElements = applyLocalMediaSource({
       baseUrl,
       localSources,
       src,
@@ -1152,7 +1594,7 @@ export async function cacheHtmlChapterMedia({
       styleTargets,
       url,
     });
-    await emitHtmlUpdate(onHtmlUpdate, template);
+    await emitMediaPatchUpdate(onMediaPatch, template, changedElements);
     onProgress?.({ current: index + 1, total: urls.length });
   }
 
@@ -1168,12 +1610,133 @@ export async function cacheHtmlChapterMedia({
     sourceId,
   });
   clearMediaSourceMetadata(template.content);
+  await emitMediaPatchUpdate(
+    onMediaPatch,
+    template,
+    collectAllMediaPatchElements(template.content),
+  );
 
   return {
     cacheKey,
     html: template.innerHTML,
     mediaBytes,
   };
+}
+
+function chapterMediaInvokeArgs(
+  mediaSrc: string,
+  context?: ChapterMediaStorageContext,
+): Record<string, unknown> {
+  return {
+    mediaSrc,
+    ...(context?.chapterName ? { chapterName: context.chapterName } : {}),
+    ...(context?.chapterNumber ? { chapterNumber: context.chapterNumber } : {}),
+    ...(context?.chapterPosition
+      ? { chapterPosition: context.chapterPosition }
+      : {}),
+    ...(context?.novelId ? { novelId: context.novelId } : {}),
+    ...(context?.novelName ? { novelName: context.novelName } : {}),
+    ...(context?.novelPath ? { novelPath: context.novelPath } : {}),
+    ...(context?.sourceId ? { sourceId: context.sourceId } : {}),
+  };
+}
+
+export async function resolveLocalChapterMediaSrc(
+  src: string,
+  context?: ChapterMediaStorageContext,
+): Promise<string | null> {
+  if (!src.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return src;
+  if (!isTauriRuntime()) return src;
+  if (isAndroidRuntime()) {
+    const relativePath = await androidRelativePathFromLocalMediaSrc(
+      src,
+      context,
+    );
+    if (!relativePath) return null;
+    const directDataUrl = await readAndroidStorageDataUrl(relativePath);
+    if (directDataUrl) return directDataUrl;
+
+    const parsed = parseLocalChapterMediaSrc(src);
+    const archivePath = parsed
+      ? androidArchiveRelativePathFromMediaRelativePath(
+          relativePath,
+          parsed.cacheKey,
+        )
+      : null;
+    return archivePath && parsed
+      ? readAndroidStorageZipEntryDataUrl(archivePath, parsed.fileName)
+      : null;
+  }
+  try {
+    return await invoke<string>(
+      "chapter_media_data_url",
+      chapterMediaInvokeArgs(src, context),
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveLocalChapterMediaPatches(
+  patches: ChapterMediaElementPatch[],
+  context?: ChapterMediaStorageContext,
+): Promise<ChapterMediaElementPatch[]> {
+  return Promise.all(
+    patches.map(async (patch) => {
+      const attributes: Record<string, string> = {};
+      await Promise.all(
+        Object.entries(patch.attributes).map(async ([attribute, value]) => {
+          if (attribute === "srcset" && value.includes(LOCAL_MEDIA_SRC_PREFIX)) {
+            const resolvedCandidates = (
+              await Promise.all(
+                parseSrcset(value).map(async (candidate) => {
+                  const src = await resolveLocalChapterMediaSrc(
+                    candidate.source,
+                    context,
+                  );
+                  return src ? { ...candidate, source: src } : null;
+                }),
+              )
+            ).filter(
+              (candidate): candidate is SrcsetCandidate => candidate !== null,
+            );
+            if (resolvedCandidates.length > 0) {
+              attributes[attribute] = formatSrcset(resolvedCandidates);
+            }
+            return;
+          }
+          if (attribute === "style" && value.includes(LOCAL_MEDIA_SRC_PREFIX)) {
+            const localSources = localStyleMediaSources(value);
+            const resolvedSources = new Map<string, string | null>();
+            await Promise.all(
+              localSources.map(async (source) => {
+                if (!resolvedSources.has(source)) {
+                  resolvedSources.set(
+                    source,
+                    await resolveLocalChapterMediaSrc(source, context),
+                  );
+                }
+              }),
+            );
+            attributes[attribute] = value.replace(
+              STYLE_URL_PATTERN,
+              (match, doubleQuoted, singleQuoted, unquoted) => {
+                const source = String(
+                  doubleQuoted ?? singleQuoted ?? unquoted ?? "",
+                ).trim();
+                if (!source.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return match;
+                return `url("${resolvedSources.get(source) ?? ""}")`;
+              },
+            );
+            return;
+          }
+          const src = await resolveLocalChapterMediaSrc(value, context);
+          if (src) attributes[attribute] = src;
+        }),
+      );
+      return { ...patch, attributes };
+    }),
+  );
 }
 
 export async function resolveLocalChapterMedia(
@@ -1197,41 +1760,12 @@ export async function resolveLocalChapterMedia(
     ...template.content.querySelectorAll<Element>(MEDIA_STYLE_SELECTOR),
   ];
 
-  const resolveMediaSrc = async (src: string): Promise<string | null> => {
-    if (!src.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return src;
-    if (isAndroidRuntime()) {
-      const relativePath = await androidRelativePathFromLocalMediaSrc(
-        src,
-        context,
-      );
-      return relativePath ? readAndroidStorageDataUrl(relativePath) : null;
-    }
-    try {
-      return await invoke<string>("chapter_media_data_url", {
-        mediaSrc: src,
-        ...(context?.chapterName ? { chapterName: context.chapterName } : {}),
-        ...(context?.chapterNumber
-          ? { chapterNumber: context.chapterNumber }
-          : {}),
-        ...(context?.chapterPosition
-          ? { chapterPosition: context.chapterPosition }
-          : {}),
-        ...(context?.novelId ? { novelId: context.novelId } : {}),
-        ...(context?.novelName ? { novelName: context.novelName } : {}),
-        ...(context?.novelPath ? { novelPath: context.novelPath } : {}),
-        ...(context?.sourceId ? { sourceId: context.sourceId } : {}),
-      });
-    } catch {
-      return null;
-    }
-  };
-
   await Promise.all(
     mediaElements.map(async (element) => {
       for (const attribute of MEDIA_SRC_ATTRIBUTES) {
         const rawSource = element.getAttribute(attribute);
         if (!rawSource?.startsWith(LOCAL_MEDIA_SRC_PREFIX)) continue;
-        const src = await resolveMediaSrc(rawSource);
+        const src = await resolveLocalChapterMediaSrc(rawSource, context);
         const outputAttribute = mediaOutputAttribute(attribute);
         if (src) {
           element.setAttribute(outputAttribute, src);
@@ -1248,7 +1782,10 @@ export async function resolveLocalChapterMedia(
       const resolvedCandidates = (
         await Promise.all(
           parseSrcset(rawSrcset).map(async (candidate) => {
-            const src = await resolveMediaSrc(candidate.source);
+            const src = await resolveLocalChapterMediaSrc(
+              candidate.source,
+              context,
+            );
             return src ? { ...candidate, source: src } : null;
           }),
         )
@@ -1270,7 +1807,10 @@ export async function resolveLocalChapterMedia(
       await Promise.all(
         localSources.map(async (source) => {
           if (!resolvedSources.has(source)) {
-            resolvedSources.set(source, await resolveMediaSrc(source));
+            resolvedSources.set(
+              source,
+              await resolveLocalChapterMediaSrc(source, context),
+            );
           }
         }),
       );
@@ -1307,11 +1847,21 @@ export async function pruneChapterMedia(
         ),
         keepCacheKey,
       );
+      try {
+        await pruneAndroidChapterMediaManifest(resolvedContext, keepCacheKey);
+      } catch (error) {
+        console.warn("[chapter-media] manifest prune failed", error);
+      }
     }
     await deleteAndroidStorageChildrenExcept(
       `chapter-media/${chapterId}`,
       keepCacheKey,
     );
+    try {
+      await pruneAndroidChapterMediaManifest({ chapterId }, keepCacheKey);
+    } catch (error) {
+      console.warn("[chapter-media] manifest prune failed", error);
+    }
     return;
   }
   await invoke("chapter_media_prune", {

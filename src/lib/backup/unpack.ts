@@ -76,6 +76,17 @@ export async function unpackBackup(inputPath: string): Promise<BackupManifest> {
   const result = await invoke<UnpackedBackupRaw>("backup_unpack", {
     inputPath,
   });
+  return parseUnpackedBackup(result);
+}
+
+export async function unpackBackupBytes(body: number[]): Promise<BackupManifest> {
+  const result = await invoke<UnpackedBackupRaw>("backup_unpack_bytes", {
+    body,
+  });
+  return parseUnpackedBackup(result);
+}
+
+function parseUnpackedBackup(result: UnpackedBackupRaw): BackupManifest {
   const manifest = parseBackupManifest(result.manifest_json);
   const htmlById = new Map<number, string>();
   for (const entry of result.chapters) {

@@ -23,10 +23,20 @@ import {
   updateChapterProgress,
 } from "../db/queries/chapter";
 import { getNovelById } from "../db/queries/novel";
-import { resolveLocalChapterMedia } from "../lib/chapter-media";
+import {
+  collectChapterMediaElementPatches,
+  resolveLocalChapterMedia,
+  resolveLocalChapterMediaPatches,
+  type ChapterMediaElementPatch,
+} from "../lib/chapter-media";
 import { renderChapterContentAsHtml } from "../lib/chapter-content";
 import { pluginManager } from "../lib/plugins/manager";
-import { enqueueChapterDownload } from "../lib/tasks/chapter-download";
+import {
+  enqueueChapterDownload,
+  subscribeChapterDownloads,
+  subscribeChapterMediaPatches,
+  subscribeChapterPartialContentUpdates,
+} from "../lib/tasks/chapter-download";
 import { markUpdatesIndexDirty } from "../lib/updates/update-index-events";
 import { readerRoute } from "../router";
 import { useLibraryStore } from "../store/library";
@@ -42,9 +52,36 @@ const FINISHED_PROGRESS = 100;
 const FULL_PAGE_CHROME_HIDE_DELAY_MS = 5000;
 const READER_SEEKBAR_HIDE_DELAY_MS = 1000;
 
+type ReaderDocumentState = {
+  chapterId: number;
+  contentType: ChapterRow["contentType"];
+  html: string;
+};
+
+const READER_RENDERABLE_MEDIA_SELECTOR =
+  "img,video,audio,source,embed,track,object,iframe,link[rel~='preload']";
+
+function hasRenderableReaderHtml(html: string): boolean {
+  if (typeof document === "undefined") return html.trim().length > 0;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  if ((template.content.textContent ?? "").trim().length > 0) return true;
+  return Boolean(
+    template.content.querySelector(READER_RENDERABLE_MEDIA_SELECTOR),
+  );
+}
+
 function logReaderRouteInput(event: string, details: Record<string, unknown>) {
   if (!import.meta.env.DEV) return;
   console.warn("[reader-input:route]", event, details);
+}
+
+function logReaderMediaPipeline(
+  event: string,
+  details: Record<string, unknown>,
+) {
+  if (!import.meta.env.DEV) return;
+  console.warn("[reader-media:route]", event, details);
 }
 
 const SAMPLE_CHAPTER_HTML = `
@@ -411,6 +448,9 @@ export function ReaderPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const contentRef = useRef<ReaderContentHandle | null>(null);
+  const pendingMediaPatchesRef = useRef<
+    Map<number, ChapterMediaElementPatch[]>
+  >(new Map());
   const openedChapterRef = useRef<number | null>(null);
   const openRequestRef = useRef(0);
   const autoDownloadingChapterRef = useRef<number | null>(null);
@@ -426,11 +466,8 @@ export function ReaderPage() {
   const [autoDownloadingChapterId, setAutoDownloadingChapterId] = useState<
     number | null
   >(null);
-  const [readerDocument, setReaderDocument] = useState<{
-    chapterId: number;
-    contentType: ChapterRow["contentType"];
-    html: string;
-  } | null>(null);
+  const [readerDocument, setReaderDocument] =
+    useState<ReaderDocumentState | null>(null);
   const [initialProgressOverride, setInitialProgressOverride] = useState<{
     chapterId: number;
     progress: number;
@@ -457,11 +494,8 @@ export function ReaderPage() {
       };
     },
     enabled: chapterId > 0,
-    refetchInterval: (query) => {
-      const data = query.state.data as ChapterRow | null | undefined;
-      return data && !data.isDownloaded ? 500 : false;
-    },
   });
+  const chapter = chapterQuery.data;
   const currentNovelId = chapterQuery.data?.novelId ?? 0;
   const currentNovelQuery = useQuery({
     queryKey: ["novel", "detail", currentNovelId],
@@ -477,6 +511,122 @@ export function ReaderPage() {
         : null,
     [currentSourceId],
   );
+
+  useEffect(() => {
+    if (!chapter || chapter.contentType !== "html") return;
+    const unsubscribe = subscribeChapterPartialContentUpdates((event) => {
+      if (event.chapterId !== chapter.id) return;
+      logReaderMediaPipeline("partial-html", {
+        chapterId: chapter.id,
+        htmlLength: event.html.length,
+      });
+      setReaderDocument((current) =>
+        current?.chapterId === chapter.id
+          ? current
+          : {
+              chapterId: chapter.id,
+              contentType: chapter.contentType,
+              html: event.html,
+            },
+      );
+    });
+
+    return unsubscribe;
+  }, [chapter?.contentType, chapter?.id]);
+
+  useEffect(() => {
+    if (!chapter || chapter.contentType !== "html") return;
+    let cancelled = false;
+    const unsubscribe = subscribeChapterMediaPatches((event) => {
+      if (event.chapterId !== chapter.id) return;
+      void (async () => {
+        logReaderMediaPipeline("media-patch-raw", {
+          chapterId: chapter.id,
+          patchCount: event.patches.length,
+          firstIndexes: event.patches.slice(0, 8).map((patch) => patch.index),
+        });
+        const patches = await resolveLocalChapterMediaPatches(event.patches, {
+          chapterId: chapter.id,
+          chapterName: chapter.name,
+          chapterNumber: chapter.chapterNumber,
+          chapterPosition: chapter.position,
+          novelId: currentNovel?.id ?? chapter.novelId,
+          novelName: currentNovel?.name,
+          novelPath: currentNovel?.path,
+          sourceId: currentNovel?.pluginId,
+        });
+        logReaderMediaPipeline("media-patch-resolved", {
+          chapterId: chapter.id,
+          patchCount: patches.length,
+          firstIndexes: patches.slice(0, 8).map((patch) => patch.index),
+          hasDataUrl: patches.some((patch) =>
+            Object.values(patch.attributes).some((value) =>
+              value.startsWith("data:"),
+            ),
+          ),
+          hasBlank: patches.some((patch) =>
+            Object.values(patch.attributes).some((value) => value === ""),
+          ),
+        });
+        if (cancelled) return;
+        const content =
+          readerDocument?.chapterId === chapter.id ? contentRef.current : null;
+        if (content) {
+          content.patchMediaElements(patches);
+          return;
+        }
+        const pending = pendingMediaPatchesRef.current.get(chapter.id) ?? [];
+        pendingMediaPatchesRef.current.set(chapter.id, [
+          ...pending,
+          ...patches,
+        ]);
+        window.requestAnimationFrame(() => {
+          const queued = pendingMediaPatchesRef.current.get(chapter.id);
+          const nextContent = contentRef.current;
+          if (!queued?.length || !nextContent) return;
+          pendingMediaPatchesRef.current.delete(chapter.id);
+          nextContent.patchMediaElements(queued);
+        });
+      })();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [
+    chapter?.chapterNumber,
+    chapter?.contentType,
+    chapter?.id,
+    chapter?.name,
+    chapter?.novelId,
+    chapter?.position,
+    currentNovel?.id,
+    currentNovel?.name,
+    currentNovel?.path,
+    currentNovel?.pluginId,
+    readerDocument?.chapterId,
+  ]);
+
+  useEffect(() => {
+    if (chapterId <= 0) return;
+    return subscribeChapterDownloads((event) => {
+      if (event.job.id !== chapterId) return;
+      if (event.status.kind === "done") {
+        void queryClient.invalidateQueries({
+          queryKey: chapterDetailKey(chapterId),
+        });
+        if (event.job.novelId) {
+          void queryClient.invalidateQueries({
+            queryKey: ["chapter", "list", event.job.novelId],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["novel", "detail", event.job.novelId, "chapters"],
+          });
+        }
+      }
+    });
+  }, [chapterId, queryClient]);
+
   const incognitoMode = useLibraryStore((state) => state.incognitoMode);
   const globalReaderGeneral = useReaderStore((state) => state.general);
   const globalReaderAppearance = useReaderStore((state) => state.appearance);
@@ -637,8 +787,6 @@ export function ReaderPage() {
     queryFn: () => listChaptersByNovel(currentNovelId),
     enabled: currentNovelId > 0,
   });
-  const chapter = chapterQuery.data;
-
   const progressMutation = useMutation({
     mutationFn: (progress: number) =>
       enqueueReaderWrite(() =>
@@ -948,10 +1096,21 @@ export function ReaderPage() {
 
   useEffect(() => {
     if (!chapter || !chapterContentHtml) {
-      setReaderDocument(null);
+      setReaderDocument((current) =>
+        current?.chapterId === chapterId ? current : null,
+      );
       return;
     }
     setReaderDocument((current) => {
+      if (
+        chapter.contentType === "html" &&
+        !hasRenderableReaderHtml(chapterContentHtml)
+      ) {
+        return current?.chapterId === chapter.id ? current : null;
+      }
+      if (chapter.contentType === "html" && current?.chapterId === chapter.id) {
+        return current;
+      }
       if (!current || current.chapterId !== chapter.id) {
         return {
           chapterId: chapter.id,
@@ -959,7 +1118,9 @@ export function ReaderPage() {
           html: chapterContentHtml,
         };
       }
-      if (chapter.contentType === "html") return current;
+      if (chapter.contentType === "html" && !chapter.isDownloaded) {
+        return current;
+      }
       if (
         current.contentType === chapter.contentType &&
         current.html === chapterContentHtml
@@ -972,7 +1133,13 @@ export function ReaderPage() {
         html: chapterContentHtml,
       };
     });
-  }, [chapter?.id, chapter?.contentType, chapterContentHtml]);
+  }, [
+    chapter?.id,
+    chapter?.contentType,
+    chapter?.isDownloaded,
+    chapterContentHtml,
+    chapterId,
+  ]);
 
   useEffect(() => {
     if (
@@ -980,35 +1147,106 @@ export function ReaderPage() {
       chapter.contentType !== "html" ||
       !chapterContentHtml ||
       !readerDocument ||
-      readerDocument.chapterId !== chapter.id ||
-      readerDocument.html === chapterContentHtml
+      readerDocument.chapterId !== chapter.id
     ) {
       return;
     }
-    contentRef.current?.patchMediaSources(chapterContentHtml);
-  }, [chapter?.id, chapter?.contentType, chapterContentHtml, readerDocument]);
+    const rawPatches = collectChapterMediaElementPatches(chapterContentHtml);
+    if (rawPatches.length === 0) return;
+    logReaderMediaPipeline("query-html-patch-raw", {
+      chapterId: chapter.id,
+      patchCount: rawPatches.length,
+      firstIndexes: rawPatches.slice(0, 8).map((patch) => patch.index),
+    });
+    let cancelled = false;
+    void (async () => {
+      const patches = await resolveLocalChapterMediaPatches(rawPatches, {
+        chapterId: chapter.id,
+        chapterName: chapter.name,
+        chapterNumber: chapter.chapterNumber,
+        chapterPosition: chapter.position,
+        novelId: currentNovel?.id ?? chapter.novelId,
+        novelName: currentNovel?.name,
+        novelPath: currentNovel?.path,
+        sourceId: currentNovel?.pluginId,
+      });
+      logReaderMediaPipeline("query-html-patch-resolved", {
+        chapterId: chapter.id,
+        patchCount: patches.length,
+        firstIndexes: patches.slice(0, 8).map((patch) => patch.index),
+        hasDataUrl: patches.some((patch) =>
+          Object.values(patch.attributes).some((value) =>
+            value.startsWith("data:"),
+          ),
+        ),
+        hasBlank: patches.some((patch) =>
+          Object.values(patch.attributes).some((value) => value === ""),
+        ),
+      });
+      if (!cancelled) {
+        contentRef.current?.patchMediaElements(patches);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    chapter?.chapterNumber,
+    chapter?.contentType,
+    chapter?.id,
+    chapter?.name,
+    chapter?.novelId,
+    chapter?.position,
+    chapterContentHtml,
+    currentNovel?.id,
+    currentNovel?.name,
+    currentNovel?.path,
+    currentNovel?.pluginId,
+    readerDocument?.chapterId,
+  ]);
 
+  const activeReaderDocument =
+    readerDocument && readerDocument.chapterId === chapterId
+      ? readerDocument
+      : null;
   const activeReaderHtml =
-    readerDocument && readerDocument.chapterId === chapter?.id
-      ? readerDocument.html
+    activeReaderDocument
+      ? activeReaderDocument.html
       : chapterContentHtml;
+  const activeContentType =
+    chapter?.contentType ?? activeReaderDocument?.contentType;
+  const activeChapterId = chapter?.id ?? activeReaderDocument?.chapterId;
+
+  useEffect(() => {
+    if (!activeReaderDocument) return;
+    const patches = pendingMediaPatchesRef.current.get(
+      activeReaderDocument.chapterId,
+    );
+    if (!patches?.length) return;
+    pendingMediaPatchesRef.current.delete(activeReaderDocument.chapterId);
+    window.requestAnimationFrame(() => {
+      contentRef.current?.patchMediaElements(patches);
+    });
+  }, [activeReaderDocument?.chapterId, activeReaderDocument?.html]);
+
   const hasChapterContent = Boolean(activeReaderHtml);
   const content = activeReaderHtml ?? SAMPLE_CHAPTER_HTML;
-  const isPdfChapter = hasChapterContent && chapter?.contentType === "pdf";
+  const isPdfChapter = hasChapterContent && activeContentType === "pdf";
   const progress = chapter?.progress ?? 0;
   const activeInitialProgressOverride =
     initialProgressOverride &&
-    initialProgressOverride.chapterId === chapter?.id
+    initialProgressOverride.chapterId === activeChapterId
       ? initialProgressOverride.progress
       : null;
   const readerProgress = activeInitialProgressOverride ?? progress;
   const chapterNovelId = chapter?.novelId;
   const readerStateVisible =
     chapterId > 0 &&
+    !hasChapterContent &&
     (chapterQuery.isLoading ||
       Boolean(chapterQuery.error) ||
       chapterQuery.data === null ||
-      Boolean(chapter && !hasChapterContent));
+      Boolean(chapter));
   const readerChromeAutoHide = fullPageReader && !readerStateVisible;
   const readerChromeVisible = !readerChromeAutoHide || fullPageChromeVisible;
   const readerSeekbarEnabled =
@@ -1102,7 +1340,7 @@ export function ReaderPage() {
   );
 
   const readerContent =
-    chapterId > 0 && chapterQuery.isLoading ? (
+    chapterId > 0 && !hasChapterContent && chapterQuery.isLoading ? (
       <Box className="lnr-reader-state-frame">
         <StateView
           color="blue"
@@ -1110,7 +1348,7 @@ export function ReaderPage() {
           message={t("reader.loadingContent")}
         />
       </Box>
-    ) : chapterId > 0 && chapterQuery.error ? (
+    ) : chapterId > 0 && !hasChapterContent && chapterQuery.error ? (
       <Box className="lnr-reader-state-frame">
         <StateView
           color="red"
@@ -1122,7 +1360,7 @@ export function ReaderPage() {
           }
         />
       </Box>
-    ) : chapterId > 0 && chapterQuery.data === null ? (
+    ) : chapterId > 0 && !hasChapterContent && chapterQuery.data === null ? (
       <Box className="lnr-reader-state-frame">
         <StateView
           color="orange"
@@ -1148,7 +1386,7 @@ export function ReaderPage() {
       </Box>
     ) : isPdfChapter ? (
       <PdfReaderContent
-        key={chapter?.id ?? "sample"}
+        key={activeChapterId ?? "sample"}
         ref={contentRef}
         appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}
@@ -1167,7 +1405,7 @@ export function ReaderPage() {
       />
     ) : (
       <ReaderContent
-        key={chapter?.id ?? "sample"}
+        key={activeChapterId ?? "sample"}
         ref={contentRef}
         appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}

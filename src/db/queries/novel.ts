@@ -44,8 +44,8 @@ export interface LibraryFilter {
 }
 
 interface RawLibraryNovel extends Omit<LibraryNovel, "inLibrary" | "isLocal"> {
-  inLibrary: number;
-  isLocal: number;
+  inLibrary: unknown;
+  isLocal: unknown;
 }
 
 export interface LibraryNovelRefreshTarget {
@@ -59,7 +59,7 @@ export interface LibraryNovelRefreshTarget {
 
 interface RawLibraryNovelRefreshTarget
   extends Omit<LibraryNovelRefreshTarget, "isLocal"> {
-  isLocal: number;
+  isLocal: unknown;
 }
 
 const LIBRARY_SORT_SQL: Record<LibrarySortOrder, string> = {
@@ -143,11 +143,11 @@ export async function listLibraryNovels(
 
   const rows = await db.select<RawLibraryNovel[]>(sql, params);
   return rows.map((row) => {
-    const isLocal = !!row.isLocal;
+    const isLocal = isLocalNovel(row.pluginId, row.isLocal);
     return {
       ...row,
       cover: isLocal ? displayLocalCover(row.cover) : row.cover,
-      inLibrary: !!row.inLibrary,
+      inLibrary: sqliteBoolean(row.inLibrary),
       isLocal,
     };
   });
@@ -187,7 +187,7 @@ export async function listLibraryNovelRefreshTargets(
 
   return rows.map((row) => ({
     ...row,
-    isLocal: !!row.isLocal,
+    isLocal: isLocalNovel(row.pluginId, row.isLocal),
   }));
 }
 
@@ -216,8 +216,8 @@ export interface NovelDetailRecord {
 }
 
 interface RawNovelDetail extends Omit<NovelDetailRecord, "inLibrary" | "isLocal"> {
-  inLibrary: number;
-  isLocal: number;
+  inLibrary: unknown;
+  isLocal: unknown;
 }
 
 const SELECT_NOVEL_DETAIL_FIELDS = `
@@ -242,11 +242,11 @@ const SELECT_NOVEL_DETAIL_FIELDS = `
 `;
 
 function mapNovelDetail(row: RawNovelDetail): NovelDetailRecord {
-  const isLocal = !!row.isLocal;
+  const isLocal = isLocalNovel(row.pluginId, row.isLocal);
   return {
     ...row,
     cover: isLocal ? displayLocalCover(row.cover) : row.cover,
-    inLibrary: !!row.inLibrary,
+    inLibrary: sqliteBoolean(row.inLibrary),
     isLocal,
   };
 }
@@ -259,6 +259,21 @@ export async function getNovelById(
     `${SELECT_NOVEL_DETAIL_FIELDS}
      WHERE id = $1`,
     [id],
+  );
+  const row = rows[0];
+  return row ? mapNovelDetail(row) : null;
+}
+
+export async function findNovelBySource(
+  pluginId: string,
+  path: string,
+): Promise<NovelDetailRecord | null> {
+  const db = await getDb();
+  const rows = await db.select<RawNovelDetail[]>(
+    `${SELECT_NOVEL_DETAIL_FIELDS}
+     WHERE plugin_id = $1
+       AND path = $2`,
+    [pluginId, path],
   );
   const row = rows[0];
   return row ? mapNovelDetail(row) : null;
@@ -398,6 +413,19 @@ function nullableLocalCover(value: string | null | undefined): string | null {
 
 function displayLocalCover(value: string | null): string | null {
   return isLocalCoverSource(value) ? value : null;
+}
+
+function sqliteBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true";
+  }
+  return false;
+}
+
+function isLocalNovel(pluginId: string, value: unknown): boolean {
+  return pluginId === LOCAL_PLUGIN_ID && sqliteBoolean(value);
 }
 
 export async function upsertLocalNovelMetadata(

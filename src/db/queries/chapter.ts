@@ -30,6 +30,20 @@ export interface ChapterRow {
 
 export type ChapterListRow = Omit<ChapterRow, "content">;
 
+type RawChapterListRow = Omit<
+  ChapterListRow,
+  "bookmark" | "unread" | "isDownloaded" | "contentType"
+> & {
+  bookmark: unknown;
+  unread: unknown;
+  isDownloaded: unknown;
+  contentType: string | null;
+};
+
+type RawChapterRow = RawChapterListRow & {
+  content: string | null;
+};
+
 const CHAPTER_LIST_SELECT_FIELDS = `
   id,
   novel_id       AS novelId,
@@ -61,30 +75,61 @@ function getUtf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
+function sqliteBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0" || normalized === "") {
+      return false;
+    }
+  }
+  return Boolean(value);
+}
+
+function normalizeChapterListRow(row: RawChapterListRow): ChapterListRow {
+  return {
+    ...row,
+    bookmark: sqliteBoolean(row.bookmark),
+    unread: sqliteBoolean(row.unread),
+    isDownloaded: sqliteBoolean(row.isDownloaded),
+    contentType: normalizeChapterContentType(row.contentType),
+  };
+}
+
+function normalizeChapterRow(row: RawChapterRow): ChapterRow {
+  return {
+    ...normalizeChapterListRow(row),
+    content: row.content,
+  };
+}
+
 export async function listChaptersByNovel(
   novelId: number,
 ): Promise<ChapterListRow[]> {
   const db = await getDb();
-  return db.select<ChapterListRow[]>(
+  const rows = await db.select<RawChapterListRow[]>(
     `SELECT ${CHAPTER_LIST_SELECT_FIELDS}
      FROM chapter
      WHERE novel_id = $1
      ORDER BY position`,
     [novelId],
   );
+  return rows.map(normalizeChapterListRow);
 }
 
 export async function getChapterById(
   chapterId: number,
 ): Promise<ChapterRow | null> {
   const db = await getDb();
-  const rows = await db.select<ChapterRow[]>(
+  const rows = await db.select<RawChapterRow[]>(
     `SELECT ${CHAPTER_DETAIL_SELECT_FIELDS}
      FROM chapter
      WHERE id = $1`,
     [chapterId],
   );
-  return rows[0] ?? null;
+  return rows[0] ? normalizeChapterRow(rows[0]) : null;
 }
 
 export interface InsertChapterInput {
@@ -524,6 +569,6 @@ export async function getAdjacentChapter(
          WHERE novel_id = $1 AND position < $2
          ORDER BY position DESC
          LIMIT 1`;
-  const rows = await db.select<ChapterListRow[]>(sql, [novelId, position]);
-  return rows[0] ?? null;
+  const rows = await db.select<RawChapterListRow[]>(sql, [novelId, position]);
+  return rows[0] ? normalizeChapterListRow(rows[0]) : null;
 }

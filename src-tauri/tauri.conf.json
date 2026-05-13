@@ -25,7 +25,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/chapter-media/**"]
+        "scope": ["$APPDATA/**", "$DOWNLOAD/**"]
       }
     }
   },

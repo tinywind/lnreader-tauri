@@ -342,33 +342,80 @@ describe("getNovelById", () => {
 
   it("coerces in_library and is_local to strict booleans", async () => {
     const db = stubDb();
-    db.select.mockResolvedValueOnce([
-      {
-        id: 5,
-        pluginId: "demo",
-        path: "/n/5",
-        name: "Hero",
-        cover: null,
-        summary: null,
-        author: null,
-        artist: null,
-        status: null,
-        genres: null,
-        inLibrary: 1,
-        isLocal: 0,
-        createdAt: 1_700_000_000,
-        updatedAt: 1_700_000_000,
-        libraryAddedAt: 1_700_000_000,
-        lastReadAt: null,
-      },
-    ]);
+    db.select
+      .mockResolvedValueOnce([
+        {
+          id: 5,
+          pluginId: "demo",
+          path: "/n/5",
+          name: "Hero",
+          cover: null,
+          summary: null,
+          author: null,
+          artist: null,
+          status: null,
+          genres: null,
+          inLibrary: 1,
+          isLocal: 0,
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_000,
+          libraryAddedAt: 1_700_000_000,
+          lastReadAt: null,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 6,
+          pluginId: "demo",
+          path: "/n/6",
+          name: "String Flag Source",
+          cover: null,
+          summary: null,
+          author: null,
+          artist: null,
+          status: null,
+          genres: null,
+          inLibrary: "true",
+          isLocal: "true",
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_000,
+          libraryAddedAt: 1_700_000_000,
+          lastReadAt: null,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 7,
+          pluginId: "local",
+          path: "local:manual:sample",
+          name: "String Flag Local",
+          cover: null,
+          summary: null,
+          author: null,
+          artist: null,
+          status: null,
+          genres: null,
+          inLibrary: "true",
+          isLocal: "true",
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_000,
+          libraryAddedAt: 1_700_000_000,
+          lastReadAt: null,
+        },
+      ]);
 
     const result = await getNovelById(5);
+    const sourceResult = await getNovelById(6);
+    const localResult = await getNovelById(7);
 
     expect(result?.inLibrary).toBe(true);
     expect(result?.isLocal).toBe(false);
     expect(result?.id).toBe(5);
     expect(result?.name).toBe("Hero");
+    expect(sourceResult?.inLibrary).toBe(true);
+    expect(sourceResult?.isLocal).toBe(false);
+    expect(localResult?.inLibrary).toBe(true);
+    expect(localResult?.isLocal).toBe(true);
   });
 });
 

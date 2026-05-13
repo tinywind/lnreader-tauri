@@ -21,11 +21,10 @@ import {
 } from "./unpack";
 
 /**
- * SQLite stores booleans as 0/1 integers; raw `select` returns those
- * verbatim. The format-side type guards (`isNovel`, `isChapter`, ...)
- * require strict booleans, so gather coerces every flag column on
- * the way out. Insert callers pass real `boolean` values back in;
- * `tauri-plugin-sql` handles the 0/1 round trip.
+ * SQLite stores booleans as 0/1 integers; some older app paths also wrote
+ * string boolean values. The format-side type guards (`isNovel`, `isChapter`,
+ * ...) require strict booleans, so gather coerces every flag column on the way
+ * out.
  */
 
 interface RawNovelRow {
@@ -39,12 +38,27 @@ interface RawNovelRow {
   artist: string | null;
   status: string | null;
   genres: string | null;
-  inLibrary: number;
-  isLocal: number;
+  inLibrary: unknown;
+  isLocal: unknown;
   createdAt: number;
   updatedAt: number;
   libraryAddedAt: number | null;
   lastReadAt: number | null;
+}
+
+const LOCAL_PLUGIN_ID = "local";
+
+function sqliteBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true";
+  }
+  return false;
+}
+
+function isLocalNovel(pluginId: string, value: unknown): boolean {
+  return pluginId === LOCAL_PLUGIN_ID && sqliteBoolean(value);
 }
 
 interface RawChapterRow {
@@ -55,10 +69,10 @@ interface RawChapterRow {
   chapterNumber: string | null;
   position: number;
   page: string;
-  bookmark: number;
-  unread: number;
+  bookmark: unknown;
+  unread: unknown;
   progress: number;
-  isDownloaded: number;
+  isDownloaded: unknown;
   contentType: string;
   content: string | null;
   mediaBytes: number;
@@ -241,8 +255,8 @@ function toNovel(row: RawNovelRow): BackupNovel {
     artist: row.artist,
     status: row.status,
     genres: row.genres,
-    inLibrary: !!row.inLibrary,
-    isLocal: !!row.isLocal,
+    inLibrary: sqliteBoolean(row.inLibrary),
+    isLocal: isLocalNovel(row.pluginId, row.isLocal),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     libraryAddedAt: row.libraryAddedAt,
@@ -259,10 +273,10 @@ function toChapter(row: RawChapterRow): BackupChapter {
     chapterNumber: row.chapterNumber,
     position: row.position,
     page: row.page,
-    bookmark: !!row.bookmark,
-    unread: !!row.unread,
+    bookmark: sqliteBoolean(row.bookmark),
+    unread: sqliteBoolean(row.unread),
     progress: row.progress,
-    isDownloaded: !!row.isDownloaded,
+    isDownloaded: sqliteBoolean(row.isDownloaded),
     contentType: normalizeChapterContentType(row.contentType),
     content: row.content,
     mediaBytes: row.mediaBytes,

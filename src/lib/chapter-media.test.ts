@@ -34,6 +34,47 @@ function installTemplateDocument(): void {
       }
 
       let $ = load("", null, false);
+      let wrappers = new Map<object, Element>();
+      const asCheerioInput = (node: object): Parameters<typeof $>[0] =>
+        node as Parameters<typeof $>[0];
+      const wrap = (node: object | undefined): Element | null => {
+        if (!node) return null;
+        const existing = wrappers.get(node);
+        if (existing) return existing;
+        const element = {
+          get tagName() {
+            return (
+              (node as { name?: string; tagName?: string }).tagName ??
+              (node as { name?: string }).name ??
+              ""
+            );
+          },
+          get parentElement() {
+            return wrap((node as { parent?: object }).parent);
+          },
+          getAttribute(name: string) {
+            return $(asCheerioInput(node)).attr(name) ?? null;
+          },
+          hasAttribute(name: string) {
+            return $(asCheerioInput(node)).attr(name) !== undefined;
+          },
+          querySelector(selector: string) {
+            return wrap(
+              $(asCheerioInput(node)).find(selector).get(0) as
+                | object
+                | undefined,
+            );
+          },
+          removeAttribute(name: string) {
+            $(asCheerioInput(node)).removeAttr(name);
+          },
+          setAttribute(name: string, value: string) {
+            $(asCheerioInput(node)).attr(name, value);
+          },
+        } as Element;
+        wrappers.set(node, element);
+        return element;
+      };
 
       return {
         get innerHTML() {
@@ -41,22 +82,14 @@ function installTemplateDocument(): void {
         },
         set innerHTML(value: string) {
           $ = load(value, null, false);
+          wrappers = new Map<object, Element>();
         },
         content: {
           querySelectorAll(selector: string) {
             return $(selector)
               .toArray()
-              .map((node) => ({
-                getAttribute(name: string) {
-                  return $(node).attr(name) ?? null;
-                },
-                removeAttribute(name: string) {
-                  $(node).removeAttr(name);
-                },
-                setAttribute(name: string, value: string) {
-                  $(node).attr(name, value);
-                },
-              }));
+              .map((node) => wrap(node))
+              .filter((node): node is Element => node !== null);
           },
         },
       };
@@ -147,10 +180,11 @@ describe("cacheHtmlChapterMedia", () => {
         chapterName: "Opening",
         chapterNumber: "1",
         chapterPosition: 1,
-        fileName: "page-1.png",
+        fileName: expect.stringMatching(/^0001-page-[0-9a-f]{8}\.png$/),
         novelId: 9,
         novelName: "Sample Novel",
         novelPath: "/novel/sample",
+        sourceUrl: "https://source.test/novel/images/page.png",
         sourceId: "demo",
       }),
     ]);
@@ -162,10 +196,11 @@ describe("cacheHtmlChapterMedia", () => {
         chapterName: "Opening",
         chapterNumber: "1",
         chapterPosition: 1,
-        fileName: "cover-2.webp",
+        fileName: expect.stringMatching(/^0002-cover-[0-9a-f]{8}\.webp$/),
         novelId: 9,
         novelName: "Sample Novel",
         novelPath: "/novel/sample",
+        sourceUrl: "https://source.test/covers/cover.webp",
         sourceId: "demo",
       }),
     ]);
@@ -300,6 +335,9 @@ describe("cacheHtmlChapterMedia", () => {
       return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
     });
     const htmlUpdates: string[] = [];
+    const mediaPatches: Array<
+      Array<{ attributes: Record<string, string>; index: number }>
+    > = [];
 
     await cacheHtmlChapterMedia({
       baseUrl: "https://source.test/topic/1",
@@ -308,13 +346,36 @@ describe("cacheHtmlChapterMedia", () => {
       onHtmlUpdate: (html) => {
         htmlUpdates.push(html);
       },
+      onMediaPatch: (patches) => {
+        mediaPatches.push(patches);
+      },
     });
 
-    expect(htmlUpdates).toHaveLength(3);
+    expect(htmlUpdates).toHaveLength(1);
     expect(htmlUpdates[0]).toContain('src=""');
-    expect(htmlUpdates[1]).toContain("norea-media://chapter/7/");
-    expect(htmlUpdates[2]).toContain("page-1.png");
-    expect(htmlUpdates[2]).toContain("clip-2.png");
+    expect(htmlUpdates[0]).not.toContain("norea-media://chapter/7/");
+    expect(mediaPatches).toHaveLength(3);
+    expect(mediaPatches[0]).toEqual([
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          src: expect.stringMatching(
+            /^norea-media:\/\/chapter\/7\/[^/]+\/0001-page-[0-9a-f]{8}\.png$/,
+          ),
+        }),
+        index: 0,
+      }),
+    ]);
+    expect(mediaPatches[1]).toEqual([
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          src: expect.stringMatching(
+            /^norea-media:\/\/chapter\/7\/[^/]+\/0002-clip-[0-9a-f]{8}\.png$/,
+          ),
+        }),
+        index: 1,
+      }),
+    ]);
+    expect(mediaPatches[2]).toHaveLength(2);
   });
 
   it("reuses stored local media when resuming a partial HTML download", async () => {
@@ -359,7 +420,8 @@ describe("cacheHtmlChapterMedia", () => {
       "chapter_media_store",
       expect.objectContaining({
         cacheKey: "old",
-        fileName: "page-2-2.png",
+        fileName: expect.stringMatching(/^0002-page-2-[0-9a-f]{8}\.png$/),
+        sourceUrl: "https://source.test/page-2.png",
       }),
     );
     expect(invokeMock).toHaveBeenCalledWith("chapter_media_archive_cache", {
@@ -369,7 +431,9 @@ describe("cacheHtmlChapterMedia", () => {
     expect(result.cacheKey).toBe("old");
     expect(result.mediaBytes).toBe(5);
     expect(result.html).toContain("norea-media://chapter/42/old/page-1.png");
-    expect(result.html).toContain("norea-media://chapter/42/old/page-2-2.png");
+    expect(result.html).toMatch(
+      /norea-media:\/\/chapter\/42\/old\/0002-page-2-[0-9a-f]{8}\.png/,
+    );
     expect(result.html).not.toContain("data-norea-media-source-url");
   });
 
@@ -411,7 +475,8 @@ describe("cacheHtmlChapterMedia", () => {
     expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_store",
       expect.objectContaining({
-        fileName: "page-1-1.png",
+        fileName: expect.stringMatching(/^0001-page-1-[0-9a-f]{8}\.png$/),
+        sourceUrl: "https://source.test/page-1.png",
       }),
     );
     expect(result.cacheKey).not.toBe("old");

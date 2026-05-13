@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 interface AndroidStorageBridge {
+  archiveDirectory: (
+    rootUri: string,
+    sourceRelativePath: string,
+    archiveRelativePath: string,
+  ) => string;
   deleteChildrenExcept: (
     rootUri: string,
     relativePath: string,
@@ -11,14 +16,35 @@ interface AndroidStorageBridge {
   pathSize: (rootUri: string, relativePath: string) => string;
   pickMediaStorageRoot: (requestId: string) => void;
   readBase64: (rootUri: string, relativePath: string) => string;
+  readContentUriBase64: (uri: string) => string;
   readText: (rootUri: string, relativePath: string) => string;
+  readZipEntryBase64: (
+    rootUri: string,
+    archiveRelativePath: string,
+    entryName: string,
+  ) => string;
+  writeContentUriFile: (
+    uri: string,
+    inputPath: string,
+    mimeType: string,
+  ) => string;
   writeBytes: (
     rootUri: string,
     relativePath: string,
     base64: string,
     mimeType: string,
   ) => string;
+  writeContentUriBytes: (
+    uri: string,
+    base64: string,
+    mimeType: string,
+  ) => string;
   writeText: (rootUri: string, relativePath: string, text: string) => string;
+  zipEntryExists: (
+    rootUri: string,
+    archiveRelativePath: string,
+    entryName: string,
+  ) => string;
 }
 
 interface AndroidStoragePickPayload {
@@ -46,13 +72,19 @@ interface AndroidStorageSizeResponse extends AndroidStorageResponse {
   bytes?: number;
 }
 
+interface AndroidStorageExistsResponse extends AndroidStorageResponse {
+  exists?: boolean;
+}
+
 const ANDROID_STORAGE_NOT_SELECTED =
   "Android media storage folder has not been selected.";
+const CONTENTS_NOMEDIA_PATH = "contents/.nomedia";
 
 const pickResolvers = new Map<
   string,
   (payload: AndroidStoragePickPayload) => void
 >();
+const nomediaRoots = new Set<string>();
 
 declare global {
   interface Window {
@@ -90,10 +122,32 @@ function bytesToBase64(bytes: number[]): string {
   return btoa(binary);
 }
 
+function base64ToBytes(base64: string): number[] {
+  const binary = atob(base64);
+  const bytes = new Array<number>(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 function makeRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 10)}`;
+}
+
+async function ensureAndroidStorageNomedia(root: string): Promise<void> {
+  if (nomediaRoots.has(root)) return;
+  parseStorageResponse(
+    androidStorageBridge().writeBytes(
+      root,
+      CONTENTS_NOMEDIA_PATH,
+      "",
+      "application/octet-stream",
+    ),
+  );
+  nomediaRoots.add(root);
 }
 
 async function androidStorageRoot(): Promise<string> {
@@ -106,6 +160,7 @@ async function androidStorageRoot(): Promise<string> {
   if (!root.startsWith("content://")) {
     throw new Error("Android media storage folder must be selected again.");
   }
+  await ensureAndroidStorageNomedia(root);
   return root;
 }
 
@@ -137,9 +192,11 @@ export async function selectAndroidStorageRoot(): Promise<string | null> {
   if (!payload.ok || !payload.root) {
     throw new Error(payload.error ?? "Android storage folder was not selected.");
   }
-  return invoke<string>("chapter_media_set_storage_root", {
+  const root = await invoke<string>("chapter_media_set_storage_root", {
     root: payload.root,
   });
+  await ensureAndroidStorageNomedia(root);
+  return root;
 }
 
 export async function writeAndroidStorageBytes(
@@ -158,6 +215,37 @@ export async function writeAndroidStorageBytes(
   );
 }
 
+export async function writeAndroidContentUriBytes(
+  uri: string,
+  body: number[],
+  mimeType: string,
+): Promise<void> {
+  parseStorageResponse(
+    androidStorageBridge().writeContentUriBytes(
+      uri,
+      bytesToBase64(body),
+      mimeType,
+    ),
+  );
+}
+
+export async function writeAndroidContentUriFile(
+  uri: string,
+  inputPath: string,
+  mimeType: string,
+): Promise<void> {
+  parseStorageResponse(
+    androidStorageBridge().writeContentUriFile(uri, inputPath, mimeType),
+  );
+}
+
+export async function readAndroidContentUriBytes(uri: string): Promise<number[]> {
+  const response = parseStorageResponse<AndroidStorageBase64Response>(
+    androidStorageBridge().readContentUriBase64(uri),
+  );
+  return base64ToBytes(response.base64 ?? "");
+}
+
 export async function writeAndroidStorageText(
   relativePath: string,
   text: string,
@@ -166,6 +254,21 @@ export async function writeAndroidStorageText(
   parseStorageResponse(
     androidStorageBridge().writeText(root, relativePath, text),
   );
+}
+
+export async function archiveAndroidStorageDirectory(
+  sourceRelativePath: string,
+  archiveRelativePath: string,
+): Promise<number> {
+  const root = await androidStorageRoot();
+  const response = parseStorageResponse<AndroidStorageSizeResponse>(
+    androidStorageBridge().archiveDirectory(
+      root,
+      sourceRelativePath,
+      archiveRelativePath,
+    ),
+  );
+  return response.bytes ?? 0;
 }
 
 export async function readAndroidStorageText(
@@ -201,6 +304,29 @@ export async function readAndroidStorageDataUrl(
   }
 }
 
+export async function readAndroidStorageZipEntryDataUrl(
+  archiveRelativePath: string,
+  entryName: string,
+): Promise<string | null> {
+  const root = await androidStorageRoot();
+  try {
+    const response = parseStorageResponse<AndroidStorageBase64Response>(
+      androidStorageBridge().readZipEntryBase64(
+        root,
+        archiveRelativePath,
+        entryName,
+      ),
+    );
+    if (!response.base64) return null;
+    return `data:${response.mimeType ?? "application/octet-stream"};base64,${
+      response.base64
+    }`;
+  } catch (error) {
+    if (error instanceof Error && /not found/i.test(error.message)) return null;
+    throw error;
+  }
+}
+
 export async function androidStoragePathSize(
   relativePath: string,
 ): Promise<number> {
@@ -209,6 +335,17 @@ export async function androidStoragePathSize(
     androidStorageBridge().pathSize(root, relativePath),
   );
   return response.bytes ?? 0;
+}
+
+export async function androidStorageZipEntryExists(
+  archiveRelativePath: string,
+  entryName: string,
+): Promise<boolean> {
+  const root = await androidStorageRoot();
+  const response = parseStorageResponse<AndroidStorageExistsResponse>(
+    androidStorageBridge().zipEntryExists(root, archiveRelativePath, entryName),
+  );
+  return response.exists ?? false;
 }
 
 export async function deleteAndroidStoragePath(
@@ -231,4 +368,6 @@ export async function deleteAndroidStorageChildrenExcept(
 export async function clearAndroidStorageRoot(): Promise<void> {
   const root = await androidStorageRoot();
   parseStorageResponse(androidStorageBridge().deleteRootChildren(root));
+  nomediaRoots.delete(root);
+  await ensureAndroidStorageNomedia(root);
 }

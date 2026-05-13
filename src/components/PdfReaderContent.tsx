@@ -66,7 +66,7 @@ const MIN_CANVAS_WIDTH = 240;
 const MIN_CANVAS_HEIGHT = 240;
 const PDF_PAGE_GAP_PX = 16;
 const SCROLL_PAGE_FRACTION = 0.9;
-const TWO_PAGE_MEDIA_QUERY = "(min-width: 62em)";
+const TWO_PAGE_MEDIA_QUERY = "(min-width: 992px)";
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
@@ -795,7 +795,7 @@ function PdfReaderContentInner(
         flushProgress(100);
         return true;
       },
-      patchMediaSources() {},
+      patchMediaElements() {},
       scrollByPage,
       scrollToStart() {
         completedForNavigationRef.current = false;

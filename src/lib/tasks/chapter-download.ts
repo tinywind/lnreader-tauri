@@ -14,6 +14,7 @@ import {
   cacheHtmlChapterMedia,
   clearChapterMedia,
   pruneChapterMedia,
+  type ChapterMediaElementPatch,
 } from "../chapter-media";
 import { mirrorStoredChapterContent } from "../chapter-content-storage";
 import { getPluginBaseUrl } from "../plugins/base-url";
@@ -59,6 +60,16 @@ export interface ChapterDownloadEvent {
   task: TaskRecord;
 }
 
+export interface ChapterPartialContentEvent {
+  chapterId: number;
+  html: string;
+}
+
+export interface ChapterMediaPatchEvent {
+  chapterId: number;
+  patches: ChapterMediaElementPatch[];
+}
+
 export interface ChapterDownloadBatchResult {
   cancelled: number;
   failed: number;
@@ -85,6 +96,12 @@ type ChapterDownloadBatchSettlement = "cancelled" | "failed" | "succeeded";
 const chapterDownloadBatchStates = new Map<
   string,
   ChapterDownloadBatchState
+>();
+const chapterPartialContentListeners = new Set<
+  (event: ChapterPartialContentEvent) => void
+>();
+const chapterMediaPatchListeners = new Set<
+  (event: ChapterMediaPatchEvent) => void
 >();
 const CHAPTER_DOWNLOAD_QUEUE_STORAGE_KEY = "chapter-download-queue";
 const CHAPTER_DOWNLOAD_QUEUE_STORAGE_VERSION = 1;
@@ -304,6 +321,18 @@ export function getActiveChapterDownloadBatchProgress():
   );
 }
 
+function emitChapterPartialContentUpdate(event: ChapterPartialContentEvent): void {
+  for (const listener of chapterPartialContentListeners) {
+    listener(event);
+  }
+}
+
+function emitChapterMediaPatchUpdate(event: ChapterMediaPatchEvent): void {
+  for (const listener of chapterMediaPatchListeners) {
+    listener(event);
+  }
+}
+
 function statusFromTask(task: TaskRecord): ChapterDownloadStatus | null {
   switch (task.status) {
     case "queued":
@@ -437,6 +466,16 @@ export function enqueueChapterDownload(
                 if (partialSaveResult.rowsAffected <= 0) {
                   throw missingLocalChapterError(job);
                 }
+                emitChapterPartialContentUpdate({
+                  chapterId: job.id,
+                  html: partialHtml,
+                });
+              },
+              onMediaPatch: (patches) => {
+                emitChapterMediaPatchUpdate({
+                  chapterId: job.id,
+                  patches,
+                });
               },
               onProgress: ({ current, total }) => {
                 progressTotal = total + 1;
@@ -593,6 +632,24 @@ export function subscribeChapterDownloads(
     const chapterEvent = eventFromTask(event.task);
     if (chapterEvent) listener(chapterEvent);
   });
+}
+
+export function subscribeChapterPartialContentUpdates(
+  listener: (event: ChapterPartialContentEvent) => void,
+): () => void {
+  chapterPartialContentListeners.add(listener);
+  return () => {
+    chapterPartialContentListeners.delete(listener);
+  };
+}
+
+export function subscribeChapterMediaPatches(
+  listener: (event: ChapterMediaPatchEvent) => void,
+): () => void {
+  chapterMediaPatchListeners.add(listener);
+  return () => {
+    chapterMediaPatchListeners.delete(listener);
+  };
 }
 
 export async function restorePersistedChapterDownloads(): Promise<void> {

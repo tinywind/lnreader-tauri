@@ -13,6 +13,7 @@ import {
   type WheelEvent,
 } from "react";
 import { Box } from "@mantine/core";
+import type { ChapterMediaElementPatch } from "../lib/chapter-media";
 import { formatTimeForLocale, useTranslation, type AppLocale } from "../i18n";
 import {
   useReaderStore,
@@ -25,7 +26,7 @@ import { ReaderSeekbars } from "./ReaderSeekbars";
 
 export interface ReaderContentHandle {
   completeIfAtEnd: () => boolean;
-  patchMediaSources: (html: string) => void;
+  patchMediaElements: (patches: ChapterMediaElementPatch[]) => void;
   scrollByPage: (direction: 1 | -1, source?: string) => void;
   scrollToStart: () => void;
 }
@@ -60,7 +61,7 @@ interface PageInfo {
 
 const SCROLL_MAX_WIDTH = 760;
 const SCROLL_PAGE_FRACTION = 0.9;
-const TWO_PAGE_MEDIA_QUERY = "(min-width: 62em)";
+const TWO_PAGE_MEDIA_QUERY = "(min-width: 992px)";
 const PAGED_SCROLL_ANIMATION_MS = 120;
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
@@ -70,16 +71,58 @@ const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
 const READER_MEDIA_EVENT_SELECTOR =
   "img,picture,svg,video,audio,canvas,iframe,figure";
-const READER_MEDIA_PATCH_SELECTOR = "img,video,audio,source";
+const READER_MEDIA_PATCH_SELECTOR = [
+  "img[src]",
+  "video[src]",
+  "audio[src]",
+  "source[src]",
+  "embed[src]",
+  "track[src]",
+  "img[data-src]",
+  "img[data-original]",
+  "img[data-lazy-src]",
+  "img[data-orig-src]",
+  "video[data-src]",
+  "video[data-original]",
+  "video[data-lazy-src]",
+  "video[data-orig-src]",
+  "audio[data-src]",
+  "audio[data-original]",
+  "audio[data-lazy-src]",
+  "audio[data-orig-src]",
+  "source[data-src]",
+  "source[data-original]",
+  "source[data-lazy-src]",
+  "source[data-orig-src]",
+  "video[poster]",
+  "object[data]",
+  'link[href][rel~="preload"][as="image"]',
+  'link[href][rel~="preload"][as="video"]',
+  'link[href][rel~="preload"][as="audio"]',
+  "img[srcset]",
+  "source[srcset]",
+  "[style]",
+].join(",");
 const READER_MEDIA_PATCH_ATTRIBUTES = [
   "src",
   "srcset",
   "poster",
+  "data",
+  "href",
   "data-src",
   "data-original",
   "data-lazy-src",
   "data-orig-src",
+  "style",
 ] as const;
+const READER_MEDIA_SOURCE_URL_ATTRIBUTE = "data-norea-media-source-url";
+const READER_PENDING_MEDIA_ATTRIBUTE = "data-norea-reader-media-pending";
+const READER_PENDING_BACKGROUND_ATTRIBUTE = "data-norea-reader-media-bg";
+const READER_PENDING_DISPLAY_ATTRIBUTE = "data-norea-reader-media-display";
+const READER_PENDING_HEIGHT_ATTRIBUTE = "data-norea-reader-media-height";
+const READER_PENDING_PLACEHOLDER_SRC =
+  "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221000%22%20height%3D%221400%22%20viewBox%3D%220%200%201000%201400%22%2F%3E";
+const READER_PENDING_PLACEHOLDER_HEIGHT = "min(72vh, 56rem)";
 
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
@@ -103,6 +146,14 @@ function getReaderDebugSnapshot(node: HTMLElement | null) {
 function logReaderInput(event: string, details: Record<string, unknown>): void {
   if (!import.meta.env.DEV) return;
   console.warn("[reader-input:html]", event, details);
+}
+
+function logReaderMediaPipeline(
+  event: string,
+  details: Record<string, unknown>,
+): void {
+  if (!import.meta.env.DEV) return;
+  console.warn("[reader-media:content]", event, details);
 }
 
 function easeOutCubic(progress: number): number {
@@ -144,35 +195,156 @@ function stopReaderMediaClick(event: MouseEvent<HTMLDivElement>): void {
   event.stopPropagation();
 }
 
-function patchReaderMediaSources(container: HTMLElement, html: string): void {
-  if (typeof document === "undefined") return;
+function mediaPatchValueKind(value: string): string {
+  if (value === "") return "blank";
+  if (value.startsWith("data:")) return "data-url";
+  if (value.startsWith("norea-media://")) return "local-media";
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return "remote";
+  }
+  return "other";
+}
+
+function prepareReaderHtmlForDisplay(html: string): string {
+  if (
+    typeof document === "undefined" ||
+    !html.includes(READER_MEDIA_SOURCE_URL_ATTRIBUTE)
+  ) {
+    return html;
+  }
   const template = document.createElement("template");
   template.innerHTML = html;
+  let changed = false;
+
+  let placeholderCount = 0;
+  for (const image of template.content.querySelectorAll<HTMLImageElement>(
+    `img[${READER_MEDIA_SOURCE_URL_ATTRIBUTE}]`,
+  )) {
+    if ((image.getAttribute("src") ?? "").trim() !== "") continue;
+    image.setAttribute("src", READER_PENDING_PLACEHOLDER_SRC);
+    image.setAttribute(READER_PENDING_MEDIA_ATTRIBUTE, "true");
+    if (image.style.display === "") {
+      image.style.display = "block";
+      image.setAttribute(READER_PENDING_DISPLAY_ATTRIBUTE, "true");
+    }
+    if (image.style.minHeight === "") {
+      image.style.minHeight = READER_PENDING_PLACEHOLDER_HEIGHT;
+      image.setAttribute(READER_PENDING_HEIGHT_ATTRIBUTE, "true");
+    }
+    if (image.style.backgroundColor === "") {
+      image.style.backgroundColor = "rgba(148, 163, 184, 0.12)";
+      image.setAttribute(READER_PENDING_BACKGROUND_ATTRIBUTE, "true");
+    }
+    placeholderCount += 1;
+    changed = true;
+  }
+
+  if (changed) {
+    logReaderMediaPipeline("placeholder-shell", {
+      htmlLength: html.length,
+      placeholderCount,
+    });
+  }
+  return changed ? template.innerHTML : html;
+}
+
+function clearReaderPendingMedia(element: HTMLElement): void {
+  if (!element.hasAttribute(READER_PENDING_MEDIA_ATTRIBUTE)) return;
+  element.removeAttribute(READER_PENDING_MEDIA_ATTRIBUTE);
+  if (element.hasAttribute(READER_PENDING_BACKGROUND_ATTRIBUTE)) {
+    element.style.removeProperty("background-color");
+    element.removeAttribute(READER_PENDING_BACKGROUND_ATTRIBUTE);
+  }
+  if (element.hasAttribute(READER_PENDING_DISPLAY_ATTRIBUTE)) {
+    element.style.removeProperty("display");
+    element.removeAttribute(READER_PENDING_DISPLAY_ATTRIBUTE);
+  }
+  if (element.hasAttribute(READER_PENDING_HEIGHT_ATTRIBUTE)) {
+    element.style.removeProperty("min-height");
+    element.removeAttribute(READER_PENDING_HEIGHT_ATTRIBUTE);
+  }
+}
+
+function mergeMediaElementPatches(
+  current: Map<number, ChapterMediaElementPatch>,
+  patches: ChapterMediaElementPatch[],
+): void {
+  for (const patch of patches) {
+    const existing = current.get(patch.index);
+    current.set(patch.index, {
+      index: patch.index,
+      attributes: {
+        ...(existing?.attributes ?? {}),
+        ...patch.attributes,
+      },
+    });
+  }
+}
+
+function patchReaderMediaElements(
+  container: HTMLElement,
+  patches: ChapterMediaElementPatch[],
+): void {
+  if (patches.length === 0) return;
   const currentElements = [
     ...container.querySelectorAll<HTMLElement>(READER_MEDIA_PATCH_SELECTOR),
   ];
-  const nextElements = [
-    ...template.content.querySelectorAll<HTMLElement>(
-      READER_MEDIA_PATCH_SELECTOR,
-    ),
-  ];
+  let changedCount = 0;
+  const srcKinds = new Set<string>();
 
-  for (let index = 0; index < currentElements.length; index += 1) {
-    const current = currentElements[index];
-    const next = nextElements[index];
-    if (!current || !next || current.tagName !== next.tagName) continue;
-
-    for (const attribute of READER_MEDIA_PATCH_ATTRIBUTES) {
-      if (next.hasAttribute(attribute)) {
-        const value = next.getAttribute(attribute) ?? "";
-        if (current.getAttribute(attribute) !== value) {
-          current.setAttribute(attribute, value);
-        }
-      } else if (current.hasAttribute(attribute)) {
-        current.removeAttribute(attribute);
+  for (const patch of patches) {
+    const current = currentElements[patch.index];
+    if (!current) continue;
+    let changed = false;
+    for (const [attribute, value] of Object.entries(patch.attributes)) {
+      if (
+        !(READER_MEDIA_PATCH_ATTRIBUTES as readonly string[]).includes(
+          attribute,
+        )
+      ) {
+        continue;
+      }
+      if (value.trim() === "") continue;
+      if (attribute === "src" || attribute === "srcset") {
+        srcKinds.add(mediaPatchValueKind(value));
+      }
+      if ((current.getAttribute(attribute) ?? "") !== value) {
+        current.setAttribute(attribute, value);
+        changed = true;
       }
     }
+    if (changed) {
+      changedCount += 1;
+      clearReaderPendingMedia(current);
+    }
   }
+  logReaderMediaPipeline("patch-elements", {
+    changedCount,
+    patchCount: patches.length,
+    srcKinds: [...srcKinds],
+    firstIndexes: patches.slice(0, 8).map((patch) => patch.index),
+    mediaElementCount: currentElements.length,
+  });
+}
+
+function countBlankReaderMedia(html: string): number {
+  if (typeof document === "undefined") return 0;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return [
+    ...template.content.querySelectorAll<HTMLImageElement>(
+      `img[${READER_MEDIA_SOURCE_URL_ATTRIBUTE}]`,
+    ),
+  ].filter((image) => (image.getAttribute("src") ?? "").trim() === "").length;
+}
+
+function countDataUrlReaderMedia(html: string): number {
+  if (typeof document === "undefined") return 0;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return [...template.content.querySelectorAll<HTMLImageElement>("img")].filter(
+    (image) => (image.getAttribute("src") ?? "").startsWith("data:"),
+  ).length;
 }
 
 function formatClock(date: Date, locale: AppLocale): string {
@@ -362,7 +534,10 @@ function ReaderContentInner(
   const lastSavedProgressRef = useRef(Math.round(clampProgress(initialProgress)));
   const progressTimerRef = useRef<number | null>(null);
   const completedForNavigationRef = useRef(false);
-  const latestMediaPatchHtmlRef = useRef<string | null>(null);
+  const latestMediaElementPatchesRef = useRef<
+    Map<number, ChapterMediaElementPatch>
+  >(new Map());
+  const latestRenderedHtmlRef = useRef<string | null>(null);
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
@@ -382,9 +557,28 @@ function ReaderContentInner(
   );
 
   const renderedHtml = useMemo(
-    () => (general.bionicReading ? applyBionicReading(html) : html),
+    () => {
+      const preparedHtml = prepareReaderHtmlForDisplay(html);
+      return general.bionicReading
+        ? applyBionicReading(preparedHtml)
+        : preparedHtml;
+    },
     [general.bionicReading, html],
   );
+  const renderedHtmlMarkup = useMemo(
+    () => ({ __html: renderedHtml }),
+    [renderedHtml],
+  );
+
+  useEffect(() => {
+    if (latestRenderedHtmlRef.current === renderedHtml) return;
+    latestRenderedHtmlRef.current = renderedHtml;
+    logReaderMediaPipeline("html-replace", {
+      blankMediaCount: countBlankReaderMedia(renderedHtml),
+      dataUrlMediaCount: countDataUrlReaderMedia(renderedHtml),
+      htmlLength: renderedHtml.length,
+    });
+  }, [renderedHtml]);
 
   const viewportHeight =
     requestedViewportHeight ??
@@ -526,17 +720,15 @@ function ReaderContentInner(
     [flushProgress],
   );
 
-  const patchMediaSources = useCallback(
-    (nextHtml: string) => {
-      latestMediaPatchHtmlRef.current = nextHtml;
+  const patchMediaElements = useCallback(
+    (patches: ChapterMediaElementPatch[]) => {
+      if (patches.length === 0) return;
+      mergeMediaElementPatches(latestMediaElementPatchesRef.current, patches);
       const content = contentRef.current;
       if (!content) return;
-      patchReaderMediaSources(
-        content,
-        general.bionicReading ? applyBionicReading(nextHtml) : nextHtml,
-      );
+      patchReaderMediaElements(content, patches);
     },
-    [general.bionicReading],
+    [],
   );
 
   useImperativeHandle(
@@ -555,7 +747,7 @@ function ReaderContentInner(
         flushProgress(100);
         return true;
       },
-      patchMediaSources,
+      patchMediaElements,
       scrollByPage,
       scrollToStart() {
         const node = viewportRef.current;
@@ -563,7 +755,12 @@ function ReaderContentInner(
         node.scrollTo({ top: 0, left: 0, behavior: "auto" });
       },
     }),
-    [flushProgress, isPagedReader, patchMediaSources, scrollByPage],
+    [
+      flushProgress,
+      isPagedReader,
+      patchMediaElements,
+      scrollByPage,
+    ],
   );
 
   const applyPageInfo = useCallback(
@@ -644,10 +841,13 @@ function ReaderContentInner(
   ]);
 
   useEffect(() => {
-    const nextHtml = latestMediaPatchHtmlRef.current;
-    if (!nextHtml) return;
-    window.requestAnimationFrame(() => patchMediaSources(nextHtml));
-  }, [patchMediaSources, renderedHtml]);
+    const patches = [...latestMediaElementPatchesRef.current.values()];
+    if (patches.length === 0) return;
+    window.requestAnimationFrame(() => {
+      const content = contentRef.current;
+      if (content) patchReaderMediaElements(content, patches);
+    });
+  }, [renderedHtml]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -662,13 +862,12 @@ function ReaderContentInner(
     if (!content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
       syncViewportWidth();
-      window.requestAnimationFrame(() => {
-        restoreProgressPosition(latestProgressRef.current);
-      });
     });
     observer.observe(node);
     observer.observe(content);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+    };
   }, [restoreProgressPosition]);
 
   useEffect(() => {
@@ -820,10 +1019,6 @@ function ReaderContentInner(
     if (!isPagedReader) {
       nativeWheelActionLockedUntilRef.current =
         performance.now() + NATIVE_WHEEL_ACTION_LOCK_MS;
-      logReaderInput("wheel-native-scroll", {
-        delta: Math.round(delta),
-        snapshot: getReaderDebugSnapshot(viewportRef.current),
-      });
       return;
     }
 
@@ -887,15 +1082,25 @@ function ReaderContentInner(
     flushProgress(latestProgressRef.current);
   }, [flushProgress]);
 
-  const contentStyle: CSSProperties = {
-    boxSizing: "border-box",
-    color: appearance.textColor,
-    fontSize: `${appearance.textSize}px`,
-    lineHeight: appearance.lineHeight,
-    textAlign: appearance.textAlign,
-    fontFamily: appearance.fontFamily || undefined,
-    padding: `${appearance.padding}px`,
-  };
+  const contentStyle = useMemo<CSSProperties>(
+    () => ({
+      boxSizing: "border-box",
+      color: appearance.textColor,
+      fontSize: `${appearance.textSize}px`,
+      lineHeight: appearance.lineHeight,
+      textAlign: appearance.textAlign,
+      fontFamily: appearance.fontFamily || undefined,
+      padding: `${appearance.padding}px`,
+    }),
+    [
+      appearance.fontFamily,
+      appearance.lineHeight,
+      appearance.padding,
+      appearance.textAlign,
+      appearance.textColor,
+      appearance.textSize,
+    ],
+  );
 
   const pagedViewportWidth =
     viewportWidth > 0
@@ -916,18 +1121,29 @@ function ReaderContentInner(
         : pageContentWidth,
     ),
   );
-  const pageStyle: CSSProperties = isPagedReader
-    ? {
-        columnWidth: `${pageColumnWidth}px`,
-        columnGap: `${pageColumnGap}px`,
-        height: "100%",
-        maxWidth: "none",
-      }
-    : {
-        maxWidth: `${SCROLL_MAX_WIDTH}px`,
-        minHeight: "100%",
-        margin: "0 auto",
-      };
+  const pageStyle = useMemo<CSSProperties>(
+    () =>
+      isPagedReader
+        ? {
+            columnWidth: `${pageColumnWidth}px`,
+            columnGap: `${pageColumnGap}px`,
+            height: "100%",
+            maxWidth: "none",
+          }
+        : {
+            maxWidth: `${SCROLL_MAX_WIDTH}px`,
+            minHeight: "100%",
+            margin: "0 auto",
+          },
+    [isPagedReader, pageColumnGap, pageColumnWidth],
+  );
+  const contentBoxStyle = useMemo<CSSProperties>(
+    () => ({
+      ...contentStyle,
+      ...pageStyle,
+    }),
+    [contentStyle, pageStyle],
+  );
   const viewportClassName = `reader-viewport ${
     isPagedReader ? "reader-viewport-paged" : "reader-viewport-scroll"
   }${isTwoPageReader ? " reader-viewport-two-page" : ""}`;
@@ -990,11 +1206,8 @@ function ReaderContentInner(
           data-image-paging={
             isPagedReader ? general.htmlImagePagingMode : undefined
           }
-          style={{
-            ...contentStyle,
-            ...pageStyle,
-          }}
-          dangerouslySetInnerHTML={{ __html: renderedHtml }}
+          style={contentBoxStyle}
+          dangerouslySetInnerHTML={renderedHtmlMarkup}
         />
         <style>
           {`

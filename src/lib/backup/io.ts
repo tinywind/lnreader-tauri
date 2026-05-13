@@ -1,8 +1,13 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  readAndroidContentUriBytes,
+  writeAndroidContentUriFile,
+} from "../android-storage";
 import { restoreChapterContentStorageMirror } from "../chapter-content-storage";
-import { packBackup } from "./pack";
+import { isAndroidRuntime } from "../tauri-runtime";
+import { deleteBackupTempFile, packBackup, packBackupTempFile } from "./pack";
 import { applyBackupSnapshot, gatherBackupSnapshot } from "./snapshot";
-import { unpackBackup } from "./unpack";
+import { unpackBackup, unpackBackupBytes } from "./unpack";
 
 const ZIP_FILTER_NAME = "Norea Backup";
 
@@ -10,14 +15,23 @@ function zipFilter(): { name: string; extensions: string[] } {
   return { name: ZIP_FILTER_NAME, extensions: ["zip"] };
 }
 
-/** ISO date prefix used for the default backup filename, e.g. `2026-05-05`. */
-function isoDate(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
-/** `norea-backup-YYYY-MM-DD.zip` is what the save dialog pre-fills. */
+function localTimestamp(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = twoDigits(now.getMonth() + 1);
+  const day = twoDigits(now.getDate());
+  const hours = twoDigits(now.getHours());
+  const minutes = twoDigits(now.getMinutes());
+  const seconds = twoDigits(now.getSeconds());
+  return `${year}${month}${day}${hours}${minutes}${seconds}`;
+}
+
+/** `norea-backup-yyyyMMddHHmmss.zip` is what the save dialog pre-fills. */
 export function defaultBackupFilename(now: Date = new Date()): string {
-  return `norea-backup-${isoDate(now)}.zip`;
+  return `norea-backup-${localTimestamp(now)}.zip`;
 }
 
 /**
@@ -34,7 +48,20 @@ export async function exportBackupToFile(): Promise<string | null> {
   });
   if (!path) return null;
   const manifest = await gatherBackupSnapshot();
-  await packBackup(manifest, path);
+  if (isAndroidRuntime() && path.startsWith("content://")) {
+    const tempPath = await packBackupTempFile(manifest);
+    try {
+      await writeAndroidContentUriFile(path, tempPath, "application/zip");
+    } finally {
+      try {
+        await deleteBackupTempFile(tempPath);
+      } catch (error) {
+        console.warn("[backup] temp file cleanup failed", error);
+      }
+    }
+  } else {
+    await packBackup(manifest, path);
+  }
   return path;
 }
 
@@ -58,7 +85,10 @@ export async function importBackupFromFile(): Promise<string | null> {
     // dialog plugin's union type forces us to narrow.
     return null;
   }
-  const manifest = await unpackBackup(selected);
+  const manifest =
+    isAndroidRuntime() && selected.startsWith("content://")
+      ? await unpackBackupBytes(await readAndroidContentUriBytes(selected))
+      : await unpackBackup(selected);
   await applyBackupSnapshot(manifest);
   await restoreChapterContentStorageMirror({
     chapterIds: new Set(

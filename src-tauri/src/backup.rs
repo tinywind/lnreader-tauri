@@ -14,12 +14,14 @@
 //! produced before that content was externalized.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, BufWriter, Cursor, Read, Seek, Write};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sqlx::Sqlite;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_sql::{DbInstances, DbPool};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -30,6 +32,7 @@ const MANIFEST_ENTRY: &str = "manifest.json";
 const CHAPTERS_PREFIX: &str = "chapters/";
 const CHAPTER_SUFFIX: &str = ".html";
 const DB_URL: &str = "sqlite:norea.db";
+const BACKUP_TEMP_DIR: &str = "backup";
 
 /// One downloaded chapter body, keyed by the local chapter row id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,21 +346,93 @@ async fn execute_restore_snapshot(
     Ok(())
 }
 
-fn write_backup_zip(manifest_json: String, output_path: String) -> Result<(), String> {
-    let file = File::create(&output_path)
-        .map_err(|err| format!("backup_pack: failed to create '{output_path}': {err}"))?;
-    let mut zip = ZipWriter::new(BufWriter::new(file));
+fn write_manifest_entry<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    manifest_json: &str,
+    error_prefix: &str,
+) -> Result<(), String> {
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
     zip.start_file(MANIFEST_ENTRY, options)
-        .map_err(|err| format!("backup_pack: start manifest: {err}"))?;
+        .map_err(|err| format!("{error_prefix}: start manifest: {err}"))?;
     zip.write_all(manifest_json.as_bytes())
-        .map_err(|err| format!("backup_pack: write manifest: {err}"))?;
+        .map_err(|err| format!("{error_prefix}: write manifest: {err}"))?;
+    Ok(())
+}
+
+fn write_backup_zip(manifest_json: String, output_path: String) -> Result<(), String> {
+    let file = File::create(&output_path)
+        .map_err(|err| format!("backup_pack: failed to create '{output_path}': {err}"))?;
+    let mut zip = ZipWriter::new(BufWriter::new(file));
+    write_manifest_entry(&mut zip, &manifest_json, "backup_pack")?;
     zip.finish()
         .map_err(|err| format!("backup_pack: finalize: {err}"))?;
     Ok(())
+}
+
+fn write_backup_zip_file<W: Write + Seek>(
+    file: W,
+    manifest_json: String,
+    error_prefix: &str,
+) -> Result<(), String> {
+    let mut zip = ZipWriter::new(BufWriter::new(file));
+    write_manifest_entry(&mut zip, &manifest_json, error_prefix)?;
+    zip.finish()
+        .map_err(|err| format!("{error_prefix}: finalize: {err}"))?;
+    Ok(())
+}
+
+fn backup_temp_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|err| format!("backup_pack_temp_file: app cache dir: {err}"))?
+        .join(BACKUP_TEMP_DIR);
+    fs::create_dir_all(&dir)
+        .map_err(|err| format!("backup_pack_temp_file: create temp dir: {err}"))?;
+    Ok(dir)
+}
+
+fn backup_temp_path(dir: &Path, attempt: u32) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    dir.join(format!("norea-backup-{now}-{attempt}.zip"))
+}
+
+fn write_backup_temp_file(app: AppHandle, manifest_json: String) -> Result<String, String> {
+    let dir = backup_temp_dir(&app)?;
+    for attempt in 0..16 {
+        let path = backup_temp_path(&dir, attempt);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => {
+                if let Err(err) =
+                    write_backup_zip_file(file, manifest_json, "backup_pack_temp_file")
+                {
+                    let _ = fs::remove_file(&path);
+                    return Err(err);
+                }
+                return Ok(path.to_string_lossy().into_owned());
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(format!("backup_pack_temp_file: create temp file: {err}"));
+            }
+        }
+    }
+    Err("backup_pack_temp_file: failed to allocate a temp file".to_string())
+}
+
+fn backup_zip_bytes(manifest_json: String) -> Result<Vec<u8>, String> {
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    write_manifest_entry(&mut zip, &manifest_json, "backup_pack_bytes")?;
+    let cursor = zip
+        .finish()
+        .map_err(|err| format!("backup_pack_bytes: finalize: {err}"))?;
+    Ok(cursor.into_inner())
 }
 
 /// Write a backup zip to `output_path`.
@@ -372,6 +447,32 @@ pub fn backup_pack(
     output_path: String,
 ) -> Result<(), String> {
     write_backup_zip(manifest_json, output_path)
+}
+
+#[tauri::command]
+pub fn backup_pack_temp_file(app: AppHandle, manifest_json: String) -> Result<String, String> {
+    write_backup_temp_file(app, manifest_json)
+}
+
+#[tauri::command]
+pub fn backup_delete_temp_file(app: AppHandle, path: String) -> Result<(), String> {
+    let temp_dir = backup_temp_dir(&app)?;
+    let temp_dir = temp_dir
+        .canonicalize()
+        .map_err(|err| format!("backup_delete_temp_file: temp dir: {err}"))?;
+    let path = PathBuf::from(path);
+    let file_path = path
+        .canonicalize()
+        .map_err(|err| format!("backup_delete_temp_file: temp file: {err}"))?;
+    if !file_path.starts_with(&temp_dir) {
+        return Err("backup_delete_temp_file: path is outside backup temp dir".to_string());
+    }
+    fs::remove_file(&file_path).map_err(|err| format!("backup_delete_temp_file: remove: {err}"))
+}
+
+#[tauri::command]
+pub fn backup_pack_bytes(_app: AppHandle, manifest_json: String) -> Result<Vec<u8>, String> {
+    backup_zip_bytes(manifest_json)
 }
 
 #[tauri::command]
@@ -411,11 +512,8 @@ pub async fn backup_restore_snapshot(
 ///
 /// Unrelated entries (foreign tools writing extra files) are skipped
 /// silently. Missing `manifest.json` is an error.
-#[tauri::command]
-pub fn backup_unpack(input_path: String) -> Result<UnpackedBackup, String> {
-    let file = File::open(&input_path)
-        .map_err(|err| format!("backup_unpack: failed to open '{input_path}': {err}"))?;
-    let mut archive = ZipArchive::new(BufReader::new(file))
+fn read_backup_archive<R: Read + Seek>(reader: R) -> Result<UnpackedBackup, String> {
+    let mut archive = ZipArchive::new(reader)
         .map_err(|err| format!("backup_unpack: not a valid zip: {err}"))?;
 
     let mut manifest_json: Option<String> = None;
@@ -471,6 +569,18 @@ pub fn backup_unpack(input_path: String) -> Result<UnpackedBackup, String> {
         chapters,
         chapter_media,
     })
+}
+
+#[tauri::command]
+pub fn backup_unpack(input_path: String) -> Result<UnpackedBackup, String> {
+    let file = File::open(&input_path)
+        .map_err(|err| format!("backup_unpack: failed to open '{input_path}': {err}"))?;
+    read_backup_archive(BufReader::new(file))
+}
+
+#[tauri::command]
+pub fn backup_unpack_bytes(body: Vec<u8>) -> Result<UnpackedBackup, String> {
+    read_backup_archive(Cursor::new(body))
 }
 
 #[cfg(test)]

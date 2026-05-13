@@ -21,6 +21,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONObject
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class MainActivity : TauriActivity() {
   private var androidScraperBridge: AndroidScraperBridge? = null
@@ -272,6 +275,46 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
+    fun writeContentUriBytes(uri: String, base64: String, mimeType: String): String =
+      storageResponse {
+        val bytes = Base64.decode(base64, Base64.DEFAULT)
+        contentResolver.openOutputStream(Uri.parse(uri), "wt")?.use { output ->
+          output.write(bytes)
+        } ?: throw IllegalStateException("Cannot open selected file for writing.")
+        JSONObject()
+          .put("ok", true)
+          .put("bytes", bytes.size)
+          .put("mimeType", mimeType)
+      }
+
+    @JavascriptInterface
+    fun writeContentUriFile(uri: String, inputPath: String, mimeType: String): String =
+      storageResponse {
+        val inputFile = File(inputPath)
+        require(inputFile.isFile) { "Selected backup temp file is unavailable." }
+        val bytes = inputFile.inputStream().use { input ->
+          contentResolver.openOutputStream(Uri.parse(uri), "wt")?.use { output ->
+            input.copyTo(output)
+          } ?: throw IllegalStateException("Cannot open selected file for writing.")
+        }
+        JSONObject()
+          .put("ok", true)
+          .put("bytes", bytes)
+          .put("mimeType", mimeType)
+      }
+
+    @JavascriptInterface
+    fun readContentUriBase64(uri: String): String = storageResponse {
+      val bytes = contentResolver.openInputStream(Uri.parse(uri))?.use { input ->
+        input.readBytes()
+      } ?: throw IllegalStateException("Cannot open selected file for reading.")
+      JSONObject()
+        .put("ok", true)
+        .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+        .put("mimeType", mimeTypeForPath(uri, "application/octet-stream"))
+    }
+
+    @JavascriptInterface
     fun writeText(rootUri: String, relativePath: String, text: String): String =
       storageResponse {
         val bytes = text.toByteArray(Charsets.UTF_8)
@@ -287,6 +330,88 @@ class MainActivity : TauriActivity() {
           .put("ok", true)
           .put("bytes", bytes.size)
       }
+
+    @JavascriptInterface
+    fun archiveDirectory(
+      rootUri: String,
+      sourceRelativePath: String,
+      archiveRelativePath: String,
+    ): String = storageResponse {
+      val sourceDir = storageDocumentAt(rootUri, sourceRelativePath)
+      val existingArchive = storageDocumentAt(rootUri, archiveRelativePath)
+        ?.takeIf { it.isFile }
+      if (sourceDir == null || !sourceDir.isDirectory) {
+        return@storageResponse JSONObject()
+          .put("ok", true)
+          .put("bytes", existingArchive?.length()?.coerceAtLeast(0L) ?: 0L)
+      }
+
+      val archiveSegments = safeStorageSegments(archiveRelativePath)
+      val archiveName = archiveSegments.last()
+      val tempArchiveRelativePath = (archiveSegments.dropLast(1) + "$archiveName.tmp")
+        .joinToString("/")
+      val tempArchive = ensureStorageFile(
+        rootUri,
+        tempArchiveRelativePath,
+        "application/zip",
+      )
+      val newFiles = sourceDir.listFiles()
+        .filter { it.isFile && safeZipEntryName(it.name) != null }
+        .sortedBy { it.name ?: "" }
+      val newEntryNames = newFiles.mapNotNull { safeZipEntryName(it.name) }.toSet()
+      val writtenEntryNames = mutableSetOf<String>()
+
+      contentResolver.openOutputStream(tempArchive.uri, "wt")?.use { output ->
+        ZipOutputStream(output.buffered()).use { zip ->
+          if (existingArchive != null) {
+            contentResolver.openInputStream(existingArchive.uri)?.use { input ->
+              ZipInputStream(input.buffered()).use { previousZip ->
+                var entry = previousZip.nextEntry
+                while (entry != null) {
+                  val entryName = safeZipEntryName(entry.name)
+                  if (
+                    !entry.isDirectory &&
+                    entryName != null &&
+                    entryName !in newEntryNames &&
+                    writtenEntryNames.add(entryName)
+                  ) {
+                    zip.putNextEntry(ZipEntry(entryName))
+                    previousZip.copyTo(zip)
+                    zip.closeEntry()
+                  }
+                  previousZip.closeEntry()
+                  entry = previousZip.nextEntry
+                }
+              }
+            }
+          }
+
+          newFiles.forEach { file ->
+            val entryName = safeZipEntryName(file.name) ?: return@forEach
+            if (!writtenEntryNames.add(entryName)) return@forEach
+            zip.putNextEntry(ZipEntry(entryName))
+            contentResolver.openInputStream(file.uri)?.use { input ->
+              input.copyTo(zip)
+            } ?: throw IllegalStateException("Cannot open media file for archiving.")
+            zip.closeEntry()
+          }
+        }
+      } ?: throw IllegalStateException("Cannot open media archive for writing.")
+
+      existingArchive?.delete()
+      if (!tempArchive.renameTo(archiveName)) {
+        throw IllegalStateException("Cannot finalize media archive: $archiveRelativePath")
+      }
+      sourceDir.listFiles().forEach { child ->
+        child.delete()
+      }
+      sourceDir.delete()
+      val archive = storageDocumentAt(rootUri, archiveRelativePath)
+        ?: throw IllegalStateException("Media archive was not created: $archiveRelativePath")
+      JSONObject()
+        .put("ok", true)
+        .put("bytes", archive.length().coerceAtLeast(0L))
+    }
 
     @JavascriptInterface
     fun readText(rootUri: String, relativePath: String): String = storageResponse {
@@ -312,6 +437,57 @@ class MainActivity : TauriActivity() {
         .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
         .put("mimeType", mimeTypeForPath(relativePath, ""))
     }
+
+    @JavascriptInterface
+    fun readZipEntryBase64(
+      rootUri: String,
+      archiveRelativePath: String,
+      entryName: String,
+    ): String = storageResponse {
+      val safeEntryName = safeZipEntryName(entryName)
+        ?: throw IllegalArgumentException("Android storage zip entry is invalid: $entryName")
+      val bytes = readZipEntryBytes(rootUri, archiveRelativePath, safeEntryName)
+        ?: throw IllegalArgumentException("Android storage zip entry not found: $entryName")
+      JSONObject()
+        .put("ok", true)
+        .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+        .put("mimeType", mimeTypeForPath(safeEntryName, ""))
+    }
+
+    @JavascriptInterface
+    fun zipEntryExists(rootUri: String, archiveRelativePath: String, entryName: String): String =
+      storageResponse {
+        val safeEntryName = safeZipEntryName(entryName)
+          ?: throw IllegalArgumentException("Android storage zip entry is invalid: $entryName")
+        val archive = storageDocumentAt(rootUri, archiveRelativePath)
+          ?: return@storageResponse JSONObject()
+            .put("ok", true)
+            .put("exists", false)
+        if (!archive.isFile) {
+          return@storageResponse JSONObject()
+            .put("ok", true)
+            .put("exists", false)
+        }
+        val exists = contentResolver.openInputStream(archive.uri)?.use { input ->
+          var found = false
+          ZipInputStream(input.buffered()).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+              val currentName = safeZipEntryName(entry.name)
+              if (!entry.isDirectory && currentName == safeEntryName) {
+                found = true
+                break
+              }
+              zip.closeEntry()
+              entry = zip.nextEntry
+            }
+          }
+          found
+        } ?: false
+        JSONObject()
+          .put("ok", true)
+          .put("exists", exists)
+      }
 
     @JavascriptInterface
     fun pathSize(rootUri: String, relativePath: String): String = storageResponse {
@@ -456,6 +632,42 @@ class MainActivity : TauriActivity() {
       return raced
     }
     throw IllegalStateException("Cannot create Android storage file: $relativePath")
+  }
+
+  private fun safeZipEntryName(name: String?): String? {
+    val entryName = name
+      ?.replace('\\', '/')
+      ?.substringAfterLast('/')
+      ?.trim()
+      ?: return null
+    if (entryName.isEmpty() || entryName == "." || entryName == "..") return null
+    if (entryName.contains('\u0000')) return null
+    return entryName
+  }
+
+  private fun readZipEntryBytes(
+    rootUri: String,
+    archiveRelativePath: String,
+    entryName: String,
+  ): ByteArray? {
+    val archive = storageDocumentAt(rootUri, archiveRelativePath) ?: return null
+    if (!archive.isFile) return null
+    return contentResolver.openInputStream(archive.uri)?.use { input ->
+      var body: ByteArray? = null
+      ZipInputStream(input.buffered()).use { zip ->
+        var entry = zip.nextEntry
+        while (entry != null) {
+          val currentName = safeZipEntryName(entry.name)
+          if (!entry.isDirectory && currentName == entryName) {
+            body = zip.readBytes()
+            break
+          }
+          zip.closeEntry()
+          entry = zip.nextEntry
+        }
+      }
+      body
+    }
   }
 
   private fun textMimeTypeForPath(relativePath: String): String {

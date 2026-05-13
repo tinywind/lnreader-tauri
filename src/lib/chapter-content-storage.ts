@@ -20,7 +20,7 @@ import { isAndroidRuntime, isTauriRuntime } from "./tauri-runtime";
 interface ChapterStorageRow {
   artist: string | null;
   author: string | null;
-  bookmark: number;
+  bookmark: unknown;
   chapterCreatedAt: number | null;
   chapterFoundAt: number;
   chapterId: number;
@@ -33,8 +33,8 @@ interface ChapterStorageRow {
   contentType: string;
   cover: string | null;
   genres: string | null;
-  inLibrary: number;
-  isLocal: number;
+  inLibrary: unknown;
+  isLocal: unknown;
   lastReadAt: number | null;
   libraryAddedAt: number | null;
   mediaBytes: number;
@@ -51,7 +51,22 @@ interface ChapterStorageRow {
   releaseTime: string | null;
   status: string | null;
   summary: string | null;
-  unread: number;
+  unread: unknown;
+}
+
+const LOCAL_PLUGIN_ID = "local";
+
+function sqliteBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true";
+  }
+  return false;
+}
+
+function isLocalNovel(pluginId: string, value: unknown): boolean {
+  return pluginId === LOCAL_PLUGIN_ID && sqliteBoolean(value);
 }
 
 interface MirroredNovel {
@@ -290,8 +305,8 @@ function storageMetadata(row: ChapterStorageRow) {
       artist: row.artist,
       status: row.status,
       genres: row.genres,
-      inLibrary: !!row.inLibrary,
-      isLocal: !!row.isLocal,
+      inLibrary: sqliteBoolean(row.inLibrary),
+      isLocal: isLocalNovel(row.pluginId, row.isLocal),
       createdAt: row.novelCreatedAt,
       updatedAt: row.novelUpdatedAt,
       libraryAddedAt: row.libraryAddedAt,
@@ -305,8 +320,8 @@ function storageMetadata(row: ChapterStorageRow) {
       chapterNumber: row.chapterNumber,
       position: row.position,
       page: row.page,
-      bookmark: !!row.bookmark,
-      unread: !!row.unread,
+      bookmark: sqliteBoolean(row.bookmark),
+      unread: sqliteBoolean(row.unread),
       progress: row.progress,
       isDownloaded: true,
       contentType: normalizeChapterContentType(
@@ -503,8 +518,8 @@ export async function restoreChapterContentStorageMirror(
       novel.artist,
       novel.status,
       novel.genres,
-      novel.inLibrary,
-      novel.isLocal,
+      sqliteBoolean(novel.inLibrary) ? 1 : 0,
+      isLocalNovel(novel.pluginId, novel.isLocal) ? 1 : 0,
       novel.createdAt,
       novel.updatedAt,
       novel.libraryAddedAt,
@@ -535,8 +550,8 @@ export async function restoreChapterContentStorageMirror(
       chapter.chapterNumber,
       chapter.position,
       chapter.page,
-      chapter.bookmark,
-      chapter.unread,
+      sqliteBoolean(chapter.bookmark) ? 1 : 0,
+      sqliteBoolean(chapter.unread) ? 1 : 0,
       chapter.progress,
       content,
       contentBytes,

@@ -6,11 +6,22 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 vi.mock("./pack", () => ({
+  deleteBackupTempFile: vi.fn(),
   packBackup: vi.fn(),
+  packBackupTempFile: vi.fn(),
+}));
+
+vi.mock("../android-storage", () => ({
+  readAndroidContentUriBytes: vi.fn(),
+  writeAndroidContentUriFile: vi.fn(),
 }));
 
 vi.mock("../chapter-content-storage", () => ({
   restoreChapterContentStorageMirror: vi.fn(),
+}));
+
+vi.mock("../tauri-runtime", () => ({
+  isAndroidRuntime: vi.fn(() => false),
 }));
 
 vi.mock("./snapshot", () => ({
@@ -20,10 +31,16 @@ vi.mock("./snapshot", () => ({
 
 vi.mock("./unpack", () => ({
   unpackBackup: vi.fn(),
+  unpackBackupBytes: vi.fn(),
 }));
 
 import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  readAndroidContentUriBytes,
+  writeAndroidContentUriFile,
+} from "../android-storage";
 import { restoreChapterContentStorageMirror } from "../chapter-content-storage";
+import { isAndroidRuntime } from "../tauri-runtime";
 import {
   BACKUP_FORMAT_VERSION,
   type BackupManifest,
@@ -33,22 +50,28 @@ import {
   exportBackupToFile,
   importBackupFromFile,
 } from "./io";
-import { packBackup } from "./pack";
+import { deleteBackupTempFile, packBackup, packBackupTempFile } from "./pack";
 import {
   applyBackupSnapshot,
   gatherBackupSnapshot,
 } from "./snapshot";
-import { unpackBackup } from "./unpack";
+import { unpackBackup, unpackBackupBytes } from "./unpack";
 
 const openMock = vi.mocked(open);
 const saveMock = vi.mocked(save);
+const isAndroidRuntimeMock = vi.mocked(isAndroidRuntime);
+const deleteBackupTempFileMock = vi.mocked(deleteBackupTempFile);
 const packBackupMock = vi.mocked(packBackup);
+const packBackupTempFileMock = vi.mocked(packBackupTempFile);
 const applyBackupSnapshotMock = vi.mocked(applyBackupSnapshot);
 const gatherBackupSnapshotMock = vi.mocked(gatherBackupSnapshot);
 const restoreChapterContentStorageMirrorMock = vi.mocked(
   restoreChapterContentStorageMirror,
 );
+const readAndroidContentUriBytesMock = vi.mocked(readAndroidContentUriBytes);
 const unpackBackupMock = vi.mocked(unpackBackup);
+const unpackBackupBytesMock = vi.mocked(unpackBackupBytes);
+const writeAndroidContentUriFileMock = vi.mocked(writeAndroidContentUriFile);
 
 function makeManifest(): BackupManifest {
   return {
@@ -118,8 +141,12 @@ function makeManifest(): BackupManifest {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  isAndroidRuntimeMock.mockReturnValue(false);
+  deleteBackupTempFileMock.mockResolvedValue(undefined);
   packBackupMock.mockResolvedValue(undefined);
+  packBackupTempFileMock.mockResolvedValue("C:\\temp\\norea-backup.zip");
   applyBackupSnapshotMock.mockResolvedValue(undefined);
+  readAndroidContentUriBytesMock.mockResolvedValue([4, 5, 6]);
   restoreChapterContentStorageMirrorMock.mockResolvedValue({
     chapters: 0,
     novels: 0,
@@ -127,9 +154,11 @@ beforeEach(() => {
 });
 
 describe("defaultBackupFilename", () => {
-  it("uses the YYYY-MM-DD date as a filename suffix", () => {
-    const fixed = new Date("2026-05-05T03:14:15Z");
-    expect(defaultBackupFilename(fixed)).toBe("norea-backup-2026-05-05.zip");
+  it("uses the local yyyyMMddHHmmss timestamp as a filename suffix", () => {
+    const fixed = new Date(2026, 4, 5, 3, 14, 15);
+    expect(defaultBackupFilename(fixed)).toBe(
+      "norea-backup-20260505031415.zip",
+    );
   });
 });
 
@@ -144,12 +173,34 @@ describe("backup import/export flow", () => {
     expect(path).toBe("C:\\backup.zip");
     expect(saveMock).toHaveBeenCalledWith({
       defaultPath: expect.stringMatching(
-        /^norea-backup-\d{4}-\d{2}-\d{2}\.zip$/,
+        /^norea-backup-\d{14}\.zip$/,
       ),
       filters: [{ name: "Norea Backup", extensions: ["zip"] }],
     });
     expect(gatherBackupSnapshotMock).toHaveBeenCalledTimes(1);
     expect(packBackupMock).toHaveBeenCalledWith(manifest, "C:\\backup.zip");
+  });
+
+  it("exports Android content URI backups through a temp file stream", async () => {
+    const manifest = makeManifest();
+    const uri = "content://com.android.externalstorage.documents/document/backup.zip";
+    isAndroidRuntimeMock.mockReturnValue(true);
+    saveMock.mockResolvedValue(uri);
+    gatherBackupSnapshotMock.mockResolvedValue(manifest);
+
+    const path = await exportBackupToFile();
+
+    expect(path).toBe(uri);
+    expect(packBackupTempFileMock).toHaveBeenCalledWith(manifest);
+    expect(writeAndroidContentUriFileMock).toHaveBeenCalledWith(
+      uri,
+      "C:\\temp\\norea-backup.zip",
+      "application/zip",
+    );
+    expect(deleteBackupTempFileMock).toHaveBeenCalledWith(
+      "C:\\temp\\norea-backup.zip",
+    );
+    expect(packBackupMock).not.toHaveBeenCalled();
   });
 
   it("skips export work when the save dialog is cancelled", async () => {
@@ -180,6 +231,22 @@ describe("backup import/export flow", () => {
       chapterIds: new Set([10]),
       contentOnly: true,
     });
+  });
+
+  it("imports Android content URI backups through the storage bridge", async () => {
+    const manifest = makeManifest();
+    const uri = "content://com.android.externalstorage.documents/document/backup.zip";
+    isAndroidRuntimeMock.mockReturnValue(true);
+    openMock.mockResolvedValue(uri);
+    unpackBackupBytesMock.mockResolvedValue(manifest);
+
+    const path = await importBackupFromFile();
+
+    expect(path).toBe(uri);
+    expect(readAndroidContentUriBytesMock).toHaveBeenCalledWith(uri);
+    expect(unpackBackupBytesMock).toHaveBeenCalledWith([4, 5, 6]);
+    expect(unpackBackupMock).not.toHaveBeenCalled();
+    expect(applyBackupSnapshotMock).toHaveBeenCalledWith(manifest);
   });
 
   it("skips import work when the open dialog is cancelled", async () => {

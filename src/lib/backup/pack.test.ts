@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { BACKUP_FORMAT_VERSION, type BackupManifest } from "./format";
-import { packBackup } from "./pack";
+import { deleteBackupTempFile, packBackup, packBackupTempFile } from "./pack";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -134,5 +134,32 @@ describe("packBackup", () => {
     await packBackup(manifest, "C:\\backup.zip");
 
     expect(manifest).toEqual(before);
+  });
+
+  it("invokes backup_pack_temp_file with metadata only", async () => {
+    const manifest = makeManifest();
+    invokeMock.mockResolvedValue("C:\\temp\\norea-backup.zip");
+
+    await expect(packBackupTempFile(manifest)).resolves.toBe(
+      "C:\\temp\\norea-backup.zip",
+    );
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    const [command, args] = invokeMock.mock.calls[0]!;
+    expect(command).toBe("backup_pack_temp_file");
+
+    const typed = args as { manifestJson: string };
+    const leanManifest = JSON.parse(typed.manifestJson) as BackupManifest;
+    expect(leanManifest.chapters[0]?.content).toBeNull();
+    expect(leanManifest.chapters[0]?.isDownloaded).toBe(false);
+    expect(leanManifest.chapters[0]?.mediaBytes).toBe(0);
+  });
+
+  it("deletes backup temp files through the Rust command", async () => {
+    await deleteBackupTempFile("C:\\temp\\norea-backup.zip");
+
+    expect(invokeMock).toHaveBeenCalledWith("backup_delete_temp_file", {
+      path: "C:\\temp\\norea-backup.zip",
+    });
   });
 });
