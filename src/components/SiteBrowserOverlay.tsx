@@ -45,9 +45,10 @@ function syncSiteBrowserBounds(
  * specific bounds, navigation, and chrome behavior are isolated behind
  * the site-browser platform API.
  *
- * The Webview is never destroyed; its cookie jar survives every
- * open/close cycle so a manual login or CF clearance carries over
- * to the next plugin scrape.
+ * Explicit site opens may recreate the foreground WebView to clear
+ * per-WebView navigation history. Browser profile storage survives
+ * that reset so a manual login or CF clearance carries over to the
+ * next plugin scrape.
  *
  * Android uses a native WebView attached to the main Activity, but it
  * follows the same visible-overlay contract.
@@ -115,16 +116,9 @@ export function SiteBrowserOverlay() {
         hasPlaceholder: placeholderRef.current !== null,
       });
       lastOpenSequence.current = openSequence;
-      const node = placeholderRef.current;
-      if (inPageControls || node) {
-        void syncSiteBrowserBounds(platform, node, currentUrl).catch((error) =>
-          reportScraperError("set bounds", error),
-        );
-        queueBoundsResync();
-      }
       void (async () => {
         try {
-          await platform.navigate(currentUrl);
+          await platform.navigate(currentUrl, { resetHistory: true });
           const nextNode = placeholderRef.current;
           debugSiteBrowser("navigate returned", {
             platform: platform.name,

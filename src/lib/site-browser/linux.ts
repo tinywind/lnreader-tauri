@@ -52,8 +52,12 @@ export const linuxSiteBrowser: SiteBrowserPlatformApi = {
     await invoke("scraper_set_bounds", args);
     debugLinuxSiteBrowser("setBounds complete", args);
   },
-  navigate: async (url) => {
-    const args = { url, userAgent: getScraperUserAgent() };
+  navigate: async (url, options) => {
+    const args = {
+      url,
+      userAgent: getScraperUserAgent(),
+      resetHistory: options?.resetHistory ?? false,
+    };
     debugLinuxSiteBrowser("navigate invoke", args);
     await invoke("scraper_navigate", args);
     debugLinuxSiteBrowser("navigate complete", args);

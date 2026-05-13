@@ -651,6 +651,39 @@ fn hide_scraper_surface_for_key(
 }
 
 #[cfg(desktop)]
+fn close_scraper_webview_for_key(
+    app: &AppHandle,
+    state: &ScraperState,
+    key: &str,
+    reason: &str,
+) -> Result<bool, String> {
+    {
+        let mut visible_key = state
+            .visible_key
+            .lock()
+            .expect("scraper visible_key mutex");
+        if visible_key.as_deref() == Some(key) {
+            *visible_key = None;
+        }
+    }
+    let entry = state
+        .webviews
+        .lock()
+        .expect("scraper webviews mutex")
+        .remove(key);
+    let Some(entry) = entry else {
+        return Ok(false);
+    };
+    if let Some(webview) = app.get_webview(&entry.label) {
+        webview
+            .close()
+            .map_err(|err| format!("scraper: close {reason} for {key}: {err}"))?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(desktop)]
 fn set_webview_bounds(
     webview: &ScraperWebview,
     x: f64,
@@ -782,7 +815,6 @@ pub async fn scraper_set_bounds(
         .lock()
         .expect("scraper visible_key mutex")
         .clone();
-    let became_visible = previous_key.as_deref() != Some(key.as_str());
     if previous_key.as_deref() != Some(key.as_str()) {
         if let Some(previous_key) = previous_key {
             if let Some(previous) = state
@@ -806,18 +838,6 @@ pub async fn scraper_set_bounds(
         .map_err(|err| format!("scraper: show: {err}"))?;
     log_windows_scraper_event("scraper_set_bounds show complete");
     set_webview_bounds(&scraper, safe_x, safe_y, safe_w, safe_h, "browser")?;
-    if became_visible {
-        let parsed: Url = url
-            .parse()
-            .map_err(|err| format!("scraper_set_bounds: invalid url '{url}': {err}"))?;
-        scraper
-            .navigate(parsed)
-            .map_err(|err| format!("scraper_set_bounds: navigate: {err}"))?;
-        *state
-            .last_navigated
-            .lock()
-            .expect("scraper last_navigated mutex") = Some(url);
-    }
     *state.visible_key.lock().expect("scraper visible_key mutex") = Some(key);
     log_windows_scraper_event("scraper_set_bounds complete");
     Ok(())
@@ -968,10 +988,19 @@ pub async fn scraper_navigate(
     state: tauri::State<'_, ScraperState>,
     url: String,
     user_agent: Option<String>,
+    reset_history: Option<bool>,
 ) -> Result<(), String> {
     let user_agent = normalize_user_agent(user_agent);
+    let reset_history = reset_history.unwrap_or(false);
     if cfg!(target_os = "windows") {
-        log::trace!("[scraper:windows] scraper_navigate start url={url}");
+        log::trace!(
+            "[scraper:windows] scraper_navigate start url={url} reset_history={reset_history}"
+        );
+    }
+    if reset_history
+        && close_scraper_webview_for_key(&app, &state, IMMEDIATE_EXECUTOR, "history reset")?
+    {
+        log_windows_scraper_event("scraper_navigate reset foreground webview");
     }
     let scraper =
         scraper_handle_for_key(&app, &state, IMMEDIATE_EXECUTOR, user_agent.as_deref())?;
@@ -999,6 +1028,7 @@ pub async fn scraper_navigate(
     _state: tauri::State<'_, ScraperState>,
     url: String,
     _user_agent: Option<String>,
+    _reset_history: Option<bool>,
 ) -> Result<(), String> {
     Err(format!(
         "scraper_navigate is handled by the Android native scraper bridge: {url}"
@@ -1012,6 +1042,7 @@ pub async fn scraper_navigate(
     _state: tauri::State<'_, ScraperState>,
     _url: String,
     _user_agent: Option<String>,
+    _reset_history: Option<bool>,
 ) -> Result<(), String> {
     Err(SCRAPER_UNAVAILABLE.to_string())
 }

@@ -24,8 +24,10 @@ export const androidSiteBrowser: SiteBrowserPlatformApi = {
   setBounds: async (bounds) => {
     androidScraperSetBounds(bounds, getScraperUserAgent());
   },
-  navigate: async (url) => {
-    await androidScraperNavigate(url, getScraperUserAgent());
+  navigate: async (url, options) => {
+    await androidScraperNavigate(url, getScraperUserAgent(), {
+      resetHistory: options?.resetHistory ?? false,
+    });
   },
   hide: async () => {
     androidScraperHide();

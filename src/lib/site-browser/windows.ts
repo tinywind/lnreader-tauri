@@ -72,8 +72,12 @@ export const windowsSiteBrowser: SiteBrowserPlatformApi = {
     await invoke("scraper_set_bounds", args);
     debugWindowsSiteBrowser("setBounds complete", args);
   },
-  navigate: async (url) => {
-    const args = { url, userAgent: getScraperUserAgent() };
+  navigate: async (url, options) => {
+    const args = {
+      url,
+      userAgent: getScraperUserAgent(),
+      resetHistory: options?.resetHistory ?? false,
+    };
     debugWindowsSiteBrowser("navigate invoke", args);
     await invoke("scraper_navigate", args);
     debugWindowsSiteBrowser("navigate complete", args);

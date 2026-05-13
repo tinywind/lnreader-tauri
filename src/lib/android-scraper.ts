@@ -252,12 +252,14 @@ export function androidScraperHide(): void {
 export function androidScraperNavigate(
   url: string,
   userAgent: string | null,
+  options: { resetHistory?: boolean } = {},
 ): Promise<boolean> {
   return callNative<boolean>(
     "navigate",
     {
       url,
       userAgent,
+      resetHistory: options.resetHistory ?? false,
     },
     10_000,
   );

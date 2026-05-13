@@ -333,6 +333,20 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
     return webView
   }
 
+  private fun resetScraperWebView(state: QueueState, userAgent: String?): WebView {
+    state.webView?.let { existing ->
+      logState(state, "reset scraper webview")
+      existing.stopLoading()
+      existing.webViewClient = WebViewClient()
+      scraperContainer().removeView(existing)
+      existing.destroy()
+    }
+    state.webView = null
+    state.currentUrl = null
+    state.documentStartScriptEnabled = false
+    return scraper(state, userAgent)
+  }
+
   @SuppressLint("SetJavaScriptEnabled")
   private fun createScraperWebView(
     state: QueueState,
@@ -552,8 +566,14 @@ class AndroidScraperBridge(private val mainWebView: WebView) {
   private fun runNavigate(state: QueueState, payload: JSONObject) {
     val id = payload.getString("id")
     val url = payload.getString("url")
-    val webView = scraper(state, payloadUserAgent(payload))
-    logState(state, "runNavigate start id=$id url=$url", url)
+    val resetHistory = payload.optBoolean("resetHistory", false)
+    val userAgent = payloadUserAgent(payload)
+    val webView = if (resetHistory) {
+      resetScraperWebView(state, userAgent)
+    } else {
+      scraper(state, userAgent)
+    }
+    logState(state, "runNavigate start id=$id url=$url resetHistory=$resetHistory", url)
     showScraper()
     webView.loadUrl(url)
     finish(
