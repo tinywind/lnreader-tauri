@@ -22,8 +22,8 @@ but it is a separate app with its own data, backup, and source system.
 
 - Browse and search installed reading sources.
 - Add novels to your library and organize them with categories.
-- Import local plain text, HTML, and PDF files.
-- Download images from HTML `<img>` tags for local reading.
+- Import local plain text, HTML, Markdown, EPUB, and PDF files.
+- Cache rendered chapter media for offline reading.
 - Create local novel homes, add chapter files later, reorder local chapters, and
   manage local metadata with locally uploaded cover images.
 - Read in paged or scrolling mode.

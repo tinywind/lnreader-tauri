@@ -53,7 +53,7 @@ Expected results:
 - The downloaded HTML chapter has `is_downloaded = 1`,
   `content_type = 'html'`, and non-zero `content_bytes`.
 - The downloaded text chapter has `is_downloaded = 1`,
-  `content_type = 'text'`, and non-zero `content_bytes`.
+  `content_type = 'html'`, and non-zero `content_bytes`.
 - The downloaded PDF chapter has `is_downloaded = 1`,
   `content_type = 'pdf'`, and non-zero `content_bytes`.
 
@@ -81,7 +81,7 @@ Expected results:
 - Reopen the same downloaded HTML chapter.
 - Confirm the same images still render from the local media cache.
 - Open the text chapter and confirm it renders readable escaped text rather than
-  raw HTML markup.
+  raw HTML markup. The stored body should already be HTML.
 - Open the PDF chapter and confirm the reader handles the PDF chapter path
   without overwriting its `content_type`.
 

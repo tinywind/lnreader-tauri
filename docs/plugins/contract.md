@@ -31,6 +31,7 @@ export interface PluginItem {
   customCSS?: string;
   hasUpdate?: boolean;
   hasSettings?: boolean;
+  installMode?: "single" | "multiSource";
 }
 
 export interface Plugin extends PluginItem {
@@ -69,6 +70,11 @@ persisting the installed plugin. Local file installs do not have a repository
 index fallback, so uploaded `.js` plugin files that omit repository-only
 metadata are registered with `lang: "local"` and an empty `iconUrl`. They still
 must export the required runtime functions before they can be registered.
+Plugins are installed as one source by default. A repository index item may set
+`installMode: "multiSource"` when the same JavaScript source acts as a provider
+for multiple installed source instances. In that mode, the provider id remains
+the catalog id, while each installed source instance receives its own installed
+plugin id and app-managed input namespace.
 Plugins must provide `getBaseUrl()` and return a non-empty absolute `http` or
 `https` URL. The host uses it for source navigation, URL fallback, fetch
 context, and cooldown grouping.
@@ -83,7 +89,7 @@ export interface NovelItem {
   cover?: string;
 }
 
-export type ChapterContentType = "html" | "text" | "pdf" | "epub";
+export type ChapterContentType = "html" | "text" | "markdown" | "pdf" | "epub";
 
 export type ChapterBinaryMediaType = "application/pdf" | "application/epub+zip";
 
@@ -91,11 +97,8 @@ export interface ChapterBinaryResource {
   type: "binary";
   contentType: "pdf" | "epub";
   mediaType: ChapterBinaryMediaType;
-  filename?: string;
-  byteLength: number;
   bytes: ArrayBuffer | Uint8Array;
-  sha256?: string;
-  fallbackHtml?: string;
+  byteLength?: number;
 }
 
 export interface ChapterItem {
@@ -148,15 +151,24 @@ fetch a partial list may return the same full result as `parseNovel()`.
 
 `contentType` is stored per chapter and defaults to `"html"` for older plugins.
 Use `"html"` when `parseChapter` returns a reader-ready HTML fragment, `"text"`
-when it returns plain text that the host must escape and wrap, and `"pdf"` or
-`"epub"` when the chapter represents a first-class binary document.
-`parseChapter()` remains required for every chapter and must return a readable
-HTML fallback for PDF/EPUB chapters. Plugins that can provide the real binary
-document should additionally implement `parseChapterResource()` and return a
+when it returns plain text that the host must escape and wrap into HTML,
+`"markdown"` when it returns Markdown that the host must render and sanitize into
+HTML, and `"pdf"` or `"epub"` when the chapter represents a first-class binary
+document. Text and Markdown source bodies are converted to HTML at download time;
+downloaded chapter bodies are rendered by the HTML reader.
+`parseChapter()` remains required for legacy plugin shape compatibility, but the
+host does not call it when downloading `"pdf"` or `"epub"` chapters. Binary
+chapters must implement `parseChapterResource()` and return a
 `ChapterBinaryResource` with `bytes` as an `ArrayBuffer` or `Uint8Array`.
-For HTML chapters, the host resolves `<img src>` values against
-`resolveUrl(chapter.path, false)` or the chapter path and stores downloaded media
-in the local chapter cache before saving the rewritten HTML.
+PDF bytes are stored as a PDF data URL. EPUB bytes are unpacked by the host,
+converted to sanitized reader HTML, and rendered through the normal HTML reader.
+The host preserves EPUB author styles and internal resources inside the
+converted HTML, then applies reader settings and custom CSS/JS outside that
+converted layer.
+For HTML and Markdown chapters, the host resolves rendered media values against
+`resolveUrl(chapter.path, false)` or the chapter path and stores downloaded
+media in the local chapter cache before saving the rewritten HTML. Normal links
+are not rewritten.
 
 Binary chapter resources must contain bytes and metadata only. Do not return
 base64 strings, token-bearing URLs, authorization headers, cookies, or request
@@ -199,10 +211,11 @@ type PluginInputValue = string | boolean;
 interface PluginInputDefinition {
   value?: PluginInputValue;
   label?: string;
-  type?: "Text" | "Password" | "Switch" | "Url" | string;
+  type?: "Text" | "Password" | "Switch" | "Select" | "Url" | string;
   placeholder?: string;
   required?: boolean;
   private?: boolean;
+  options?: { label: string; value: string }[];
 }
 
 type PluginInputSchema = Record<string, PluginInputDefinition>;
@@ -434,8 +447,12 @@ storage.clearAll();
 2. `installPlugin(item)` downloads `item.url`, evaluates the plugin, verifies
    the loaded id, registers it in memory, and stores source code plus metadata in
    SQLite.
-3. `loadInstalledFromDb()` rehydrates installed plugins from SQLite on startup.
-4. `uninstallPlugin(id)` removes the in-memory plugin and deletes the persisted
+3. `installPluginInstance(item, input)` is used for `multiSource` providers. It
+   verifies the provider source, assigns a unique installed source id, stores the
+   instance inputs under that id, and persists the same provider source code for
+   the instance.
+4. `loadInstalledFromDb()` rehydrates installed plugins from SQLite on startup.
+5. `uninstallPlugin(id)` removes the in-memory plugin and deletes the persisted
    SQLite row.
 
 `pluginId === "local"` is reserved for local-file novels, including novels
@@ -467,10 +484,11 @@ The host does not tolerate missing `parseNovelSince()` or invalid
    returns the same full chapter list as `parseNovel()`.
 6. Call `parseChapter(chapter.path)` and expect content that matches the
    chapter's `contentType`: reader-ready HTML for `"html"`, plain text for
-   `"text"`, or readable fallback HTML for `"pdf"` and `"epub"`.
-7. If `contentType` is `"pdf"` or `"epub"` and the plugin implements
-   `parseChapterResource()`, call it and expect `{ type: "binary", bytes,
-   byteLength, mediaType }` without URLs, headers, or request init values.
+   `"text"`, or Markdown source for `"markdown"`. Downloading `"text"` or
+   `"markdown"` chapters must store reader-ready HTML.
+7. If `contentType` is `"pdf"` or `"epub"`, call `parseChapterResource()` and
+   expect `{ type: "binary", bytes, mediaType }` without URLs, headers, or
+   request init values.
 8. For protected sites, open the site browser overlay first, then repeat the
    fetch path.
 
