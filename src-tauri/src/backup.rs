@@ -168,6 +168,73 @@ fn content_byte_len(value: Option<&str>) -> i64 {
     value.map(|content| content.as_bytes().len() as i64).unwrap_or(0)
 }
 
+fn segment_has_remote_url(segment: &str) -> bool {
+    segment.contains("http://")
+        || segment.contains("https://")
+        || segment.contains("=\"//")
+        || segment.contains("='//")
+        || segment.contains("=//")
+}
+
+fn contains_remote_style_url(content: &str) -> bool {
+    let mut rest = content;
+    while let Some(position) = rest.find("url(") {
+        let value = &rest[position + 4..];
+        let value = value.trim_start_matches(|ch: char| {
+            ch.is_ascii_whitespace() || ch == '"' || ch == '\''
+        });
+        if value.starts_with("http://")
+            || value.starts_with("https://")
+            || value.starts_with("//")
+        {
+            return true;
+        }
+        rest = &value[1.min(value.len())..];
+    }
+    false
+}
+
+fn contains_remote_media_tag(content: &str) -> bool {
+    const MEDIA_TAGS: [&str; 9] = [
+        "<img", "<picture", "<source", "<video", "<audio", "<track", "<iframe", "<embed",
+        "<object",
+    ];
+    for tag in MEDIA_TAGS {
+        let mut rest = content;
+        while let Some(position) = rest.find(tag) {
+            let tag_body = &rest[position..];
+            let end = tag_body
+                .find('>')
+                .unwrap_or_else(|| tag_body.len().min(4096));
+            if segment_has_remote_url(&tag_body[..end]) {
+                return true;
+            }
+            let next = position + tag.len();
+            if next >= rest.len() {
+                break;
+            }
+            rest = &rest[next..];
+        }
+    }
+    false
+}
+
+fn chapter_media_repair_needed(content: Option<&str>, content_type: Option<&str>) -> i64 {
+    if backup_content_type(content_type) != "html" {
+        return 0;
+    }
+    let Some(content) = content else {
+        return 0;
+    };
+    if content.is_empty() {
+        return 0;
+    }
+    let content = content.to_ascii_lowercase();
+    bool_to_int(
+        contains_remote_media_tag(&content) || contains_remote_style_url(&content),
+    )
+}
+
 fn select_backup_repository(
     repositories: &[BackupRestoreRepository],
 ) -> Option<&BackupRestoreRepository> {
@@ -303,8 +370,9 @@ async fn execute_restore_snapshot(
             "INSERT INTO chapter (
                 id, novel_id, path, name, chapter_number, position, page,
                 bookmark, unread, progress, is_downloaded, content, content_bytes,
-                media_bytes, content_type, release_time, read_at, created_at, found_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+                media_bytes, media_repair_needed, content_type, release_time,
+                read_at, created_at, found_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
         )
         .bind(chapter.id)
         .bind(chapter.novel_id)
@@ -320,6 +388,10 @@ async fn execute_restore_snapshot(
         .bind(chapter.content.as_deref())
         .bind(content_byte_len(chapter.content.as_deref()))
         .bind(restored_media_bytes)
+        .bind(chapter_media_repair_needed(
+            chapter.content.as_deref(),
+            chapter.content_type.as_deref(),
+        ))
         .bind(backup_content_type(chapter.content_type.as_deref()))
         .bind(chapter.release_time.as_deref())
         .bind(chapter.read_at)
@@ -587,6 +659,35 @@ pub fn backup_unpack_bytes(body: Vec<u8>) -> Result<UnpackedBackup, String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn media_repair_detection_ignores_local_media_refs() {
+        assert_eq!(
+            chapter_media_repair_needed(
+                Some(r#"<img src="norea-media://chapter/7/cache/page.png">"#),
+                Some("html"),
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn media_repair_detection_flags_remote_media_refs() {
+        assert_eq!(
+            chapter_media_repair_needed(
+                Some(r#"<img src="https://cdn.example/page.png">"#),
+                Some("html"),
+            ),
+            1
+        );
+        assert_eq!(
+            chapter_media_repair_needed(
+                Some(r#"<p style="background-image: url(//cdn.example/page.png)"></p>"#),
+                Some("html"),
+            ),
+            1
+        );
+    }
 
     #[test]
     fn pack_then_unpack_round_trips_manifest_only() {

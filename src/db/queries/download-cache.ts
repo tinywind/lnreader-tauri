@@ -14,6 +14,7 @@ export interface DownloadCacheNovel {
   totalChapters: number;
   unreadDownloaded: number;
   readDownloaded: number;
+  mediaRepairNeededChapters: number;
   totalBytes: number;
   lastDownloadedAt: number | null;
 }
@@ -34,12 +35,23 @@ export interface DownloadCacheChapter {
   downloadedAt: number | null;
   contentBytes: number;
   mediaBytes: number;
+  mediaRepairNeeded: boolean;
   totalBytes: number;
 }
 
 interface RawDownloadCacheChapter
-  extends Omit<DownloadCacheChapter, "unread"> {
+  extends Omit<DownloadCacheChapter, "unread" | "mediaRepairNeeded"> {
   unread: number;
+  mediaRepairNeeded: unknown;
+}
+
+function sqliteBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true";
+  }
+  return false;
 }
 
 export interface DownloadCacheMediaBackfillCandidate {
@@ -73,6 +85,8 @@ export async function listDownloadCacheNovels(): Promise<DownloadCacheNovel[]> {
                         AS unreadDownloaded,
        COALESCE(SUM(CASE WHEN c.unread = 0 THEN 1 ELSE 0 END), 0)
                         AS readDownloaded,
+       COALESCE(SUM(CASE WHEN c.media_repair_needed = 1 THEN 1 ELSE 0 END), 0)
+                        AS mediaRepairNeededChapters,
        COALESCE(SUM(c.content_bytes + c.media_bytes), 0) AS totalBytes,
        MAX(c.updated_at) AS lastDownloadedAt
      FROM novel n
@@ -105,6 +119,7 @@ export async function listDownloadCacheChapters(
        c.updated_at AS downloadedAt,
        c.content_bytes AS contentBytes,
        c.media_bytes AS mediaBytes,
+       c.media_repair_needed AS mediaRepairNeeded,
        c.content_bytes + c.media_bytes AS totalBytes
      FROM chapter c
      JOIN novel n ON n.id = c.novel_id
@@ -118,6 +133,7 @@ export async function listDownloadCacheChapters(
   return rows.map((row) => ({
     ...row,
     unread: !!row.unread,
+    mediaRepairNeeded: sqliteBoolean(row.mediaRepairNeeded),
   }));
 }
 
@@ -131,6 +147,7 @@ export async function deleteDownloadCacheChapter(
        content       = NULL,
        content_bytes = 0,
        media_bytes   = 0,
+       media_repair_needed = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE id = $1
@@ -155,6 +172,7 @@ export async function deleteDownloadCacheNovel(
        content       = NULL,
        content_bytes = 0,
        media_bytes   = 0,
+       media_repair_needed = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE novel_id = $1
@@ -177,6 +195,7 @@ export async function deleteAllDownloadCache(): Promise<DownloadCacheResult> {
        content       = NULL,
        content_bytes = 0,
        media_bytes   = 0,
+       media_repair_needed = 0,
        is_downloaded = 0,
        updated_at    = unixepoch()
      WHERE is_downloaded = 1

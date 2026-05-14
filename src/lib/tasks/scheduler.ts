@@ -86,6 +86,7 @@ export type SourceTaskKind =
 
 export type ChapterTaskKind =
   | "chapter.download"
+  | "chapter.repairMedia"
   | "chapter.deleteDownload";
 
 export type TaskKind = MainLaneTaskKind | SourceTaskKind | ChapterTaskKind;

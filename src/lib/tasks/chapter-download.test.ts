@@ -28,6 +28,9 @@ vi.mock("../../store/browse", () => ({
 vi.mock("../chapter-media", () => ({
   cacheHtmlChapterMedia: vi.fn(),
   clearChapterMedia: vi.fn(),
+  getStoredChapterMediaBytes: vi.fn(),
+  hasRemoteChapterMedia: vi.fn(),
+  localChapterMediaCacheKeys: vi.fn(),
   pruneChapterMedia: vi.fn(),
 }));
 vi.mock("../plugins/manager", () => ({
@@ -58,8 +61,19 @@ import {
   saveChapterContent,
   saveChapterPartialContent,
 } from "../../db/queries/chapter";
-import { cacheHtmlChapterMedia, clearChapterMedia } from "../chapter-media";
-import { enqueueChapterDownload } from "./chapter-download";
+import { getNovelById } from "../../db/queries/novel";
+import {
+  cacheHtmlChapterMedia,
+  clearChapterMedia,
+  getStoredChapterMediaBytes,
+  hasRemoteChapterMedia,
+  localChapterMediaCacheKeys,
+  pruneChapterMedia,
+} from "../chapter-media";
+import {
+  enqueueChapterDownload,
+  enqueueChapterMediaRepair,
+} from "./chapter-download";
 
 let capturedSpec: SourceTaskSpec<void> | null = null;
 
@@ -85,12 +99,18 @@ beforeEach(() => {
   vi.mocked(cacheHtmlChapterMedia).mockResolvedValue({
     cacheKey: "media-cache",
     html: "<img>",
+    mediaFailures: [],
     mediaBytes: 3,
+    storedMediaCount: 1,
   });
   vi.mocked(getChapterById).mockResolvedValue({
     contentType: "text",
     id: 7,
   } as never);
+  vi.mocked(getNovelById).mockResolvedValue(null);
+  vi.mocked(getStoredChapterMediaBytes).mockResolvedValue(3);
+  vi.mocked(hasRemoteChapterMedia).mockReturnValue(true);
+  vi.mocked(localChapterMediaCacheKeys).mockReturnValue(["media-cache"]);
   vi.mocked(saveChapterContent).mockResolvedValue({ rowsAffected: 1 });
   vi.mocked(saveChapterPartialContent).mockResolvedValue({ rowsAffected: 1 });
 });
@@ -166,6 +186,54 @@ describe("enqueueChapterDownload", () => {
     });
   });
 
+  it("records media fallback detail without failing the chapter download", async () => {
+    const setDetail = vi.fn();
+    pluginMocks.parseChapter.mockResolvedValueOnce(`<img src="/page.png">`);
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "html",
+      id: 7,
+    } as never);
+    vi.mocked(cacheHtmlChapterMedia).mockResolvedValueOnce({
+      cacheKey: null,
+      html: `<img src="https://source.test/page.png">`,
+      mediaFailures: [
+        {
+          message: "Failed to fetch",
+          url: "https://source.test/page.png",
+        },
+      ],
+      mediaBytes: 0,
+      storedMediaCount: 0,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7",
+      contentType: "html",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      setDetail,
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(setDetail).toHaveBeenCalledWith(
+      "1 media assets using remote fallback",
+    );
+    expect(saveChapterContent).toHaveBeenCalledWith(
+      7,
+      `<img src="https://source.test/page.png">`,
+      "html",
+      { mediaBytes: 0 },
+    );
+  });
+
   it("fails when the local chapter row is missing", async () => {
     vi.mocked(getChapterById).mockResolvedValueOnce(null);
 
@@ -215,5 +283,106 @@ describe("enqueueChapterDownload", () => {
     );
 
     expect(clearChapterMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("enqueueChapterMediaRepair", () => {
+  it("repairs remote media without parsing chapter content", async () => {
+    const setDetail = vi.fn();
+    const storedHtml = `<img src="https://cdn.test/page.png">`;
+    const repairedHtml = `<img src="norea-media://chapter/7/media-cache/page.png">`;
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      chapterNumber: "7",
+      content: storedHtml,
+      contentType: "html",
+      id: 7,
+      isDownloaded: true,
+      name: "Chapter 7",
+      novelId: 11,
+      path: "/chapter/7",
+      position: 7,
+    } as never);
+    vi.mocked(getNovelById).mockResolvedValueOnce({
+      id: 11,
+      name: "Novel",
+      path: "/novel",
+    } as never);
+    vi.mocked(cacheHtmlChapterMedia).mockResolvedValueOnce({
+      cacheKey: "media-cache",
+      html: repairedHtml,
+      mediaFailures: [],
+      mediaBytes: 8,
+      storedMediaCount: 1,
+    });
+    vi.mocked(getStoredChapterMediaBytes).mockResolvedValueOnce(8);
+
+    enqueueChapterMediaRepair({
+      id: 7,
+      pluginId: "source-a",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      executor: "pool:1",
+      setDetail,
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        html: storedHtml,
+        previousHtml: storedHtml,
+        requestInit: { headers: { Referer: "https://source.test/" } },
+        scraperExecutor: "pool:1",
+        sourceId: "source-a",
+      }),
+    );
+    expect(saveChapterContent).toHaveBeenCalledWith(7, repairedHtml, "html", {
+      mediaBytes: 8,
+    });
+    expect(pruneChapterMedia).toHaveBeenCalledWith(
+      7,
+      "media-cache",
+      expect.objectContaining({ chapterId: 7, sourceId: "source-a" }),
+    );
+    expect(setDetail).toHaveBeenCalledWith("1 media assets repaired");
+  });
+
+  it("succeeds without work when downloaded HTML has no remote media", async () => {
+    const setDetail = vi.fn();
+    vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: `<img src="norea-media://chapter/7/media-cache/page.png">`,
+      contentType: "html",
+      id: 7,
+      isDownloaded: true,
+      name: "Chapter 7",
+      novelId: 11,
+      path: "/chapter/7",
+      position: 7,
+    } as never);
+
+    enqueueChapterMediaRepair({
+      id: 7,
+      pluginId: "source-a",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      setDetail,
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(setDetail).toHaveBeenCalledWith("No remote media to repair");
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(cacheHtmlChapterMedia).not.toHaveBeenCalled();
+    expect(saveChapterContent).not.toHaveBeenCalled();
   });
 });

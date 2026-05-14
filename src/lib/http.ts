@@ -169,6 +169,44 @@ function mediaFallbackHost(url: string): string {
   }
 }
 
+function sanitizedFetchUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url.split(/[?#]/, 1)[0] ?? url;
+  }
+}
+
+function mediaFallbackContextHost(contextUrl: string | undefined): string {
+  if (!contextUrl) return "";
+  try {
+    return new URL(contextUrl).host;
+  } catch {
+    return "";
+  }
+}
+
+function fetchErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function mediaFallbackLogContext(
+  url: string,
+  init: HttpInit,
+  scraperExecutor: ScraperExecutorId,
+  status?: number,
+): Record<string, number | string | undefined> {
+  return {
+    contextHost: mediaFallbackContextHost(init.contextUrl),
+    host: mediaFallbackHost(url),
+    sanitizedUrl: sanitizedFetchUrl(url),
+    scraperExecutor,
+    sourceId: init.sourceId,
+    status,
+  };
+}
+
 async function cancelScraperExecutor(
   executor: ScraperExecutorId,
 ): Promise<boolean> {
@@ -444,12 +482,16 @@ export async function pluginMediaFetch(
   url: string,
   init: HttpInit = {},
 ): Promise<Response> {
+  const scraperExecutor =
+    init.scraperExecutor ?? activeScraperExecutor(init.sourceId);
+  let browserError: unknown;
   try {
     return await pluginFetch(url, init);
   } catch (error) {
     if (isRequestAbortError(error)) {
       throw error;
     }
+    browserError = error;
     const host = mediaFallbackHost(url);
     const fallbackKey = host || url;
     if (!nativeMediaFallbackHosts.has(fallbackKey)) {
@@ -457,9 +499,8 @@ export async function pluginMediaFetch(
       console.debug(
         "[plugin-media-fetch] browser fetch failed; using native media fetch",
         {
-          error: error instanceof Error ? error.message : String(error),
-          host,
-          sourceId: init.sourceId,
+          ...mediaFallbackLogContext(url, init, scraperExecutor),
+          error: fetchErrorMessage(error),
         },
       );
     }
@@ -468,14 +509,37 @@ export async function pluginMediaFetch(
   const wireInit = toWireInit(init);
   const userAgent = scraperUserAgent(wireInit.headers);
   const timeoutMs = requestTimeoutMs(init.timeoutMs);
-  const result = await nativeMediaFetch(
-    url,
-    wireInit,
-    userAgent,
-    timeoutMs,
-    init.signal,
-  );
-  return responseFromWire(result);
+  console.debug("[plugin-media-fetch] native fallback started", {
+    ...mediaFallbackLogContext(url, init, scraperExecutor),
+  });
+  try {
+    const result = await nativeMediaFetch(
+      url,
+      wireInit,
+      userAgent,
+      timeoutMs,
+      init.signal,
+    );
+    console.debug("[plugin-media-fetch] native fallback finished", {
+      ...mediaFallbackLogContext(url, init, scraperExecutor, result.status),
+    });
+    return responseFromWire(result);
+  } catch (nativeError) {
+    if (isRequestAbortError(nativeError)) {
+      throw nativeError;
+    }
+    console.warn("[plugin-media-fetch] native fallback failed", {
+      ...mediaFallbackLogContext(url, init, scraperExecutor),
+      browserError: fetchErrorMessage(browserError),
+      nativeError: fetchErrorMessage(nativeError),
+    });
+    throw new Error(
+      `Media fetch failed for ${sanitizedFetchUrl(url)}; browser: ${fetchErrorMessage(
+        browserError,
+      )}; native: ${fetchErrorMessage(nativeError)}`,
+      { cause: nativeError },
+    );
+  }
 }
 
 /**

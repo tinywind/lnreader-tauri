@@ -11,6 +11,7 @@ import {
   getAdjacentChapter,
   getChapterById,
   getChapterContent,
+  getLatestSourceChapterAnchor,
   insertChapterIfAbsent,
   listChaptersByNovel,
   listLibraryUpdates,
@@ -117,6 +118,37 @@ describe("insertChapterIfAbsent", () => {
   });
 });
 
+describe("getLatestSourceChapterAnchor", () => {
+  it("returns the greatest numeric chapter number and its position", async () => {
+    mockSelect.mockResolvedValueOnce([
+      { chapterNumber: "1", position: 1 },
+      { chapterNumber: "3", position: 3 },
+      { chapterNumber: "2", position: 2 },
+    ]);
+
+    const result = await getLatestSourceChapterAnchor(7);
+
+    const [sql, params] = mockSelect.mock.calls[0]!;
+    expect(sql).toContain("chapter_number AS chapterNumber");
+    expect(sql).toContain("WHERE novel_id = $1");
+    expect(params).toEqual([7]);
+    expect(result).toEqual({
+      novelId: 7,
+      chapterNumber: 3,
+      position: 3,
+    });
+  });
+
+  it("returns null when any existing chapter is missing a usable chapter number", async () => {
+    mockSelect.mockResolvedValueOnce([
+      { chapterNumber: "1", position: 1 },
+      { chapterNumber: null, position: 2 },
+    ]);
+
+    await expect(getLatestSourceChapterAnchor(7)).resolves.toBeNull();
+  });
+});
+
 describe("upsertChapter", () => {
   it("updates source metadata without touching progress fields", async () => {
     mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
@@ -142,6 +174,8 @@ describe("upsertChapter", () => {
     expect(sql).toContain("WHERE");
     expect(sql).toContain("name IS NOT excluded.name");
     expect(sql).not.toContain("progress");
+    expect(sql).not.toContain("content        =");
+    expect(sql).not.toContain("media_bytes");
     expect(sql).not.toContain("is_downloaded");
     expect(params).toEqual([
       7,
@@ -257,10 +291,35 @@ describe("saveChapterContent", () => {
     expect(sql).toContain("content_type   = $3");
     expect(sql).toContain("content_bytes  = $4");
     expect(sql).toContain("media_bytes    = $5");
+    expect(sql).toContain("media_repair_needed = $6");
     expect(sql).toContain("is_downloaded  = 1");
     expect(sql).toContain("updated_at     = unixepoch()");
-    expect(params).toEqual([7, "<p>hello</p>", "html", 12, 0]);
+    expect(params).toEqual([7, "<p>hello</p>", "html", 12, 0, 0]);
     expect(result).toEqual({ rowsAffected: 1 });
+  });
+
+  it("marks HTML with remote media as repairable", async () => {
+    mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
+    await saveChapterContent(7, '<img src="https://cdn.example/a.jpg">');
+    const [, params] = mockExecute.mock.calls[0]!;
+    expect(params).toEqual([
+      7,
+      '<img src="https://cdn.example/a.jpg">',
+      "html",
+      37,
+      0,
+      1,
+    ]);
+  });
+
+  it("does not mark local chapter media as repairable", async () => {
+    mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
+    await saveChapterContent(
+      7,
+      '<img src="norea-media://chapter/7/media-cache/page.png">',
+    );
+    const [, params] = mockExecute.mock.calls[0]!;
+    expect(params?.[5]).toBe(0);
   });
 });
 
@@ -289,6 +348,7 @@ describe("clearChapterContent", () => {
     expect(sql).toContain("content        = NULL");
     expect(sql).toContain("content_bytes  = 0");
     expect(sql).toContain("media_bytes    = 0");
+    expect(sql).toContain("media_repair_needed = 0");
     expect(sql).toContain("is_downloaded  = 0");
     expect(sql).toContain("FROM novel");
     expect(sql).toContain("is_local = 0");

@@ -13,6 +13,9 @@ import {
 import {
   cacheHtmlChapterMedia,
   clearChapterMedia,
+  getStoredChapterMediaBytes,
+  hasRemoteChapterMedia,
+  localChapterMediaCacheKeys,
   pruneChapterMedia,
   type ChapterMediaElementPatch,
 } from "../chapter-media";
@@ -43,6 +46,14 @@ export interface ChapterDownloadJob {
   novelId?: number;
   novelName?: string;
   novelPath?: string;
+  priority?: TaskPriority;
+  title: string;
+}
+
+export interface ChapterMediaRepairJob {
+  id: number;
+  pluginId: string;
+  pluginName?: string;
   priority?: TaskPriority;
   title: string;
 }
@@ -117,6 +128,10 @@ function chapterDownloadDedupeKey(chapterId: number): string {
   return `chapter.download:${chapterId}`;
 }
 
+function chapterMediaRepairDedupeKey(chapterId: number): string {
+  return `chapter.repairMedia:${chapterId}`;
+}
+
 function chapterDownloadCooldownKey(sourceKey: string): string {
   return `chapter.download:${sourceKey}`;
 }
@@ -172,6 +187,12 @@ function isPauseAbort(signal: AbortSignal): boolean {
 function missingLocalChapterError(job: ChapterDownloadJob): Error {
   return new Error(
     `chapter-download: local chapter ${job.id} was not found for "${job.title}" from plugin "${job.pluginId}" at path "${job.chapterPath}".`,
+  );
+}
+
+function missingRepairChapterError(job: ChapterMediaRepairJob): Error {
+  return new Error(
+    `chapter-media-repair: local chapter ${job.id} was not found for "${job.title}" from plugin "${job.pluginId}".`,
   );
 }
 
@@ -404,7 +425,7 @@ export function enqueueChapterDownload(
     dedupeKey: chapterDownloadDedupeKey(job.id),
     sourceCooldownKey: chapterDownloadCooldownKey(sourceCooldownKey),
     sourceCooldownMs: chapterDownloadCooldownMs(),
-    run: async ({ executor, setProgress, signal }) => {
+    run: async ({ executor, setDetail, setProgress, signal }) => {
       let progressTotal = 1;
       setProgress({ current: 0, total: progressTotal });
       try {
@@ -490,6 +511,11 @@ export function enqueueChapterDownload(
             html = media.html;
             mediaCacheKey = media.cacheKey;
             mediaBytes = media.mediaBytes;
+            if (media.mediaFailures.length > 0) {
+              setDetail(
+                `${media.mediaFailures.length} media assets using remote fallback`,
+              );
+            }
           }
         }
         const saveResult = await saveChapterContent(job.id, html, contentType, {
@@ -541,6 +567,139 @@ export function enqueueChapterDownload(
     () => removePersistedChapterDownloadJob(job.id),
   );
   return handle;
+}
+
+export function enqueueChapterMediaRepair(
+  job: ChapterMediaRepairJob,
+): TaskHandle<void> {
+  const sourceName = job.pluginName ?? job.pluginId;
+  const sourcePlugin = pluginManager.getPlugin(job.pluginId);
+  const sourceBaseUrl = sourcePlugin ? getPluginBaseUrl(sourcePlugin) : undefined;
+  const sourceCooldownKey = sourceBaseDomainKey(sourceBaseUrl) ?? job.pluginId;
+  return taskScheduler.enqueueSource<void>({
+    kind: "chapter.repairMedia",
+    priority: job.priority ?? "user",
+    title: job.title,
+    source: { id: job.pluginId, name: sourceName },
+    subject: {
+      chapterId: job.id,
+      pluginId: job.pluginId,
+    },
+    dedupeKey: chapterMediaRepairDedupeKey(job.id),
+    sourceCooldownKey: chapterDownloadCooldownKey(sourceCooldownKey),
+    sourceCooldownMs: chapterDownloadCooldownMs(),
+    run: async ({ executor, setDetail, setProgress, signal }) => {
+      let progressTotal = 1;
+      setProgress({ current: 0, total: progressTotal });
+      if (isTauriRuntime()) {
+        await pluginManager.loadInstalledFromDb();
+      }
+      const plugin = pluginManager.getPluginForExecutor(
+        job.pluginId,
+        executor ?? "immediate",
+      );
+      const chapter = await getChapterById(job.id);
+      if (!chapter) {
+        throw missingRepairChapterError(job);
+      }
+      const contentType = normalizeChapterContentType(chapter.contentType);
+      if (!chapter.isDownloaded || contentType !== "html" || !chapter.content) {
+        setDetail("No downloaded HTML media to repair");
+        setProgress({ current: progressTotal, total: progressTotal });
+        return;
+      }
+      const baseUrl = absolutePluginUrl(plugin, chapter.path);
+      if (!baseUrl) {
+        throw new Error(
+          `chapter-media-repair: failed to resolve chapter URL for "${chapter.name}".`,
+        );
+      }
+      if (!hasRemoteChapterMedia(chapter.content, baseUrl)) {
+        setDetail("No remote media to repair");
+        setProgress({ current: progressTotal, total: progressTotal });
+        return;
+      }
+      const novel = await getNovelById(chapter.novelId);
+      const storageContext = {
+        chapterId: chapter.id,
+        chapterName: chapter.name,
+        chapterNumber: chapter.chapterNumber,
+        chapterPosition: chapter.position,
+        novelId: novel?.id ?? chapter.novelId,
+        novelName: novel?.name,
+        novelPath: novel?.path,
+        sourceId: job.pluginId,
+      };
+      const media = await cacheHtmlChapterMedia({
+        baseUrl,
+        chapterId: chapter.id,
+        chapterName: chapter.name,
+        chapterNumber: chapter.chapterNumber ?? String(chapter.position),
+        chapterPosition: chapter.position,
+        contextUrl: baseUrl,
+        html: chapter.content,
+        novelId: storageContext.novelId,
+        novelName: storageContext.novelName,
+        novelPath: storageContext.novelPath,
+        onHtmlUpdate: async (partialHtml) => {
+          const partialSaveResult = await saveChapterPartialContent(
+            chapter.id,
+            partialHtml,
+            "html",
+          );
+          if (partialSaveResult.rowsAffected <= 0) {
+            throw missingRepairChapterError(job);
+          }
+          emitChapterPartialContentUpdate({
+            chapterId: chapter.id,
+            html: partialHtml,
+          });
+        },
+        onMediaPatch: (patches) => {
+          emitChapterMediaPatchUpdate({
+            chapterId: chapter.id,
+            patches,
+          });
+        },
+        onProgress: ({ current, total }) => {
+          progressTotal = total + 1;
+          setProgress({ current, total: progressTotal });
+        },
+        previousHtml: chapter.content,
+        requestInit: plugin.imageRequestInit,
+        scraperExecutor: executor ?? "immediate",
+        signal,
+        sourceId: job.pluginId,
+      });
+      const mediaBytes = await getStoredChapterMediaBytes(
+        media.html,
+        storageContext,
+      );
+      const saveResult = await saveChapterContent(chapter.id, media.html, "html", {
+        mediaBytes,
+      });
+      if (saveResult.rowsAffected <= 0) {
+        throw missingRepairChapterError(job);
+      }
+      await mirrorStoredChapterContent(chapter.id);
+      const mediaCacheKeys = localChapterMediaCacheKeys(media.html, chapter.id);
+      if (
+        media.cacheKey &&
+        mediaCacheKeys.length === 1 &&
+        mediaCacheKeys[0] === media.cacheKey
+      ) {
+        await pruneChapterMedia(chapter.id, media.cacheKey, storageContext);
+      }
+      if (media.mediaFailures.length > 0) {
+        setDetail(
+          `${media.mediaFailures.length} media assets using remote fallback`,
+        );
+      } else {
+        setDetail(`${media.storedMediaCount} media assets repaired`);
+      }
+      setProgress({ current: progressTotal, total: progressTotal });
+    },
+  });
 }
 
 export function enqueueChapterDownloadBatch({
@@ -607,6 +766,15 @@ export function getChapterDownloadStatus(
 ): ChapterDownloadStatus | undefined {
   const task = taskScheduler.getTaskByDedupeKey(
     chapterDownloadDedupeKey(chapterId),
+  );
+  return task ? (statusFromTask(task) ?? undefined) : undefined;
+}
+
+export function getChapterMediaRepairStatus(
+  chapterId: number,
+): ChapterDownloadStatus | undefined {
+  const task = taskScheduler.getTaskByDedupeKey(
+    chapterMediaRepairDedupeKey(chapterId),
   );
   return task ? (statusFromTask(task) ?? undefined) : undefined;
 }

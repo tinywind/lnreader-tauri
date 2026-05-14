@@ -338,12 +338,63 @@ describe("pluginMediaFetch", () => {
         "[plugin-media-fetch] browser fetch failed; using native media fetch",
         expect.objectContaining({
           host: "cdn.test",
+          sanitizedUrl: "https://cdn.test/page.png",
+        }),
+      );
+      expect(debugSpy).toHaveBeenCalledWith(
+        "[plugin-media-fetch] native fallback started",
+        expect.objectContaining({
+          host: "cdn.test",
+          sanitizedUrl: "https://cdn.test/page.png",
+        }),
+      );
+      expect(debugSpy).toHaveBeenCalledWith(
+        "[plugin-media-fetch] native fallback finished",
+        expect.objectContaining({
+          host: "cdn.test",
+          sanitizedUrl: "https://cdn.test/page.png",
+          status: 200,
         }),
       );
       expect(response.url).toBe("https://cdn.test/page.png");
       expect(await response.text()).toBe("image");
     } finally {
       debugSpy.mockRestore();
+    }
+  });
+
+  it("includes browser and native failure causes when both media paths fail", async () => {
+    const debugSpy = vi
+      .spyOn(console, "debug")
+      .mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    invokeMock
+      .mockRejectedValueOnce(new Error("browser failed"))
+      .mockRejectedValueOnce(new Error("native failed"));
+
+    try {
+      await expect(
+        pluginMediaFetch("https://cdn.test/page.png?token=secret", {
+          contextUrl: "https://novel.test/chapter",
+          sourceId: "source-a",
+          scraperExecutor: "pool:1",
+        }),
+      ).rejects.toThrow(
+        "Media fetch failed for https://cdn.test/page.png; browser: browser failed; native: native failed",
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[plugin-media-fetch] native fallback failed",
+        expect.objectContaining({
+          browserError: "browser failed",
+          nativeError: "native failed",
+          sanitizedUrl: "https://cdn.test/page.png",
+          scraperExecutor: "pool:1",
+          sourceId: "source-a",
+        }),
+      );
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 });

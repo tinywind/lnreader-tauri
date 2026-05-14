@@ -10,6 +10,7 @@ import {
   normalizeChapterContentType,
 } from "./chapter-content";
 import { getStoredChapterMediaBytes } from "./chapter-media";
+import { chapterMediaRepairFlag } from "./chapter-media-state";
 import {
   chapterContentRelativePath as buildChapterContentRelativePath,
   type ChapterStorageChapterPathInput,
@@ -229,8 +230,9 @@ const INSERT_MIRRORED_CHAPTER = `
   INSERT INTO chapter (
     id, novel_id, path, name, chapter_number, position, page,
     bookmark, unread, progress, is_downloaded, content, content_bytes,
-    media_bytes, content_type, release_time, read_at, created_at, found_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    media_bytes, media_repair_needed, content_type, release_time, read_at,
+    created_at, found_at, updated_at
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
   ON CONFLICT(id) DO UPDATE SET
     novel_id       = excluded.novel_id,
     path           = excluded.path,
@@ -245,6 +247,7 @@ const INSERT_MIRRORED_CHAPTER = `
     content        = excluded.content,
     content_bytes  = excluded.content_bytes,
     media_bytes    = excluded.media_bytes,
+    media_repair_needed = excluded.media_repair_needed,
     content_type   = excluded.content_type,
     release_time   = excluded.release_time,
     read_at        = excluded.read_at,
@@ -258,8 +261,9 @@ const UPDATE_MIRRORED_CHAPTER_CONTENT = `
          content = $1,
          content_bytes = $2,
          media_bytes = $3,
-         content_type = $4
-   WHERE id = $5
+         media_repair_needed = $4,
+         content_type = $5
+   WHERE id = $6
 `;
 
 const LEGACY_STORAGE_MANIFEST_FILE = "storage-manifest.json";
@@ -388,6 +392,7 @@ async function restoreStoredChapterContentRows(
       content,
       utf8ByteLength(content),
       mediaBytes,
+      chapterMediaRepairFlag(content, contentType),
       contentType,
       row.chapterId,
     ]);
@@ -532,11 +537,13 @@ export async function restoreChapterContentStorageMirror(
     const contentType = normalizeChapterContentType(
       chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
     );
+    const mediaRepairNeeded = chapterMediaRepairFlag(content, contentType);
     if (options.contentOnly) {
       await db.execute(UPDATE_MIRRORED_CHAPTER_CONTENT, [
         content,
         contentBytes,
         chapter.mediaBytes,
+        mediaRepairNeeded,
         contentType,
         chapter.id,
       ]);
@@ -556,6 +563,7 @@ export async function restoreChapterContentStorageMirror(
       content,
       contentBytes,
       chapter.mediaBytes,
+      mediaRepairNeeded,
       contentType,
       chapter.releaseTime,
       chapter.readAt,

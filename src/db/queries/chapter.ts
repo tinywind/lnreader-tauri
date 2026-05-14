@@ -3,6 +3,7 @@
   normalizeChapterContentType,
   type ChapterContentType,
 } from "../../lib/chapter-content";
+import { chapterMediaRepairFlag } from "../../lib/chapter-media-state";
 import { getDb } from "../client";
 
 export interface ChapterRow {
@@ -21,6 +22,7 @@ export interface ChapterRow {
   contentType: ChapterContentType;
   contentBytes: number;
   mediaBytes: number;
+  mediaRepairNeeded: boolean;
   releaseTime: string | null;
   readAt: number | null;
   createdAt: number | null;
@@ -32,12 +34,13 @@ export type ChapterListRow = Omit<ChapterRow, "content">;
 
 type RawChapterListRow = Omit<
   ChapterListRow,
-  "bookmark" | "unread" | "isDownloaded" | "contentType"
+  "bookmark" | "unread" | "isDownloaded" | "contentType" | "mediaRepairNeeded"
 > & {
   bookmark: unknown;
   unread: unknown;
   isDownloaded: unknown;
   contentType: string | null;
+  mediaRepairNeeded: unknown;
 };
 
 type RawChapterRow = RawChapterListRow & {
@@ -59,6 +62,7 @@ const CHAPTER_LIST_SELECT_FIELDS = `
   content_type   AS contentType,
   content_bytes   AS contentBytes,
   media_bytes     AS mediaBytes,
+  media_repair_needed AS mediaRepairNeeded,
   release_time   AS releaseTime,
   read_at        AS readAt,
   created_at     AS createdAt,
@@ -95,6 +99,7 @@ function normalizeChapterListRow(row: RawChapterListRow): ChapterListRow {
     unread: sqliteBoolean(row.unread),
     isDownloaded: sqliteBoolean(row.isDownloaded),
     contentType: normalizeChapterContentType(row.contentType),
+    mediaRepairNeeded: sqliteBoolean(row.mediaRepairNeeded),
   };
 }
 
@@ -148,6 +153,7 @@ export interface LatestSourceChapterAnchor {
   chapterNumber: number;
   position: number;
 }
+
 export interface ChapterMutationResult {
   rowsAffected: number;
 }
@@ -207,6 +213,7 @@ export async function getLatestSourceChapterAnchor(
 
   return latest;
 }
+
 export async function upsertChapter(
   input: InsertChapterInput,
 ): Promise<ChapterMutationResult> {
@@ -340,6 +347,7 @@ export async function saveChapterContent(
   options: SaveChapterContentOptions = {},
 ): Promise<ChapterMutationResult> {
   const db = await getDb();
+  const normalizedContentType = normalizeChapterContentType(contentType);
   const result = await db.execute(
     `UPDATE chapter
      SET
@@ -347,15 +355,17 @@ export async function saveChapterContent(
        content_type   = $3,
        content_bytes  = $4,
        media_bytes    = $5,
+       media_repair_needed = $6,
        is_downloaded  = 1,
        updated_at     = unixepoch()
      WHERE id = $1`,
     [
       chapterId,
       html,
-      normalizeChapterContentType(contentType),
+      normalizedContentType,
       getUtf8ByteLength(html),
       options.mediaBytes ?? 0,
+      chapterMediaRepairFlag(html, normalizedContentType),
     ],
   );
   return { rowsAffected: result.rowsAffected };
@@ -367,19 +377,22 @@ export async function saveChapterPartialContent(
   contentType: ChapterContentType = DEFAULT_CHAPTER_CONTENT_TYPE,
 ): Promise<ChapterMutationResult> {
   const db = await getDb();
+  const normalizedContentType = normalizeChapterContentType(contentType);
   const result = await db.execute(
     `UPDATE chapter
      SET
        content        = $2,
        content_type   = $3,
        content_bytes  = $4,
+       media_repair_needed = $5,
        updated_at     = unixepoch()
      WHERE id = $1`,
     [
       chapterId,
       html,
-      normalizeChapterContentType(contentType),
+      normalizedContentType,
       getUtf8ByteLength(html),
+      chapterMediaRepairFlag(html, normalizedContentType),
     ],
   );
   return { rowsAffected: result.rowsAffected };
@@ -406,6 +419,7 @@ export async function clearChapterContent(
        content        = NULL,
        content_bytes  = 0,
        media_bytes    = 0,
+       media_repair_needed = 0,
        is_downloaded  = 0,
        updated_at     = unixepoch()
      WHERE id = $1

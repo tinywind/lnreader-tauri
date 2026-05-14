@@ -62,7 +62,7 @@ export function isTerminalTaskStatus(status: TaskStatus): boolean {
 export function isTaskEventNotificationCandidate(
   task: TaskRecord,
 ): boolean {
-  if (task.kind === "chapter.download") {
+  if (task.kind === "chapter.download" || task.kind === "chapter.repairMedia") {
     return isTerminalTaskStatus(task.status);
   }
   return AGGREGATE_TASK_KINDS.has(task.kind);
@@ -86,6 +86,7 @@ export function taskNotificationRouteForTask(
 ): TaskNotificationRoute {
   switch (task.kind) {
     case "chapter.download":
+    case "chapter.repairMedia":
       return "/downloads";
     case "library.checkUpdates":
     case "library.refreshMetadata":
@@ -98,7 +99,10 @@ export function taskNotificationRouteForTask(
 }
 
 export function taskNotificationKey(task: TaskRecord): string {
-  if (task.kind === "chapter.download" && isTerminalTaskStatus(task.status)) {
+  if (
+    (task.kind === "chapter.download" || task.kind === "chapter.repairMedia") &&
+    isTerminalTaskStatus(task.status)
+  ) {
     return task.id;
   }
   const groupKey = taskNotificationGroupKey(task);
@@ -110,7 +114,10 @@ export function taskNotificationTitleForTask(
   t: TaskNotificationTranslate,
   task: TaskRecord,
 ): string {
-  if (task.kind === "chapter.download" && isTerminalTaskStatus(task.status)) {
+  if (
+    (task.kind === "chapter.download" || task.kind === "chapter.repairMedia") &&
+    isTerminalTaskStatus(task.status)
+  ) {
     return task.title;
   }
   const groupKey = taskNotificationGroupKey(task);
@@ -252,6 +259,7 @@ function taskNotificationGroupKey(
 ): TaskNotificationGroupKey | null {
   switch (task.kind) {
     case "chapter.download":
+    case "chapter.repairMedia":
       return "downloads";
     case "source.globalSearch":
     case "source.search":

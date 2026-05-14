@@ -536,8 +536,8 @@ export async function upsertLocalNovelChapters(
   for (const chapter of chapters) {
     const chapterResult = await db.execute(
       `INSERT INTO chapter
-           (novel_id, path, name, position, chapter_number, page, release_time, content_type, content, content_bytes, is_downloaded, created_at, found_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, unixepoch(), unixepoch())
+           (novel_id, path, name, position, chapter_number, page, release_time, content_type, content, content_bytes, media_repair_needed, is_downloaded, created_at, found_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 1, unixepoch(), unixepoch())
          ON CONFLICT(novel_id, path) DO UPDATE SET
            name           = excluded.name,
            position       = excluded.position,
@@ -547,6 +547,7 @@ export async function upsertLocalNovelChapters(
            content_type   = excluded.content_type,
            content        = excluded.content,
            content_bytes  = excluded.content_bytes,
+           media_repair_needed = 0,
            is_downloaded  = 1,
            updated_at     = unixepoch()
           WHERE
@@ -558,6 +559,7 @@ export async function upsertLocalNovelChapters(
             OR content_type IS NOT excluded.content_type
             OR content IS NOT excluded.content
             OR content_bytes IS NOT excluded.content_bytes
+            OR media_repair_needed IS NOT 0
             OR is_downloaded IS NOT 1`,
       [
         novelId,
@@ -722,8 +724,8 @@ export async function upsertLocalNovel(
   for (const chapter of input.chapters) {
     const chapterResult = await db.execute(
       `INSERT INTO chapter
-           (novel_id, path, name, position, chapter_number, page, release_time, content_type, content, content_bytes, is_downloaded, created_at, found_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, unixepoch(), unixepoch())
+           (novel_id, path, name, position, chapter_number, page, release_time, content_type, content, content_bytes, media_repair_needed, is_downloaded, created_at, found_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 1, unixepoch(), unixepoch())
          ON CONFLICT(novel_id, path) DO UPDATE SET
            name           = excluded.name,
            position       = excluded.position,
@@ -733,6 +735,7 @@ export async function upsertLocalNovel(
            content_type   = excluded.content_type,
            content        = excluded.content,
            content_bytes  = excluded.content_bytes,
+           media_repair_needed = 0,
            is_downloaded  = 1,
            updated_at     = unixepoch()
           WHERE
@@ -744,6 +747,7 @@ export async function upsertLocalNovel(
             OR content_type IS NOT excluded.content_type
             OR content IS NOT excluded.content
             OR content_bytes IS NOT excluded.content_bytes
+            OR media_repair_needed IS NOT 0
             OR is_downloaded IS NOT 1`,
       [
         novelId,

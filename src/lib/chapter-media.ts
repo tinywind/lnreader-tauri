@@ -102,15 +102,6 @@ const DEFAULT_MEDIA_EXTENSION = "bin";
 const DEFAULT_MEDIA_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,audio/*,*/*;q=0.8";
 const CHAPTER_MEDIA_MANIFEST_FILE = "media-manifest.json";
-const MEDIA_PENDING_ATTRIBUTE = "data-norea-media-pending";
-const MEDIA_PENDING_ASPECT_ATTRIBUTE = "data-norea-media-pending-aspect";
-const MEDIA_PENDING_BACKGROUND_ATTRIBUTE = "data-norea-media-pending-bg";
-const MEDIA_PENDING_DISPLAY_ATTRIBUTE = "data-norea-media-pending-display";
-const MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE = "data-norea-media-pending-height";
-const MEDIA_PENDING_PLACEHOLDER_SRC =
-  "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221000%22%20height%3D%221400%22%20viewBox%3D%220%200%201000%201400%22%2F%3E";
-const MEDIA_PENDING_PLACEHOLDER_HEIGHT = "min(72vh, 56rem)";
-
 type ChapterMediaRequestInit = Pick<HttpInit, "body" | "headers" | "method">;
 
 interface CacheChapterMediaOptions {
@@ -139,10 +130,18 @@ export interface ChapterMediaElementPatch {
   index: number;
 }
 
+export interface ChapterMediaFailure {
+  message: string;
+  status?: number;
+  url: string;
+}
+
 interface CacheChapterMediaResult {
   cacheKey: string | null;
   html: string;
+  mediaFailures: ChapterMediaFailure[];
   mediaBytes: number;
+  storedMediaCount: number;
 }
 
 interface ChapterMediaStoreInput {
@@ -229,8 +228,8 @@ interface MediaSrcsetTarget {
 
 interface ExistingMediaSlots {
   srcSlots: Array<string | null>;
-  srcsetSlots: string[][];
-  styleSlots: string[][];
+  srcsetSlots: Array<Array<string | null>>;
+  styleSlots: Array<Array<string | null>>;
 }
 
 function isSkippableMediaSource(src: string): boolean {
@@ -285,9 +284,13 @@ function collectStyleMediaUrls(style: string, baseUrl: string): MediaStyleUrl[] 
 }
 
 function localStyleMediaSources(style: string): string[] {
+  return styleMediaSlots(style).filter((src): src is string => src !== null);
+}
+
+function styleMediaSlots(style: string): Array<string | null> {
   return [...style.matchAll(STYLE_URL_PATTERN)]
     .map((match) => (match[1] ?? match[2] ?? match[3] ?? "").trim())
-    .filter((source) => source.startsWith(LOCAL_MEDIA_SRC_PREFIX));
+    .map((source) => localMediaSrc(source));
 }
 
 function rewriteStyleMediaUrls(
@@ -680,6 +683,25 @@ export function localChapterMediaSources(html: string): string[] {
   return [...new Set(html.match(LOCAL_CHAPTER_MEDIA_SRC_PATTERN) ?? [])];
 }
 
+export function localChapterMediaCacheKeys(
+  html: string,
+  chapterId: number,
+): string[] {
+  const cacheKeys = new Set<string>();
+  for (const src of localChapterMediaSources(html)) {
+    const cacheKey = cacheKeyFromLocalMediaSrc(src, chapterId);
+    if (cacheKey) cacheKeys.add(cacheKey);
+  }
+  return [...cacheKeys];
+}
+
+export function hasRemoteChapterMedia(html: string, baseUrl: string): boolean {
+  if (typeof document === "undefined") return false;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return collectMediaTargets(template.content, baseUrl).urls.length > 0;
+}
+
 export async function getStoredChapterMediaBytes(
   html: string,
   context?: ChapterMediaStorageContext,
@@ -963,8 +985,8 @@ function collectMediaTargets(
 
 function collectExistingMediaSlots(root: DocumentFragment): ExistingMediaSlots {
   const srcSlots: Array<string | null> = [];
-  const srcsetSlots: string[][] = [];
-  const styleSlots: string[][] = [];
+  const srcsetSlots: Array<Array<string | null>> = [];
+  const styleSlots: Array<Array<string | null>> = [];
 
   for (const element of root.querySelectorAll<Element>(MEDIA_SOURCE_SELECTOR)) {
     for (const attribute of MEDIA_SRC_ATTRIBUTES) {
@@ -976,14 +998,12 @@ function collectExistingMediaSlots(root: DocumentFragment): ExistingMediaSlots {
     const rawSrcset = element.getAttribute("srcset");
     if (rawSrcset === null) continue;
     srcsetSlots.push(
-      parseSrcset(rawSrcset)
-        .map((candidate) => localMediaSrc(candidate.source))
-        .filter((src): src is string => src !== null),
+      parseSrcset(rawSrcset).map((candidate) => localMediaSrc(candidate.source)),
     );
   }
 
   for (const element of root.querySelectorAll<Element>(MEDIA_STYLE_SELECTOR)) {
-    styleSlots.push(localStyleMediaSources(element.getAttribute("style") ?? ""));
+    styleSlots.push(styleMediaSlots(element.getAttribute("style") ?? ""));
   }
 
   return { srcSlots, srcsetSlots, styleSlots };
@@ -1001,151 +1021,6 @@ function tagCollectedMediaTargets(
       MEDIA_SRCSET_SOURCE_ATTRIBUTE,
       formatSrcset(target.candidates),
     );
-  }
-}
-
-function positiveDimensionAttribute(
-  element: Element,
-  attribute: "height" | "width",
-): number | null {
-  const value = Number.parseFloat(element.getAttribute(attribute) ?? "");
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function mediaElementTagName(element: Element): string {
-  const candidate = element as Element & {
-    name?: string;
-    nodeName?: string;
-    tagName?: string;
-  };
-  return (candidate.tagName ?? candidate.nodeName ?? candidate.name ?? "")
-    .toLowerCase()
-    .trim();
-}
-
-function mediaElementStyle(element: Element): CSSStyleDeclaration | null {
-  return (element as Element & { style?: CSSStyleDeclaration }).style ?? null;
-}
-
-function mediaElementHasAttribute(element: Element, attribute: string): boolean {
-  const nativeHasAttribute = (element as Element & {
-    hasAttribute?: (name: string) => boolean;
-  }).hasAttribute;
-  return nativeHasAttribute
-    ? nativeHasAttribute.call(element, attribute)
-    : element.getAttribute(attribute) !== null;
-}
-
-function mediaPlaceholderElement(element: Element): Element | null {
-  const tagName = mediaElementTagName(element);
-  if (tagName === "source") {
-    const parent = (element as Element & { parentElement?: Element | null })
-      .parentElement;
-    if (!parent || mediaElementTagName(parent) === "audio") return null;
-    return parent;
-  }
-  if (tagName === "audio") return null;
-  return element;
-}
-
-function reservePendingMediaLayout(element: Element): void {
-  const target = mediaPlaceholderElement(element);
-  if (!target || mediaElementHasAttribute(target, MEDIA_PENDING_ATTRIBUTE)) {
-    return;
-  }
-  const dimensionElement =
-    mediaElementTagName(target) === "picture"
-      ? (target.querySelector("img") ?? target)
-      : target;
-  const width = positiveDimensionAttribute(dimensionElement, "width");
-  const height = positiveDimensionAttribute(dimensionElement, "height");
-  const isSmallMedia =
-    width !== null && height !== null && Math.max(width, height) <= 128;
-  const style = mediaElementStyle(target);
-
-  target.setAttribute(MEDIA_PENDING_ATTRIBUTE, "true");
-  if (
-    mediaElementTagName(target) === "img" &&
-    (target.getAttribute("src") ?? "").trim() === ""
-  ) {
-    target.setAttribute("src", MEDIA_PENDING_PLACEHOLDER_SRC);
-  }
-  if (!style) return;
-  if (!isSmallMedia && style.display === "") {
-    style.display = "block";
-    target.setAttribute(MEDIA_PENDING_DISPLAY_ATTRIBUTE, "true");
-  }
-  if (width !== null && height !== null && style.aspectRatio === "") {
-    style.aspectRatio = `${width} / ${height}`;
-    target.setAttribute(MEDIA_PENDING_ASPECT_ATTRIBUTE, "true");
-  }
-  if (width === null || height === null) {
-    if (style.minHeight === "") {
-      style.minHeight = MEDIA_PENDING_PLACEHOLDER_HEIGHT;
-      target.setAttribute(MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE, "true");
-    }
-    if (style.backgroundColor === "") {
-      style.backgroundColor = "rgba(148, 163, 184, 0.12)";
-      target.setAttribute(MEDIA_PENDING_BACKGROUND_ATTRIBUTE, "true");
-    }
-  }
-}
-
-function clearPendingMediaLayout(element: Element): void {
-  const target = mediaPlaceholderElement(element);
-  if (!target || !mediaElementHasAttribute(target, MEDIA_PENDING_ATTRIBUTE)) {
-    return;
-  }
-  const style = mediaElementStyle(target);
-  target.removeAttribute(MEDIA_PENDING_ATTRIBUTE);
-  if (style && mediaElementHasAttribute(target, MEDIA_PENDING_ASPECT_ATTRIBUTE)) {
-    style.removeProperty("aspect-ratio");
-    target.removeAttribute(MEDIA_PENDING_ASPECT_ATTRIBUTE);
-  }
-  if (
-    style &&
-    mediaElementHasAttribute(target, MEDIA_PENDING_BACKGROUND_ATTRIBUTE)
-  ) {
-    style.removeProperty("background-color");
-    target.removeAttribute(MEDIA_PENDING_BACKGROUND_ATTRIBUTE);
-  }
-  if (style && mediaElementHasAttribute(target, MEDIA_PENDING_DISPLAY_ATTRIBUTE)) {
-    style.removeProperty("display");
-    target.removeAttribute(MEDIA_PENDING_DISPLAY_ATTRIBUTE);
-  }
-  if (
-    style &&
-    mediaElementHasAttribute(target, MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE)
-  ) {
-    style.removeProperty("min-height");
-    target.removeAttribute(MEDIA_PENDING_MIN_HEIGHT_ATTRIBUTE);
-  }
-}
-
-function blankCollectedMediaTargets(
-  baseUrl: string,
-  srcTargets: MediaSrcTarget[],
-  srcsetTargets: MediaSrcsetTarget[],
-  styleTargets: MediaStyleTarget[],
-): void {
-  const placeholderElements = new Set<Element>();
-  for (const target of srcTargets) {
-    target.element.setAttribute(target.attribute, "");
-    placeholderElements.add(target.element);
-  }
-  for (const target of srcsetTargets) {
-    target.element.setAttribute("srcset", "");
-    placeholderElements.add(target.element);
-  }
-  for (const target of styleTargets) {
-    target.element.setAttribute(
-      "style",
-      rewriteStyleMediaUrls(target.style, baseUrl, () => ""),
-    );
-    placeholderElements.add(target.element);
-  }
-  for (const element of placeholderElements) {
-    reservePendingMediaLayout(element);
   }
 }
 
@@ -1184,9 +1059,9 @@ function collectMetadataReusableMediaSources(
     const sourceCandidates = parseSrcset(
       element.getAttribute(MEDIA_SRCSET_SOURCE_ATTRIBUTE) ?? "",
     );
-    const localCandidates = parseSrcset(element.getAttribute("srcset") ?? "")
-      .map((candidate) => localMediaSrc(candidate.source))
-      .filter((src): src is string => src !== null);
+    const localCandidates = parseSrcset(
+      element.getAttribute("srcset") ?? "",
+    ).map((candidate) => localMediaSrc(candidate.source));
     for (
       let index = 0;
       index < sourceCandidates.length && index < localCandidates.length;
@@ -1196,8 +1071,9 @@ function collectMetadataReusableMediaSources(
         sourceCandidates[index]!.source,
         baseUrl,
       );
-      if (sourceUrl && urls.has(sourceUrl)) {
-        reusable.set(sourceUrl, localCandidates[index]!);
+      const src = localCandidates[index];
+      if (sourceUrl && src && urls.has(sourceUrl)) {
+        reusable.set(sourceUrl, src);
       }
     }
   }
@@ -1330,10 +1206,16 @@ function chooseCacheKey(
   return makeCacheKey();
 }
 
-function applyLocalMediaSource({
+function outputMediaSourceForUrl(
+  localSources: Map<string, string>,
+  url: string,
+): string {
+  return localSources.get(url) ?? url;
+}
+
+function applyResolvedMediaSource({
   baseUrl,
   localSources,
-  src,
   srcTargets,
   srcsetTargets,
   styleTargets,
@@ -1341,7 +1223,6 @@ function applyLocalMediaSource({
 }: {
   baseUrl: string;
   localSources: Map<string, string>;
-  src: string;
   srcTargets: MediaSrcTarget[];
   srcsetTargets: MediaSrcsetTarget[];
   styleTargets: MediaStyleTarget[];
@@ -1351,11 +1232,13 @@ function applyLocalMediaSource({
   for (const target of srcTargets) {
     if (target.url !== url) continue;
     const outputAttribute = mediaOutputAttribute(target.attribute);
-    target.element.setAttribute(outputAttribute, src);
+    target.element.setAttribute(
+      outputAttribute,
+      outputMediaSourceForUrl(localSources, target.url),
+    );
     if (target.attribute !== outputAttribute) {
       target.element.removeAttribute(target.attribute);
     }
-    clearPendingMediaLayout(target.element);
     changedElements.add(target.element);
   }
 
@@ -1373,12 +1256,11 @@ function applyLocalMediaSource({
         if (!candidateUrl) return candidate;
         return {
           ...candidate,
-          source: localSources.get(candidateUrl) ?? "",
+          source: outputMediaSourceForUrl(localSources, candidateUrl),
         };
       })
       .filter((candidate) => candidate.source !== "");
     target.element.setAttribute("srcset", formatSrcset(candidates));
-    clearPendingMediaLayout(target.element);
     changedElements.add(target.element);
   }
 
@@ -1389,20 +1271,26 @@ function applyLocalMediaSource({
       rewriteStyleMediaUrls(
         target.style,
         baseUrl,
-        (styleUrl) => localSources.get(styleUrl) ?? "",
+        (styleUrl) => outputMediaSourceForUrl(localSources, styleUrl),
       ),
     );
-    clearPendingMediaLayout(target.element);
     changedElements.add(target.element);
   }
   return changedElements;
+}
+
+function safeChapterMediaHtml(template: HTMLTemplateElement): string {
+  const safeTemplate = document.createElement("template");
+  safeTemplate.innerHTML = template.innerHTML;
+  clearMediaSourceMetadata(safeTemplate.content);
+  return safeTemplate.innerHTML;
 }
 
 async function emitHtmlUpdate(
   onHtmlUpdate: CacheChapterMediaOptions["onHtmlUpdate"],
   template: HTMLTemplateElement,
 ): Promise<void> {
-  await onHtmlUpdate?.(template.innerHTML);
+  await onHtmlUpdate?.(safeChapterMediaHtml(template));
 }
 
 function collectMediaElementPatches(
@@ -1463,6 +1351,70 @@ async function emitMediaPatchUpdate(
   }
 }
 
+function isMediaAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+function mediaFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sanitizedMediaUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url.split(/[?#]/, 1)[0] ?? url;
+  }
+}
+
+function mediaFailureHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+function mediaFailureContextHost(contextUrl: string): string {
+  try {
+    return new URL(contextUrl).host;
+  } catch {
+    return "";
+  }
+}
+
+function recordChapterMediaFailure(
+  failures: ChapterMediaFailure[],
+  input: {
+    contextUrl: string;
+    error: unknown;
+    scraperExecutor?: ScraperExecutorId;
+    sourceId?: string;
+    status?: number;
+    url: string;
+  },
+): void {
+  const message = mediaFailureMessage(input.error);
+  failures.push({
+    message,
+    ...(input.status ? { status: input.status } : {}),
+    url: input.url,
+  });
+  console.warn("[chapter-media] media asset using remote fallback", {
+    contextHost: mediaFailureContextHost(input.contextUrl),
+    error: message,
+    host: mediaFailureHost(input.url),
+    sanitizedUrl: sanitizedMediaUrl(input.url),
+    scraperExecutor: input.scraperExecutor,
+    sourceId: input.sourceId,
+    status: input.status,
+  });
+}
+
 export async function cacheHtmlChapterMedia({
   baseUrl,
   chapterId,
@@ -1484,7 +1436,13 @@ export async function cacheHtmlChapterMedia({
   sourceId,
 }: CacheChapterMediaOptions): Promise<CacheChapterMediaResult> {
   if (!isTauriRuntime() || typeof document === "undefined") {
-    return { cacheKey: null, html, mediaBytes: 0 };
+    return {
+      cacheKey: null,
+      html,
+      mediaBytes: 0,
+      mediaFailures: [],
+      storedMediaCount: 0,
+    };
   }
 
   const template = document.createElement("template");
@@ -1495,7 +1453,13 @@ export async function cacheHtmlChapterMedia({
   );
 
   if (urls.length === 0) {
-    return { cacheKey: null, html: template.innerHTML, mediaBytes: 0 };
+    return {
+      cacheKey: null,
+      html: template.innerHTML,
+      mediaBytes: 0,
+      mediaFailures: [],
+      storedMediaCount: 0,
+    };
   }
 
   const storageContext: ChapterMediaStorageContext = {
@@ -1522,14 +1486,14 @@ export async function cacheHtmlChapterMedia({
   );
   const cacheKey = chooseCacheKey(chapterId, reusableSources.values());
   const localSources = new Map<string, string>(reusableSources);
+  const mediaFailures: ChapterMediaFailure[] = [];
+  let storedMediaCount = 0;
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
-  blankCollectedMediaTargets(baseUrl, srcTargets, srcsetTargets, styleTargets);
   const reusableChangedElements = new Set<Element>();
-  for (const [url, src] of localSources) {
-    const changedElements = applyLocalMediaSource({
+  for (const url of urls) {
+    const changedElements = applyResolvedMediaSource({
       baseUrl,
       localSources,
-      src,
       srcTargets,
       srcsetTargets,
       styleTargets,
@@ -1549,53 +1513,86 @@ export async function cacheHtmlChapterMedia({
       onProgress?.({ current: index + 1, total: urls.length });
       continue;
     }
-    const response = await pluginMediaFetch(url, {
-      ...requestInit,
-      headers: {
-        Accept: DEFAULT_MEDIA_ACCEPT,
-        ...(requestInit?.headers ?? {}),
-      },
-      contextUrl: contextUrl ?? baseUrl,
-      ...(scraperExecutor ? { scraperExecutor } : {}),
-      signal,
-      ...(sourceId ? { sourceId } : {}),
-    });
-    if (!response.ok) {
-      throw new Error(
-        `HTTP ${response.status} ${response.statusText} on ${url}`,
-      );
+    try {
+      const response = await pluginMediaFetch(url, {
+        ...requestInit,
+        headers: {
+          Accept: DEFAULT_MEDIA_ACCEPT,
+          ...(requestInit?.headers ?? {}),
+        },
+        contextUrl: contextUrl ?? baseUrl,
+        ...(scraperExecutor ? { scraperExecutor } : {}),
+        signal,
+        ...(sourceId ? { sourceId } : {}),
+      });
+      if (!response.ok) {
+        recordChapterMediaFailure(mediaFailures, {
+          contextUrl: contextUrl ?? baseUrl,
+          error: `HTTP ${response.status} ${response.statusText}`,
+          scraperExecutor,
+          sourceId,
+          status: response.status,
+          url,
+        });
+      } else {
+        throwIfAborted(signal);
+        const body = bytesFromArrayBuffer(await response.arrayBuffer());
+        throwIfAborted(signal);
+        const contentType = response.headers.get("content-type");
+        const src = await storeChapterMedia({
+          body,
+          cacheKey,
+          chapterId,
+          contentType,
+          fileName: mediaFileName(index, url, contentType),
+          chapterName,
+          chapterNumber,
+          chapterPosition,
+          novelId,
+          novelName,
+          novelPath,
+          sourceId,
+          sourceUrl: url,
+        });
+        localSources.set(url, src);
+        storedMediaCount += 1;
+      }
+    } catch (error) {
+      if (signal?.aborted) {
+        throw new DOMException("Task was cancelled.", "AbortError");
+      }
+      if (isMediaAbortError(error)) throw error;
+      recordChapterMediaFailure(mediaFailures, {
+        contextUrl: contextUrl ?? baseUrl,
+        error,
+        scraperExecutor,
+        sourceId,
+        url,
+      });
     }
     throwIfAborted(signal);
-    const body = bytesFromArrayBuffer(await response.arrayBuffer());
-    throwIfAborted(signal);
-    const contentType = response.headers.get("content-type");
-    const src = await storeChapterMedia({
-      body,
-      cacheKey,
-      chapterId,
-      contentType,
-      fileName: mediaFileName(index, url, contentType),
-      chapterName,
-      chapterNumber,
-      chapterPosition,
-      novelId,
-      novelName,
-      novelPath,
-      sourceId,
-      sourceUrl: url,
-    });
-    localSources.set(url, src);
-    const changedElements = applyLocalMediaSource({
+    const changedElements = applyResolvedMediaSource({
       baseUrl,
       localSources,
-      src,
       srcTargets,
       srcsetTargets,
       styleTargets,
       url,
     });
+    await emitHtmlUpdate(onHtmlUpdate, template);
     await emitMediaPatchUpdate(onMediaPatch, template, changedElements);
     onProgress?.({ current: index + 1, total: urls.length });
+  }
+
+  if (localSources.size === 0) {
+    clearMediaSourceMetadata(template.content);
+    return {
+      cacheKey: null,
+      html: template.innerHTML,
+      mediaBytes: 0,
+      mediaFailures,
+      storedMediaCount,
+    };
   }
 
   const mediaBytes = await archiveChapterMediaCache({
@@ -1619,7 +1616,9 @@ export async function cacheHtmlChapterMedia({
   return {
     cacheKey,
     html: template.innerHTML,
+    mediaFailures,
     mediaBytes,
+    storedMediaCount,
   };
 }
 

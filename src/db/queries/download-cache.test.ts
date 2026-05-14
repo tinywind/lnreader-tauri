@@ -37,6 +37,7 @@ describe("listDownloadCacheNovels", () => {
 
     const [sql] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("SUM(c.content_bytes + c.media_bytes)");
+    expect(sql).toContain("media_repair_needed = 1");
     expect(sql).toContain("n.is_local = 0");
     expect(sql).not.toContain("length(CAST");
     expect(sql).not.toContain("COALESCE(c.content");
@@ -52,6 +53,7 @@ describe("listDownloadCacheChapters", () => {
     const [sql, params] = mockSelect.mock.calls[0]!;
     expect(sql).toContain("content_bytes AS contentBytes");
     expect(sql).toContain("media_bytes AS mediaBytes");
+    expect(sql).toContain("media_repair_needed AS mediaRepairNeeded");
     expect(sql).toContain("content_bytes + c.media_bytes AS totalBytes");
     expect(sql).toContain("JOIN novel n ON n.id = c.novel_id");
     expect(sql).toContain("n.is_local = 0");
@@ -70,6 +72,7 @@ describe("deleteDownloadCacheChapter", () => {
     expect(sql).toContain("content       = NULL");
     expect(sql).toContain("content_bytes = 0");
     expect(sql).toContain("media_bytes   = 0");
+    expect(sql).toContain("media_repair_needed = 0");
     expect(sql).toContain("is_downloaded = 0");
     expect(sql).toContain("n.is_local = 0");
     expect(params).toEqual([7]);
@@ -86,6 +89,7 @@ describe("deleteDownloadCacheNovel", () => {
     const [sql, params] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content_bytes = 0");
     expect(sql).toContain("media_bytes   = 0");
+    expect(sql).toContain("media_repair_needed = 0");
     expect(sql).toContain("novel_id = $1");
     expect(sql).toContain("n.is_local = 0");
     expect(params).toEqual([7]);
@@ -101,6 +105,7 @@ describe("deleteAllDownloadCache", () => {
     const [sql] = mockExecute.mock.calls[0]!;
     expect(sql).toContain("content_bytes = 0");
     expect(sql).toContain("media_bytes   = 0");
+    expect(sql).toContain("media_repair_needed = 0");
     expect(sql).toContain("WHERE is_downloaded = 1");
     expect(sql).toContain("n.is_local = 0");
   });
