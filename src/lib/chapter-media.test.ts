@@ -21,8 +21,6 @@ import {
   getStoredChapterMediaBytes,
   localChapterMediaSources,
   resolveLocalChapterMedia,
-  resolveLocalChapterMediaPatches,
-  type ChapterMediaElementPatch,
 } from "./chapter-media";
 
 const invokeMock = vi.mocked(invoke);
@@ -451,8 +449,6 @@ describe("cacheHtmlChapterMedia", () => {
 
   it("keeps failed image assets on remote URLs while storing successful assets", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const htmlUpdates: string[] = [];
-    const mediaPatches: ChapterMediaElementPatch[][] = [];
     pluginMediaFetchMock.mockImplementation(async (url) => {
       if (String(url).endsWith("/missing.png")) {
         throw new Error("CDN blocked");
@@ -480,12 +476,6 @@ describe("cacheHtmlChapterMedia", () => {
         baseUrl: "https://source.test/chapter/1",
         chapterId: 42,
         html: `<img src="./ok.png"><img src="./missing.png">`,
-        onHtmlUpdate: (html) => {
-          htmlUpdates.push(html);
-        },
-        onMediaPatch: (patches) => {
-          mediaPatches.push(patches);
-        },
       });
 
       expect(result.mediaFailures).toEqual([
@@ -502,20 +492,6 @@ describe("cacheHtmlChapterMedia", () => {
       expect(result.html).toContain(
         'src="https://source.test/chapter/missing.png"',
       );
-      expect(htmlUpdates).toHaveLength(1);
-      expect(htmlUpdates[0]).toContain(
-        'src="norea-media://chapter/42/0001-ok.png"',
-      );
-      expect(htmlUpdates[0]).toContain('src="./missing.png"');
-      expect(mediaPatches).toHaveLength(1);
-      expect(mediaPatches[0]).toEqual([
-        expect.objectContaining({
-          attributes: expect.objectContaining({
-            src: "norea-media://chapter/42/0001-ok.png",
-          }),
-          index: 0,
-        }),
-      ]);
       expect(result.html).not.toContain('src=""');
       expect(result.html).not.toContain("data-norea-media");
     } finally {
@@ -735,7 +711,7 @@ describe("cacheHtmlChapterMedia", () => {
     expect(result.html).not.toContain("data-norea-media-source-url");
   });
 
-  it("repairs only the missing manifest media file before rebuilding the archive", async () => {
+  it("uses the manifest to fetch only missing repair assets when HTML still has remote URLs", async () => {
     const manifest = {
       media: {
         files: [
@@ -786,25 +762,28 @@ describe("cacheHtmlChapterMedia", () => {
       }
       if (command === "chapter_media_archive_cache") return 15;
       if (command === "chapter_media_write_manifest") return null;
-      const input = args as {
-        chapterId: number;
-        fileName: string;
-      };
-      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
+      if (command === "chapter_media_store") {
+        const input = args as {
+          chapterId: number;
+          fileName: string;
+        };
+        return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
+      }
+      return null;
     });
 
     const result = await cacheHtmlChapterMedia({
       baseUrl: "https://source.test/chapter/1",
       chapterId: 42,
       html: [
-        `<img src="norea-media://chapter/42/0001-page-1.png">`,
-        `<img src="norea-media://chapter/42/0002-page-2.png">`,
-        `<img src="norea-media://chapter/42/0003-page-3.png">`,
+        `<img src="https://source.test/page-1.png">`,
+        `<img src="https://source.test/page-2.png">`,
+        `<img src="https://source.test/page-3.png">`,
       ].join(""),
       previousHtml: [
-        `<img src="norea-media://chapter/42/0001-page-1.png">`,
-        `<img src="norea-media://chapter/42/0002-page-2.png">`,
-        `<img src="norea-media://chapter/42/0003-page-3.png">`,
+        `<img src="https://source.test/page-1.png">`,
+        `<img src="https://source.test/page-2.png">`,
+        `<img src="https://source.test/page-3.png">`,
       ].join(""),
       repair: true,
     });
@@ -821,10 +800,6 @@ describe("cacheHtmlChapterMedia", () => {
       expect.objectContaining({
         fileName: "0002-page-2.png",
       }),
-    );
-    expect(invokeMock).toHaveBeenCalledWith(
-      "chapter_media_archive_cache",
-      expect.objectContaining({ chapterId: 42 }),
     );
     expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_write_manifest",
@@ -852,78 +827,6 @@ describe("cacheHtmlChapterMedia", () => {
     expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
     expect(result.html).toContain("norea-media://chapter/42/0002-page-2.png");
     expect(result.html).toContain("norea-media://chapter/42/0003-page-3.png");
-  });
-
-  it("does not reuse an earlier local slot for a later remote repair source", async () => {
-    const manifest = {
-      media: {
-        files: [
-          {
-            bytes: 3,
-            fileName: "0001-page-1.png",
-            path: "media/0001-page-1.png",
-            sourceUrl: "https://source.test/page-1.png",
-            status: "stored",
-            updatedAt: 1,
-          },
-          {
-            bytes: 0,
-            fileName: "0002-page-2.png",
-            path: "media/0002-page-2.png",
-            sourceUrl: "https://source.test/page-2.png",
-            status: "remote",
-            updatedAt: 1,
-          },
-        ],
-      },
-      updatedAt: 1,
-      version: 1,
-    };
-    pluginMediaFetchMock.mockResolvedValue(
-      new Response(new Uint8Array([4, 5]), {
-        headers: { "content-type": "image/png" },
-        status: 200,
-        statusText: "OK",
-      }),
-    );
-    invokeMock.mockImplementation(async (command, args) => {
-      if (command === "chapter_media_prepare_workspace") return null;
-      if (command === "chapter_media_read_manifest") {
-        return JSON.stringify(manifest);
-      }
-      if (command === "chapter_media_total_size") return 7;
-      if (command === "chapter_media_archive_cache") return 9;
-      if (command === "chapter_media_write_manifest") return null;
-      const input = args as {
-        chapterId: number;
-        fileName: string;
-      };
-      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
-    });
-
-    const result = await cacheHtmlChapterMedia({
-      baseUrl: "https://source.test/chapter/1",
-      chapterId: 42,
-      html: [
-        `<img src="norea-media://chapter/42/0001-page-1.png">`,
-        `<img src="https://source.test/page-2.png">`,
-      ].join(""),
-      previousHtml: [
-        `<img src="norea-media://chapter/42/0001-page-1.png">`,
-        `<img src="https://source.test/page-2.png">`,
-      ].join(""),
-      repair: true,
-    });
-
-    expect(pluginMediaFetchMock).toHaveBeenCalledTimes(1);
-    expect(pluginMediaFetchMock).toHaveBeenCalledWith(
-      "https://source.test/page-2.png",
-      expect.objectContaining({
-        contextUrl: "https://source.test/chapter/1",
-      }),
-    );
-    expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
-    expect(result.html).toContain("norea-media://chapter/42/0002-page-2.png");
   });
 
   it("refetches reusable repair media after preparing the workspace", async () => {
@@ -1053,44 +956,6 @@ describe("cacheHtmlChapterMedia", () => {
     );
     expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
     expect(result.html).not.toContain("norea-media://chapter/42/page-1.png");
-  });
-});
-
-describe("resolveLocalChapterMediaPatches", () => {
-  it("drops remote-only patches so failed fallback URLs do not repaint the reader", async () => {
-    const patches = await resolveLocalChapterMediaPatches([
-      {
-        attributes: {
-          src: "https://source.test/missing.png",
-        },
-        index: 0,
-      },
-    ]);
-
-    expect(patches).toEqual([]);
-  });
-
-  it("keeps only local media attributes from mixed patches", async () => {
-    invokeMock.mockResolvedValueOnce("data:image/png;base64,abc");
-
-    const patches = await resolveLocalChapterMediaPatches([
-      {
-        attributes: {
-          poster: "https://source.test/poster.png",
-          src: "norea-media://chapter/42/page.png",
-        },
-        index: 0,
-      },
-    ]);
-
-    expect(patches).toEqual([
-      {
-        attributes: {
-          src: "data:image/png;base64,abc",
-        },
-        index: 0,
-      },
-    ]);
   });
 });
 

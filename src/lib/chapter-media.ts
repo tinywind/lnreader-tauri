@@ -1260,6 +1260,35 @@ async function filterExistingReusableMediaSources(
   return existing;
 }
 
+async function collectStoredManifestMediaSources({
+  chapterId,
+  context,
+  manifest,
+  urls,
+}: {
+  chapterId: number;
+  context: ChapterMediaStorageContext;
+  manifest: ChapterMediaManifest;
+  urls: string[];
+}): Promise<Map<string, string>> {
+  const requestedUrls = new Set(urls);
+  const existing = new Map<string, string>();
+  for (const file of manifest.media.files) {
+    if (
+      file.status !== "stored" ||
+      !requestedUrls.has(file.sourceUrl) ||
+      !isFetchableMediaUrl(file.sourceUrl)
+    ) {
+      continue;
+    }
+    const src = localChapterMediaSrc(chapterId, file.fileName);
+    if ((await getStoredChapterMediaBytes(src, context)) > 0) {
+      existing.set(file.sourceUrl, src);
+    }
+  }
+  return existing;
+}
+
 function isFetchableMediaUrl(url: string): boolean {
   try {
     const protocol = new URL(url).protocol;
@@ -1647,6 +1676,14 @@ export async function cacheHtmlChapterMedia({
         storageContext,
       )
     : new Map<string, string>();
+  const manifestSources = repair
+    ? await collectStoredManifestMediaSources({
+        chapterId,
+        context: storageContext,
+        manifest: previousManifest,
+        urls,
+      })
+    : new Map<string, string>();
   const missingManifestSources = repair
     ? await collectMissingManifestMediaSources({
         chapterId,
@@ -1656,6 +1693,11 @@ export async function cacheHtmlChapterMedia({
       })
     : new Map<string, string>();
   const localSources = new Map<string, string>(reusableSources);
+  for (const [url, src] of manifestSources) {
+    if (!localSources.has(url)) {
+      localSources.set(url, src);
+    }
+  }
   const mediaFilesBySourceUrl = new Map(
     previousManifest.media.files.map((file) => [file.sourceUrl, file]),
   );
@@ -1697,17 +1739,13 @@ export async function cacheHtmlChapterMedia({
     }
   }
   const downloadUrls = [
-    ...new Set([...urls, ...missingManifestSources.keys()]),
+    ...new Set(
+      [
+        ...urls.filter((url) => !localSources.has(url)),
+        ...missingManifestSources.keys(),
+      ].filter((url) => !localSources.has(url)),
+    ),
   ];
-  if (downloadUrls.length === 0) {
-    await cleanupChapterMediaWorkspace(storageContext).catch(() => undefined);
-    return {
-      html: template.innerHTML,
-      mediaBytes: 0,
-      mediaFailures,
-      storedMediaCount: 0,
-    };
-  }
   let storedMediaCount = 0;
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
   const reusableChangedElements = new Set<Element>();

@@ -712,7 +712,7 @@ describe("enqueueChapterMediaRepair", () => {
     expect(setDetail).toHaveBeenCalledWith("1 media assets repaired");
   });
 
-  it("repairs missing local media when downloaded HTML has no remote URLs", async () => {
+  it("runs media repair when stored HTML only has local media refs", async () => {
     const setDetail = vi.fn();
     const storedHtml = `<img src="norea-media://chapter/7/0001-page.png">`;
     vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
@@ -774,6 +774,7 @@ describe("enqueueChapterMediaRepair", () => {
   it("succeeds without work when downloaded HTML has no remote media", async () => {
     const setDetail = vi.fn();
     vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
+    vi.mocked(localChapterMediaSources).mockReturnValueOnce([]);
     vi.mocked(getChapterById).mockResolvedValueOnce({
       content: `<p>plain chapter</p>`,
       contentType: "html",
