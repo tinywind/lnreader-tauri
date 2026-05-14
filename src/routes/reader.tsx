@@ -11,7 +11,7 @@ import { PdfReaderContent } from "../components/PdfReaderContent";
 import { BackIconButton } from "../components/BackIconButton";
 import { IconButton } from "../components/IconButton";
 import { ReaderSettingsPanel } from "../components/ReaderSettingsPanel";
-import { ReaderSettingsGlyph } from "../components/ActionGlyphs";
+import { ReaderSettingsGlyph, RetryGlyph } from "../components/ActionGlyphs";
 import {
   getAdjacentChapter,
   getChapterById,
@@ -25,6 +25,7 @@ import {
 import { getNovelById } from "../db/queries/novel";
 import {
   collectChapterMediaElementPatches,
+  hasRemoteChapterMedia,
   resolveLocalChapterMedia,
   resolveLocalChapterMediaPatches,
   type ChapterMediaElementPatch,
@@ -33,6 +34,7 @@ import { renderChapterContentAsHtml } from "../lib/chapter-content";
 import { pluginManager } from "../lib/plugins/manager";
 import {
   enqueueChapterDownload,
+  enqueueChapterMediaRepair,
   subscribeChapterDownloads,
   subscribeChapterMediaPatches,
   subscribeChapterPartialContentUpdates,
@@ -165,9 +167,14 @@ function ReaderTopChrome({
   incognitoMode,
   onBack,
   onOpenSettings,
+  onRepairMedia,
   onToggleBookmark,
   progress,
+  repairMediaDisabled,
+  repairMediaLoading,
+  repairMediaAttention,
   settingsOpen,
+  showMediaRepair,
 }: {
   chapter: ChapterRow | null | undefined;
   chapterCount: number;
@@ -177,9 +184,14 @@ function ReaderTopChrome({
   incognitoMode: boolean;
   onBack: () => void;
   onOpenSettings: () => void;
+  onRepairMedia: () => void;
   onToggleBookmark: () => void;
   progress: number;
+  repairMediaDisabled: boolean;
+  repairMediaLoading: boolean;
+  repairMediaAttention: boolean;
   settingsOpen: boolean;
+  showMediaRepair: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -205,6 +217,18 @@ function ReaderTopChrome({
         </span>
       ) : null}
       <span className="lnr-reader-status">{Math.round(progress)}%</span>
+      {showMediaRepair ? (
+        <IconButton
+          className="lnr-reader-icon-button"
+          disabled={repairMediaDisabled || repairMediaLoading}
+          label={t("reader.repairMedia")}
+          onClick={onRepairMedia}
+          size="sm"
+          tone={repairMediaAttention ? "warning" : "default"}
+        >
+          <RetryGlyph />
+        </IconButton>
+      ) : null}
       <IconButton
         active={Boolean(chapter?.bookmark)}
         className="lnr-reader-icon-button"
@@ -472,6 +496,7 @@ export function ReaderPage() {
     chapterId: number;
     progress: number;
   } | null>(null);
+  const [remoteMediaError, setRemoteMediaError] = useState(false);
 
   const chapterQuery = useQuery({
     queryKey: chapterDetailKey(chapterId),
@@ -857,6 +882,27 @@ export function ReaderPage() {
     },
   });
 
+  const repairMediaMutation = useMutation({
+    mutationFn: async () => {
+      if (!chapter || !currentNovel) return;
+      await enqueueChapterMediaRepair({
+        id: chapter.id,
+        pluginId: currentNovel.pluginId,
+        pluginName: currentSourceName ?? currentNovel.pluginId,
+        priority: "user",
+        title: t("tasks.task.repairChapterMedia", { name: chapter.name }),
+      }).promise;
+    },
+    onSuccess: () => {
+      setRemoteMediaError(false);
+      void queryClient.invalidateQueries({
+        queryKey: chapterDetailKey(chapterId),
+      });
+      void queryClient.invalidateQueries({ queryKey: ["download-cache"] });
+      void queryClient.invalidateQueries({ queryKey: ["novel"] });
+    },
+  });
+
   const openChapter = useCallback(
     (
       targetChapter: ChapterListRow,
@@ -1216,6 +1262,27 @@ export function ReaderPage() {
   const activeContentType =
     chapter?.contentType ?? activeReaderDocument?.contentType;
   const activeChapterId = chapter?.id ?? activeReaderDocument?.chapterId;
+  useEffect(() => {
+    setRemoteMediaError(false);
+  }, [activeChapterId]);
+  const showMediaRepair = useMemo(
+    () =>
+      Boolean(
+        chapter?.isDownloaded &&
+          activeContentType === "html" &&
+          (chapter.mediaRepairNeeded ||
+            remoteMediaError ||
+            (activeReaderHtml &&
+              hasRemoteChapterMedia(activeReaderHtml, "https://norea.invalid/"))),
+      ),
+    [
+      activeContentType,
+      activeReaderHtml,
+      chapter?.isDownloaded,
+      chapter?.mediaRepairNeeded,
+      remoteMediaError,
+    ],
+  );
 
   useEffect(() => {
     if (!activeReaderDocument) return;
@@ -1269,6 +1336,9 @@ export function ReaderPage() {
       : "calc(var(--lnr-app-bottom-inset) + 2rem)";
   const sharedFullPageReaderChromeVisible =
     fullPageReader && readerChromeVisible;
+  const handleRemoteMediaError = useCallback(() => {
+    setRemoteMediaError(true);
+  }, []);
 
   useEffect(() => {
     readerSeekbarEnabledRef.current = readerSeekbarEnabled;
@@ -1418,6 +1488,7 @@ export function ReaderPage() {
         onProgressChange={handleProgressChange}
         onPageIndexChange={handlePageIndexChange}
         onBoundaryPage={handleBoundaryPage}
+        onMediaError={handleRemoteMediaError}
         onSeekbarActivity={showReaderSeekbarForActivity}
         onSeekbarActiveChange={handleReaderSeekbarActiveChange}
         viewportHeight="100%"
@@ -1444,9 +1515,14 @@ export function ReaderPage() {
         incognitoMode={incognitoMode}
         onBack={handleReaderBack}
         onOpenSettings={openReaderSettingsPanel}
+        onRepairMedia={() => repairMediaMutation.mutate()}
         onToggleBookmark={() => bookmarkMutation.mutate()}
         progress={readerProgress}
+        repairMediaDisabled={!chapter || !currentNovel}
+        repairMediaLoading={repairMediaMutation.isPending}
+        repairMediaAttention={remoteMediaError}
         settingsOpen={readerSettingsOpen}
+        showMediaRepair={showMediaRepair}
       />
       <Box className="lnr-reader-body">
         <ReaderChapterPanel

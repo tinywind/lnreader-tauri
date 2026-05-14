@@ -16,7 +16,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { DetailsGlyph } from "../components/ActionGlyphs";
+import { DetailsGlyph, RetryGlyph } from "../components/ActionGlyphs";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
 import { ConsoleCover } from "../components/ConsolePrimitives";
 import { IconButton } from "../components/IconButton";
@@ -34,6 +34,7 @@ import {
   clearChapterMedia,
 } from "../lib/chapter-media";
 import { backfillDownloadCacheMediaBytes } from "../lib/download-cache-media";
+import { enqueueChapterMediaRepair } from "../lib/tasks/chapter-download";
 import {
   formatRelativeTimeForLocale,
   useTranslation,
@@ -70,9 +71,10 @@ function getCacheTotals(novels: readonly DownloadCacheNovel[]) {
     (totals, novel) => ({
       chapters: totals.chapters + novel.chaptersDownloaded,
       novels: totals.novels + 1,
+      repairNeeded: totals.repairNeeded + novel.mediaRepairNeededChapters,
       bytes: totals.bytes + novel.totalBytes,
     }),
-    { bytes: 0, chapters: 0, novels: 0 },
+    { bytes: 0, chapters: 0, novels: 0, repairNeeded: 0 },
   );
 }
 
@@ -155,11 +157,15 @@ function DownloadCacheErrorState({
 function DownloadCacheChapterRow({
   chapter,
   deleting,
+  onRepair,
   onDelete,
+  repairing,
 }: {
   chapter: DownloadCacheChapter;
   deleting: boolean;
+  onRepair: () => void;
   onDelete: () => void;
+  repairing: boolean;
 }) {
   const { locale, t } = useTranslation();
   const size = formatBytes(chapter.totalBytes, locale);
@@ -189,33 +195,52 @@ function DownloadCacheChapterRow({
           {chapterStatusText}
         </Text>
       </Box>
-      <IconButton
-        className="lnr-downloads-icon-button"
-        disabled={deleting}
-        label={t("downloads.deleteChapter", { name: chapter.name })}
-        onClick={onDelete}
-        size="lg"
-        title={t("downloads.deleteChapter", { name: chapter.name })}
-        tone="danger"
-      >
-        {deleting ? <Loader size={14} /> : <TrashIcon />}
-      </IconButton>
+      <Group className="lnr-downloads-row-actions" gap={6} wrap="nowrap">
+        {chapter.mediaRepairNeeded ? (
+          <Badge color="yellow" variant="light">
+            {t("downloads.mediaFallback")}
+          </Badge>
+        ) : null}
+        {chapter.mediaRepairNeeded ? (
+          <IconButton
+            className="lnr-downloads-icon-button"
+            disabled={repairing}
+            label={t("downloads.repairChapterMedia", { name: chapter.name })}
+            onClick={onRepair}
+            size="lg"
+            title={t("downloads.repairChapterMedia", { name: chapter.name })}
+          >
+            {repairing ? <Loader size={14} /> : <RetryGlyph />}
+          </IconButton>
+        ) : null}
+        <IconButton
+          className="lnr-downloads-icon-button"
+          disabled={deleting}
+          label={t("downloads.deleteChapter", { name: chapter.name })}
+          onClick={onDelete}
+          size="lg"
+          title={t("downloads.deleteChapter", { name: chapter.name })}
+          tone="danger"
+        >
+          {deleting ? <Loader size={14} /> : <TrashIcon />}
+        </IconButton>
+      </Group>
     </div>
   );
 }
 
 function DownloadCacheChapters({
-  novelId,
+  novel,
 }: {
-  novelId: number;
+  novel: DownloadCacheNovel;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const chapters = useQuery({
-    queryKey: [...DOWNLOAD_CACHE_QUERY_KEY, "chapters", novelId] as const,
+    queryKey: [...DOWNLOAD_CACHE_QUERY_KEY, "chapters", novel.novelId] as const,
     queryFn: async () => {
-      await backfillDownloadCacheMediaBytes(novelId);
-      return listDownloadCacheChapters(novelId);
+      await backfillDownloadCacheMediaBytes(novel.novelId);
+      return listDownloadCacheChapters(novel.novelId);
     },
   });
   const deleteChapter = useMutation({
@@ -223,6 +248,17 @@ function DownloadCacheChapters({
       const result = await deleteDownloadCacheChapter(chapterId);
       await clearChapterMedia(chapterId);
       return result;
+    },
+    onSuccess: () => invalidateDownloadCache(queryClient),
+  });
+  const repairChapter = useMutation({
+    mutationFn: async (chapter: DownloadCacheChapter) => {
+      await enqueueChapterMediaRepair({
+        id: chapter.id,
+        pluginId: novel.pluginId,
+        priority: "user",
+        title: t("tasks.task.repairChapterMedia", { name: chapter.name }),
+      }).promise;
     },
     onSuccess: () => invalidateDownloadCache(queryClient),
   });
@@ -266,6 +302,10 @@ function DownloadCacheChapters({
             deleteChapter.isPending &&
             deleteChapter.variables === chapter.id
           }
+          repairing={
+            repairChapter.isPending &&
+            repairChapter.variables?.id === chapter.id
+          }
           onDelete={() => {
             if (!window.confirm(t("downloads.deleteChapterConfirm", {
               name: chapter.name,
@@ -274,6 +314,7 @@ function DownloadCacheChapters({
             }
             deleteChapter.mutate(chapter.id);
           }}
+          onRepair={() => repairChapter.mutate(chapter)}
         />
       ))}
     </div>
@@ -362,6 +403,16 @@ function DownloadCacheNovelCard({
             >
               {libraryLabel}
             </Badge>
+            {novel.mediaRepairNeededChapters > 0 ? (
+              <Badge
+                className="lnr-downloads-library-badge"
+                color="yellow"
+                title={t("downloads.mediaFallback")}
+                variant="light"
+              >
+                {t("downloads.mediaFallback")}
+              </Badge>
+            ) : null}
           </div>
         </Box>
         <Group
@@ -413,7 +464,7 @@ function DownloadCacheNovelCard({
           </IconButton>
         </Group>
       </div>
-      {expanded ? <DownloadCacheChapters novelId={novel.novelId} /> : null}
+      {expanded ? <DownloadCacheChapters novel={novel} /> : null}
     </Paper>
   );
 }
@@ -429,6 +480,7 @@ export function DownloadsPage() {
       return listDownloadCacheNovels();
     },
   });
+  const [mediaFallbackOnly, setMediaFallbackOnly] = useState(false);
   const deleteAll = useMutation({
     mutationFn: async () => {
       const result = await deleteAllDownloadCache();
@@ -438,6 +490,9 @@ export function DownloadsPage() {
     onSuccess: () => invalidateDownloadCache(queryClient),
   });
   const rows = query.data ?? [];
+  const visibleRows = mediaFallbackOnly
+    ? rows.filter((novel) => novel.mediaRepairNeededChapters > 0)
+    : rows;
   const totals = useMemo(() => getCacheTotals(rows), [rows]);
   const totalSize = formatBytes(totals.bytes, locale);
 
@@ -457,10 +512,28 @@ export function DownloadsPage() {
             <Badge variant="light">
               {t("downloads.summary.size", { size: totalSize })}
             </Badge>
+            {totals.repairNeeded > 0 ? (
+              <Badge color="yellow" variant="light">
+                {t("downloads.mediaFallback")}
+              </Badge>
+            ) : null}
           </>
         }
         actions={
           <>
+            <IconButton
+              active={mediaFallbackOnly}
+              className="lnr-downloads-header-button"
+              disabled={totals.repairNeeded === 0}
+              label={t("downloads.filterMediaFallback")}
+              onClick={() =>
+                setMediaFallbackOnly((current) => !current)
+              }
+              size="lg"
+              title={t("downloads.filterMediaFallback")}
+            >
+              <RetryGlyph />
+            </IconButton>
             <IconButton
               className="lnr-downloads-header-button"
               disabled={query.isFetching}
@@ -511,9 +584,15 @@ export function DownloadsPage() {
           title={t("downloads.empty.title")}
           message={t("downloads.empty.message")}
         />
+      ) : visibleRows.length === 0 ? (
+        <StateView
+          color="blue"
+          title={t("downloads.emptyFiltered.title")}
+          message={t("downloads.emptyFiltered.message")}
+        />
       ) : (
         <Stack gap="xs">
-          {rows.map((novel) => (
+          {visibleRows.map((novel) => (
             <DownloadCacheNovelCard
               key={novel.novelId}
               novel={novel}

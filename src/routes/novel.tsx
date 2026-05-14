@@ -53,6 +53,7 @@ import {
   PlusGlyph,
   ReaderSettingsGlyph,
   RefreshGlyph,
+  RetryGlyph,
   SortGlyph,
 } from "../components/ActionGlyphs";
 import {
@@ -97,6 +98,7 @@ import {
 import {
   enqueueChapterDownload,
   enqueueChapterDownloadBatch,
+  enqueueChapterMediaRepair,
   listChapterDownloadStatuses,
   subscribeChapterDownloads,
   type ChapterDownloadStatus,
@@ -146,6 +148,7 @@ const NOVEL_TITLE_FONT_SIZES = [
 ] as const;
 
 type NovelTitleFontSize = (typeof NOVEL_TITLE_FONT_SIZES)[number];
+type NovelMetadataRefreshMode = "since" | "full";
 
 interface BatchDownloadTargets {
   all: ChapterListRow[];
@@ -438,10 +441,12 @@ interface ChapterListItemProps {
   status: ChapterDownloadStatus | undefined;
   deleteBusy: boolean;
   opening: boolean;
+  repairBusy: boolean;
   reorderBusy: boolean;
   onOpen: () => void;
   onDownload: () => void;
   onDeleteDownload: () => void;
+  onRepairMedia: () => void;
   onMoveDown: () => void;
   onMoveUp: () => void;
 }
@@ -455,10 +460,12 @@ function ChapterListItem({
   status,
   deleteBusy,
   opening,
+  repairBusy,
   reorderBusy,
   onOpen,
   onDownload,
   onDeleteDownload,
+  onRepairMedia,
   onMoveDown,
   onMoveUp,
 }: ChapterListItemProps) {
@@ -504,6 +511,7 @@ function ChapterListItem({
     chapter.bookmark ||
     !chapter.unread ||
     chapter.isDownloaded ||
+    chapter.mediaRepairNeeded ||
     showOpeningSpinner ||
     Boolean(status);
   const renderChapterFlags = () => (
@@ -521,6 +529,11 @@ function ChapterListItem({
       {chapter.isDownloaded ? (
         <ChapterFlag label={t("novel.downloaded")} tone="done">
           <DownloadedGlyph />
+        </ChapterFlag>
+      ) : null}
+      {chapter.mediaRepairNeeded ? (
+        <ChapterFlag label={t("novel.mediaRepairNeeded")} tone="warning">
+          <RetryGlyph />
         </ChapterFlag>
       ) : null}
       {showOpeningSpinner ? (
@@ -673,6 +686,21 @@ function ChapterListItem({
             <DownloadGlyph />
           </IconButton>
         ) : null}
+        {chapter.isDownloaded && chapter.mediaRepairNeeded ? (
+          <IconButton
+            className="lnr-novel-icon-button"
+            data-busy={repairBusy ? "true" : undefined}
+            disabled={repairBusy}
+            label={t("novel.repairChapterMedia")}
+            size="lg"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRepairMedia();
+            }}
+          >
+            {repairBusy ? <SpinnerIcon /> : <RetryGlyph />}
+          </IconButton>
+        ) : null}
         {chapter.isDownloaded && canDeleteDownload ? (
           <IconButton
             className="lnr-novel-icon-button"
@@ -701,12 +729,15 @@ interface VirtualChapterListProps {
   deletePending: boolean;
   lastReadChapterId: number | undefined;
   openingChapterId: number | null;
+  repairBusyChapterId: number | undefined;
+  repairPending: boolean;
   reorderPending: boolean;
   statuses: ReadonlyMap<number, ChapterDownloadStatus>;
   onDeleteDownload: (chapterId: number) => void;
   onDownload: (chapter: ChapterListRow) => void;
   onMoveChapter: (chapterId: number, direction: -1 | 1) => void;
   onOpen: (chapter: ChapterListRow) => void;
+  onRepairMedia: (chapter: ChapterListRow) => void;
   onReorderChapter: (chapterId: number, beforeChapterId: number | null) => void;
 }
 
@@ -718,12 +749,15 @@ function VirtualChapterList({
   deletePending,
   lastReadChapterId,
   openingChapterId,
+  repairBusyChapterId,
+  repairPending,
   reorderPending,
   statuses,
   onDeleteDownload,
   onDownload,
   onMoveChapter,
   onOpen,
+  onRepairMedia,
   onReorderChapter,
 }: VirtualChapterListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -844,10 +878,14 @@ function VirtualChapterList({
                       deletePending && deleteBusyChapterId === chapter.id
                     }
                     opening={openingChapterId === chapter.id}
+                    repairBusy={
+                      repairPending && repairBusyChapterId === chapter.id
+                    }
                     reorderBusy={reorderPending}
                     onOpen={() => onOpen(chapter)}
                     onDownload={() => onDownload(chapter)}
                     onDeleteDownload={() => onDeleteDownload(chapter.id)}
+                    onRepairMedia={() => onRepairMedia(chapter)}
                     onMoveDown={() => onMoveChapter(chapter.id, 1)}
                     onMoveUp={() => onMoveChapter(chapter.id, -1)}
                   />
@@ -935,6 +973,13 @@ interface NovelBatchDownloadMenuProps {
   options: BatchDownloadOption[];
 }
 
+interface NovelMetadataRefreshMenuProps {
+  fullRefreshing: boolean;
+  onFullRefresh: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+}
+
 function NovelActionButton({
   active = false,
   children,
@@ -1008,6 +1053,75 @@ function NovelBatchDownloadMenu({
               </span>
             </button>
           ))}
+        </div>
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
+function NovelMetadataRefreshMenu({
+  fullRefreshing,
+  onFullRefresh,
+  onRefresh,
+  refreshing,
+}: NovelMetadataRefreshMenuProps) {
+  const { t } = useTranslation();
+  const [opened, setOpened] = useState(false);
+  const busy = refreshing || fullRefreshing;
+
+  return (
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-end"
+      shadow="md"
+      width={280}
+    >
+      <Popover.Target>
+        <IconButton
+          className="lnr-novel-icon-button"
+          disabled={busy}
+          label={t("novel.refreshMetadataMenu")}
+          onClick={() => setOpened((current) => !current)}
+          size="lg"
+        >
+          {busy ? <Loader size={14} /> : <RefreshGlyph />}
+        </IconButton>
+      </Popover.Target>
+      <Popover.Dropdown className="lnr-novel-batch-download-menu">
+        <div className="lnr-novel-batch-download-list">
+          <button
+            className="lnr-novel-batch-download-option"
+            disabled={busy}
+            onClick={() => {
+              onRefresh();
+              setOpened(false);
+            }}
+            type="button"
+          >
+            <span className="lnr-novel-batch-download-label">
+              {t("novel.refreshMetadata")}
+            </span>
+            <span className="lnr-novel-batch-download-description">
+              {t("novel.refreshMetadataDescription")}
+            </span>
+          </button>
+          <button
+            className="lnr-novel-batch-download-option"
+            disabled={busy}
+            onClick={() => {
+              onFullRefresh();
+              setOpened(false);
+            }}
+            type="button"
+          >
+            <span className="lnr-novel-batch-download-label">
+              {t("novel.refreshMetadataFull")}
+            </span>
+            <span className="lnr-novel-batch-download-description">
+              {t("novel.refreshMetadataFullDescription")}
+            </span>
+          </button>
         </div>
       </Popover.Dropdown>
     </Popover>
@@ -1127,6 +1241,7 @@ interface NovelWorkspaceProps {
   downloadStatuses: ReadonlyMap<number, ChapterDownloadStatus>;
   lastReadChapterId: number | undefined;
   localChapterAdding: boolean;
+  fullMetadataRefreshing: boolean;
   metadataRefreshing: boolean;
   novel: NovelDetailRecord;
   onBack: () => void;
@@ -1136,6 +1251,7 @@ interface NovelWorkspaceProps {
   onOpenReaderSettings: () => void;
   onOpenSource: () => void;
   onRead: (chapter: ChapterListRow) => void;
+  onRefreshFullMetadata: () => void;
   onRefreshMetadata: () => void;
   onToggleLibrary: () => void;
   sourceUrl: string | null;
@@ -1147,6 +1263,7 @@ function NovelWorkspace({
   downloadStatuses,
   lastReadChapterId,
   localChapterAdding,
+  fullMetadataRefreshing,
   metadataRefreshing,
   novel,
   onBack,
@@ -1156,6 +1273,7 @@ function NovelWorkspace({
   onOpenReaderSettings,
   onOpenSource,
   onRead,
+  onRefreshFullMetadata,
   onRefreshMetadata,
   onToggleLibrary,
   sourceUrl,
@@ -1270,13 +1388,12 @@ function NovelWorkspace({
             onDownload={onBatchDownload}
             options={batchDownloadOptions}
           />
-          <NovelActionButton
-            disabled={metadataRefreshing}
-            label={t("novel.refreshMetadata")}
-            onClick={onRefreshMetadata}
-          >
-            {metadataRefreshing ? <Loader size={14} /> : <RefreshGlyph />}
-          </NovelActionButton>
+          <NovelMetadataRefreshMenu
+            fullRefreshing={fullMetadataRefreshing}
+            onFullRefresh={onRefreshFullMetadata}
+            onRefresh={onRefreshMetadata}
+            refreshing={metadataRefreshing}
+          />
         </>
       )}
       <NovelActionButton
@@ -1479,6 +1596,27 @@ export function NovelDetailPage() {
     },
   });
 
+  const repairMedia = useMutation({
+    mutationFn: async (chapter: ChapterListRow) => {
+      const novel = novelQuery.data;
+      if (!novel || novel.isLocal) return;
+      await enqueueChapterMediaRepair({
+        id: chapter.id,
+        pluginId: novel.pluginId,
+        priority: "user",
+        title: t("tasks.task.repairChapterMedia", { name: chapter.name }),
+      }).promise;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: chaptersKey(id),
+      });
+      void queryClient.invalidateQueries({ queryKey: ["chapter"] });
+      void queryClient.invalidateQueries({ queryKey: ["download-cache"] });
+      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+    },
+  });
+
   const addLocalChapters = useMutation({
     mutationFn: async (files: readonly File[]) => {
       const startPosition =
@@ -1527,46 +1665,67 @@ export function NovelDetailPage() {
     },
   });
 
-  const refreshMetadata = useMutation({
-    mutationFn: async () => {
-      const novel = novelQuery.data;
-      if (!novel || novel.isLocal) return null;
-      const plugin = pluginManager.getPlugin(novel.pluginId);
-      if (!plugin) {
-        throw new Error(t("source.pluginNotLoaded"));
-      }
+  function invalidateNovelMetadataRefresh() {
+    void queryClient.invalidateQueries({ queryKey: novelKey(id) });
+    void queryClient.invalidateQueries({ queryKey: chaptersKey(id) });
+    void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
+  }
 
-      return enqueueSourceTask({
-        plugin,
-        kind: "source.refreshNovel",
-        priority: "user",
-        title: t("tasks.task.refreshNovelMetadata", { name: novel.name }),
-        subject: {
-          novelId: novel.id,
-          novelName: novel.name,
-          path: novel.path,
-        },
-        dedupeKey: `source.refreshNovel:${novel.pluginId}:${novel.path}`,
-        run: (context) =>
-          syncNovelFromSource(
-            pluginManager.getPluginForExecutor(
-              novel.pluginId,
-              context.executor ?? "immediate",
-            ),
-            {
-              cover: novel.cover ?? undefined,
-              name: novel.name,
-              path: novel.path,
-            },
-            { preserveMissingMetadata: true },
+  function enqueueNovelMetadataRefresh(mode: NovelMetadataRefreshMode) {
+    const novel = novelQuery.data;
+    if (!novel || novel.isLocal) return Promise.resolve(null);
+    const plugin = pluginManager.getPlugin(novel.pluginId);
+    if (!plugin) {
+      throw new Error(t("source.pluginNotLoaded"));
+    }
+
+    return enqueueSourceTask({
+      plugin,
+      kind: "source.refreshNovel",
+      priority: "user",
+      title: t(
+        mode === "full"
+          ? "tasks.task.refreshNovelMetadataFull"
+          : "tasks.task.refreshNovelMetadata",
+        { name: novel.name },
+      ),
+      subject: {
+        novelId: novel.id,
+        novelName: novel.name,
+        path: novel.path,
+      },
+      dedupeKey:
+        mode === "full"
+          ? `source.refreshNovel:full:${novel.pluginId}:${novel.path}`
+          : `source.refreshNovel:${novel.pluginId}:${novel.path}`,
+      run: (context) =>
+        syncNovelFromSource(
+          pluginManager.getPluginForExecutor(
+            novel.pluginId,
+            context.executor ?? "immediate",
           ),
-      }).promise;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: novelKey(id) });
-      void queryClient.invalidateQueries({ queryKey: chaptersKey(id) });
-      void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
-    },
+          {
+            cover: novel.cover ?? undefined,
+            name: novel.name,
+            path: novel.path,
+          },
+          {
+            chapterRefreshMode: mode,
+            novelId: novel.id,
+            preserveMissingMetadata: true,
+          },
+        ),
+    }).promise;
+  }
+
+  const refreshMetadata = useMutation({
+    mutationFn: () => enqueueNovelMetadataRefresh("since"),
+    onSuccess: invalidateNovelMetadataRefresh,
+  });
+
+  const fullRefreshMetadata = useMutation({
+    mutationFn: () => enqueueNovelMetadataRefresh("full"),
+    onSuccess: invalidateNovelMetadataRefresh,
   });
 
   const [statuses, setStatuses] = useState<
@@ -1895,6 +2054,8 @@ export function NovelDetailPage() {
   const sourceName = novel.isLocal
     ? t("common.local")
     : (sourcePlugin?.name ?? novel.pluginId);
+  const metadataRefreshError =
+    refreshMetadata.error ?? fullRefreshMetadata.error;
 
   return (
     <>
@@ -1906,6 +2067,7 @@ export function NovelDetailPage() {
             downloadStatuses={statuses}
             lastReadChapterId={lastReadChapterId}
             localChapterAdding={addLocalChapters.isPending}
+            fullMetadataRefreshing={fullRefreshMetadata.isPending}
             metadataRefreshing={refreshMetadata.isPending}
             onBack={goBack}
             onAddLocalChapters={openLocalChapterInput}
@@ -1914,6 +2076,7 @@ export function NovelDetailPage() {
             onOpenReaderSettings={() => setReaderSettingsOpen(true)}
             onRead={openChapter}
             onOpenSource={() => openSourceNovel(novel.pluginId, sourceUrl)}
+            onRefreshFullMetadata={() => fullRefreshMetadata.mutate()}
             onRefreshMetadata={() => refreshMetadata.mutate()}
             onToggleLibrary={() => toggle.mutate()}
             sourceUrl={sourceUrl}
@@ -1943,11 +2106,11 @@ export function NovelDetailPage() {
               </Text>
             ) : null}
 
-            {refreshMetadata.error ? (
+            {metadataRefreshError ? (
               <Text c="red" className="lnr-novel-local-error" size="sm">
-                {refreshMetadata.error instanceof Error
-                  ? refreshMetadata.error.message
-                  : String(refreshMetadata.error)}
+                {metadataRefreshError instanceof Error
+                  ? metadataRefreshError.message
+                  : String(metadataRefreshError)}
               </Text>
             ) : null}
 
@@ -1985,6 +2148,8 @@ export function NovelDetailPage() {
                 deletePending={clearDownload.isPending}
                 lastReadChapterId={lastReadChapterId}
                 openingChapterId={openingChapterId}
+                repairBusyChapterId={repairMedia.variables?.id}
+                repairPending={repairMedia.isPending}
                 reorderPending={reorderLocalChapters.isPending}
                 statuses={statuses}
                 onOpen={(chapter) => {
@@ -1992,6 +2157,7 @@ export function NovelDetailPage() {
                 }}
                 onDownload={downloadChapter}
                 onMoveChapter={moveLocalChapter}
+                onRepairMedia={(chapter) => repairMedia.mutate(chapter)}
                 onReorderChapter={reorderLocalChapter}
                 onDeleteDownload={(chapterId) => {
                   if (novel.isLocal) return;

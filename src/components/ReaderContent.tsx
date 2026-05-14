@@ -40,6 +40,7 @@ interface ReaderContentProps {
   interactionBlocked?: boolean;
   onProgressChange?: (progress: number) => void;
   onPageIndexChange?: (pageIndex: number) => void;
+  onMediaError?: (source: string | null) => void;
   onSeekbarActivity?: () => void;
   onSeekbarActiveChange?: (active: boolean) => void;
   onToggleChrome?: () => void;
@@ -203,6 +204,44 @@ function mediaPatchValueKind(value: string): string {
     return "remote";
   }
   return "other";
+}
+
+function isRemoteMediaUrl(value: string): boolean {
+  return (
+    value.startsWith("http://") ||
+    value.startsWith("https://") ||
+    value.startsWith("//")
+  );
+}
+
+function mediaErrorSource(target: EventTarget | null): string | null {
+  if (target instanceof HTMLImageElement) {
+    return target.currentSrc || target.src || target.getAttribute("src");
+  }
+  if (target instanceof HTMLVideoElement || target instanceof HTMLAudioElement) {
+    return target.currentSrc || target.src || target.getAttribute("src");
+  }
+  if (target instanceof HTMLSourceElement) {
+    return target.src || target.getAttribute("src");
+  }
+  if (target instanceof HTMLEmbedElement) {
+    return target.src || target.getAttribute("src");
+  }
+  if (target instanceof HTMLIFrameElement) {
+    return target.src || target.getAttribute("src");
+  }
+  if (target instanceof HTMLObjectElement) {
+    return target.data || target.getAttribute("data");
+  }
+  return target instanceof HTMLElement ? target.getAttribute("src") : null;
+}
+
+function mediaLogHost(value: string): string {
+  try {
+    return new URL(value, window.location.href).host;
+  } catch {
+    return "invalid";
+  }
 }
 
 function prepareReaderHtmlForDisplay(html: string): string {
@@ -515,6 +554,7 @@ function ReaderContentInner(
     interactionBlocked = false,
     onProgressChange,
     onPageIndexChange,
+    onMediaError,
     onSeekbarActivity,
     onSeekbarActiveChange,
     onToggleChrome,
@@ -881,6 +921,23 @@ function ReaderContentInner(
       console.warn("[reader] custom JS failed", error);
     }
   }, [appearance.customJs, renderedHtml]);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || !onMediaError) return;
+    const handleMediaError = (event: Event) => {
+      const source = mediaErrorSource(event.target);
+      if (!source || !isRemoteMediaUrl(source)) return;
+      logReaderMediaPipeline("remote-media-error", {
+        host: mediaLogHost(source),
+      });
+      onMediaError(source);
+    };
+    content.addEventListener("error", handleMediaError, true);
+    return () => {
+      content.removeEventListener("error", handleMediaError, true);
+    };
+  }, [onMediaError, renderedHtml]);
 
   useEffect(() => {
     if (!general.showBatteryAndTime) return;
