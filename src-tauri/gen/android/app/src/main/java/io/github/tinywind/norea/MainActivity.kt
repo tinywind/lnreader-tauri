@@ -356,7 +356,10 @@ class MainActivity : TauriActivity() {
         "application/zip",
       )
       val newFiles = sourceDir.listFiles()
-        .filter { it.isFile && safeZipEntryName(it.name) != null }
+        .filter {
+          val entryName = safeZipEntryName(it.name)
+          it.isFile && entryName != null && !entryName.endsWith(".part")
+        }
         .sortedBy { it.name ?: "" }
       val newEntryNames = newFiles.mapNotNull { safeZipEntryName(it.name) }.toSet()
       val writtenEntryNames = mutableSetOf<String>()
@@ -372,6 +375,7 @@ class MainActivity : TauriActivity() {
                   if (
                     !entry.isDirectory &&
                     entryName != null &&
+                    !entryName.endsWith(".part") &&
                     entryName !in newEntryNames &&
                     writtenEntryNames.add(entryName)
                   ) {
@@ -398,14 +402,38 @@ class MainActivity : TauriActivity() {
         }
       } ?: throw IllegalStateException("Cannot open media archive for writing.")
 
-      existingArchive?.delete()
+      val backupArchiveName = "$archiveName.bak"
+      val backupArchiveRelativePath = (archiveSegments.dropLast(1) + backupArchiveName)
+        .joinToString("/")
+      storageDocumentAt(rootUri, backupArchiveRelativePath)?.let { staleBackup ->
+        if (!staleBackup.delete()) {
+          throw IllegalStateException(
+            "Cannot remove stale media archive backup: $backupArchiveRelativePath",
+          )
+        }
+      }
+      if (existingArchive != null && !existingArchive.renameTo(backupArchiveName)) {
+        throw IllegalStateException("Cannot backup media archive: $archiveRelativePath")
+      }
       if (!tempArchive.renameTo(archiveName)) {
+        storageDocumentAt(rootUri, backupArchiveRelativePath)?.renameTo(archiveName)
         throw IllegalStateException("Cannot finalize media archive: $archiveRelativePath")
       }
-      sourceDir.listFiles().forEach { child ->
-        child.delete()
+      storageDocumentAt(rootUri, backupArchiveRelativePath)?.let { backup ->
+        if (!backup.delete()) {
+          throw IllegalStateException(
+            "Cannot remove media archive backup: $backupArchiveRelativePath",
+          )
+        }
       }
-      sourceDir.delete()
+      sourceDir.listFiles().forEach { child ->
+        if (!child.delete()) {
+          throw IllegalStateException("Cannot remove staged media file: ${child.name}")
+        }
+      }
+      if (!sourceDir.delete()) {
+        throw IllegalStateException("Cannot remove media staging directory: $sourceRelativePath")
+      }
       val archive = storageDocumentAt(rootUri, archiveRelativePath)
         ?: throw IllegalStateException("Media archive was not created: $archiveRelativePath")
       JSONObject()
@@ -490,6 +518,47 @@ class MainActivity : TauriActivity() {
       }
 
     @JavascriptInterface
+    fun extractZip(
+      rootUri: String,
+      archiveRelativePath: String,
+      targetRelativePath: String,
+    ): String = storageResponse {
+      val archive = storageDocumentAt(rootUri, archiveRelativePath)
+        ?: return@storageResponse JSONObject()
+          .put("ok", true)
+          .put("bytes", 0L)
+      require(archive.isFile) { "Android storage archive is not a file: $archiveRelativePath" }
+      var bytes = 0L
+      contentResolver.openInputStream(archive.uri)?.use { input ->
+        ZipInputStream(input.buffered()).use { zip ->
+          var entry = zip.nextEntry
+          while (entry != null) {
+            val entryName = safeZipEntryName(entry.name)
+            if (!entry.isDirectory && entryName != null) {
+              val targetPath = "$targetRelativePath/$entryName"
+              if (storageDocumentAt(rootUri, targetPath) == null) {
+                val file = ensureStorageFile(
+                  rootUri,
+                  targetPath,
+                  mimeTypeForPath(entryName, "application/octet-stream"),
+                )
+                contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
+                  val copied = zip.copyTo(output)
+                  bytes += copied
+                } ?: throw IllegalStateException("Cannot open extracted media file.")
+              }
+            }
+            zip.closeEntry()
+            entry = zip.nextEntry
+          }
+        }
+      } ?: throw IllegalStateException("Cannot open media archive for extraction.")
+      JSONObject()
+        .put("ok", true)
+        .put("bytes", bytes)
+    }
+
+    @JavascriptInterface
     fun pathSize(rootUri: String, relativePath: String): String = storageResponse {
       val document = storageDocumentAt(rootUri, relativePath)
       JSONObject()
@@ -502,6 +571,76 @@ class MainActivity : TauriActivity() {
       storageDocumentAt(rootUri, relativePath)?.delete()
       JSONObject().put("ok", true)
     }
+
+    @JavascriptInterface
+    fun beginRestore(rootUri: String, token: String): String = storageResponse {
+      val root = storageRoot(rootUri)
+      val backupName = restoreBackupDirectoryName(token)
+      root.findFile(backupName)?.let { staleBackup ->
+        if (!staleBackup.delete()) {
+          throw IllegalStateException("Cannot remove stale Android restore backup.")
+        }
+      }
+      root.findFile("contents")?.let { contents ->
+        if (!contents.renameTo(backupName)) {
+          throw IllegalStateException("Cannot backup Android media contents.")
+        }
+      }
+      val nomedia = ensureStorageFile(
+        rootUri,
+        "contents/.nomedia",
+        "application/octet-stream",
+      )
+      contentResolver.openOutputStream(nomedia.uri, "wt")?.use {
+        // Truncate/create the marker file inside the fresh restore root.
+      } ?: throw IllegalStateException("Cannot create Android media marker.")
+      JSONObject().put("ok", true)
+    }
+
+    @JavascriptInterface
+    fun commitRestore(rootUri: String, token: String): String = storageResponse {
+      val backupName = restoreBackupDirectoryName(token)
+      storageRoot(rootUri).findFile(backupName)?.let { backup ->
+        if (!backup.delete()) {
+          throw IllegalStateException("Cannot remove Android restore backup.")
+        }
+      }
+      JSONObject().put("ok", true)
+    }
+
+    @JavascriptInterface
+    fun rollbackRestore(rootUri: String, token: String): String = storageResponse {
+      val root = storageRoot(rootUri)
+      val backupName = restoreBackupDirectoryName(token)
+      root.findFile("contents")?.let { contents ->
+        if (!contents.delete()) {
+          throw IllegalStateException("Cannot remove failed Android restore contents.")
+        }
+      }
+      root.findFile(backupName)?.let { backup ->
+        if (!backup.renameTo("contents")) {
+          throw IllegalStateException("Cannot rollback Android restore backup.")
+        }
+      }
+      JSONObject().put("ok", true)
+    }
+
+    @JavascriptInterface
+    fun renamePath(rootUri: String, relativePath: String, newName: String): String =
+      storageResponse {
+        val safeNewName = safeZipEntryName(newName)
+          ?: throw IllegalArgumentException("Android storage target name is invalid: $newName")
+        val document = storageDocumentAt(rootUri, relativePath)
+          ?: throw IllegalArgumentException("Android storage path not found: $relativePath")
+        val parentPath = safeStorageSegments(relativePath).dropLast(1).joinToString("/")
+        if (parentPath.isNotEmpty()) {
+          storageDocumentAt(rootUri, "$parentPath/$safeNewName")?.delete()
+        }
+        if (!document.renameTo(safeNewName)) {
+          throw IllegalStateException("Cannot rename Android storage path: $relativePath")
+        }
+        JSONObject().put("ok", true)
+      }
 
     @JavascriptInterface
     fun deleteChildrenExcept(rootUri: String, relativePath: String, keepName: String): String =
@@ -596,6 +735,12 @@ class MainActivity : TauriActivity() {
       current = current.findFile(segment) ?: return null
     }
     return current
+  }
+
+  private fun restoreBackupDirectoryName(token: String): String {
+    val safeToken = safeZipEntryName(token)
+      ?: throw IllegalArgumentException("Android restore token is invalid.")
+    return "contents.restore-$safeToken"
   }
 
   private fun ensureStorageDirectory(parent: DocumentFile, name: String): DocumentFile {

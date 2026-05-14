@@ -101,7 +101,7 @@ describe("packBackup", () => {
     invokeMock.mockResolvedValue(undefined);
   });
 
-  it("invokes backup_pack with metadata only", async () => {
+  it("invokes backup_pack with manifest content and media payloads", async () => {
     const manifest = makeManifest();
     await packBackup(manifest, "C:\\backup.zip");
 
@@ -110,21 +110,20 @@ describe("packBackup", () => {
     expect(command).toBe("backup_pack");
 
     const typed = args as {
+      chapterMedia: unknown[];
       manifestJson: string;
       outputPath: string;
     };
     expect(typed.outputPath).toBe("C:\\backup.zip");
     expect(args).not.toHaveProperty("chapters");
-    expect(args).not.toHaveProperty("chapterMedia");
+    expect(typed.chapterMedia).toEqual([]);
 
-    const leanManifest = JSON.parse(typed.manifestJson) as BackupManifest;
-    expect(leanManifest.chapters[0]?.content).toBeNull();
-    expect(leanManifest.chapters[0]?.isDownloaded).toBe(false);
-    expect(leanManifest.chapters[0]?.mediaBytes).toBe(0);
-    expect(leanManifest.chapters[1]?.content).toBeNull();
-    expect(leanManifest.chapters[1]?.isDownloaded).toBe(false);
-    expect(leanManifest.chapters[1]?.mediaBytes).toBe(0);
-    expect(leanManifest.novels).toEqual(manifest.novels);
+    const packedManifest = JSON.parse(typed.manifestJson) as BackupManifest;
+    expect(packedManifest.chapters[0]?.content).toBe("<p>downloaded</p>");
+    expect(packedManifest.chapters[0]?.isDownloaded).toBe(true);
+    expect(packedManifest.chapters[1]?.content).toBeNull();
+    expect(packedManifest.chapters[1]?.isDownloaded).toBe(false);
+    expect(packedManifest.novels).toEqual(manifest.novels);
   });
 
   it("does not mutate the caller's manifest", async () => {
@@ -136,7 +135,7 @@ describe("packBackup", () => {
     expect(manifest).toEqual(before);
   });
 
-  it("invokes backup_pack_temp_file with metadata only", async () => {
+  it("invokes backup_pack_temp_file with manifest content", async () => {
     const manifest = makeManifest();
     invokeMock.mockResolvedValue("C:\\temp\\norea-backup.zip");
 
@@ -148,11 +147,11 @@ describe("packBackup", () => {
     const [command, args] = invokeMock.mock.calls[0]!;
     expect(command).toBe("backup_pack_temp_file");
 
-    const typed = args as { manifestJson: string };
-    const leanManifest = JSON.parse(typed.manifestJson) as BackupManifest;
-    expect(leanManifest.chapters[0]?.content).toBeNull();
-    expect(leanManifest.chapters[0]?.isDownloaded).toBe(false);
-    expect(leanManifest.chapters[0]?.mediaBytes).toBe(0);
+    const typed = args as { chapterMedia: unknown[]; manifestJson: string };
+    expect(typed.chapterMedia).toEqual([]);
+    const packedManifest = JSON.parse(typed.manifestJson) as BackupManifest;
+    expect(packedManifest.chapters[0]?.content).toBe("<p>downloaded</p>");
+    expect(packedManifest.chapters[0]?.isDownloaded).toBe(true);
   });
 
   it("deletes backup temp files through the Rust command", async () => {

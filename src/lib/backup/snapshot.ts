@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getDb, runExclusiveDatabaseOperation } from "../../db/client";
-import { normalizeChapterContentType } from "../chapter-content";
-import { isTauriRuntime } from "../tauri-runtime";
+import {
+  beginAndroidStorageRestore,
+  commitAndroidStorageRestore,
+  rollbackAndroidStorageRestore,
+} from "../android-storage";
+import {
+  normalizeChapterContentType,
+  storedChapterContentType,
+} from "../chapter-content";
+import { isAndroidRuntime, isTauriRuntime } from "../tauri-runtime";
 import {
   BACKUP_FORMAT_VERSION,
   encodeBackupManifest,
@@ -112,7 +120,7 @@ const BACKUP_SETTING_KEYS = new Set([
 
 const BACKUP_SETTING_PREFIXES = ["plugin:", "source-filters:"];
 const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
-  /^norea-media:\/\/chapter\/([1-9]\d*)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/;
+  /^norea-media:\/\/chapter\/([1-9]\d*)\/([A-Za-z0-9._-]+)$/;
 
 const SELECT_NOVELS = `
   SELECT
@@ -277,7 +285,9 @@ function toChapter(row: RawChapterRow): BackupChapter {
     unread: sqliteBoolean(row.unread),
     progress: row.progress,
     isDownloaded: sqliteBoolean(row.isDownloaded),
-    contentType: normalizeChapterContentType(row.contentType),
+    contentType: storedChapterContentType(
+      normalizeChapterContentType(row.contentType),
+    ),
     content: row.content,
     mediaBytes: row.mediaBytes,
     releaseTime: row.releaseTime,
@@ -288,22 +298,7 @@ function toChapter(row: RawChapterRow): BackupChapter {
   };
 }
 
-function getBackupChapterMediaBytesByChapterId(
-  files: readonly BackupChapterMediaFile[],
-): Map<number, number> {
-  const bytesByChapterId = new Map<number, number>();
-  for (const file of files) {
-    const { chapterId } = parseBackupChapterMediaSource(file.mediaSrc);
-    bytesByChapterId.set(
-      chapterId,
-      (bytesByChapterId.get(chapterId) ?? 0) + file.body.length,
-    );
-  }
-  return bytesByChapterId;
-}
-
 function parseBackupChapterMediaSource(mediaSrc: string): {
-  cacheKey: string;
   chapterId: number;
   fileName: string;
 } {
@@ -313,33 +308,42 @@ function parseBackupChapterMediaSource(mediaSrc: string): {
   }
   return {
     chapterId: Number.parseInt(match[1]!, 10),
-    cacheKey: match[2]!,
-    fileName: match[3]!,
+    fileName: match[2]!,
   };
 }
 
 async function restoreBackupChapterMediaFiles(
   manifest: BackupManifest,
   files: readonly BackupChapterMediaFile[],
-): Promise<void> {
-  if (files.length === 0) return;
-  if (!isTauriRuntime()) return;
+): Promise<Map<number, number>> {
+  const mediaBytesByChapterId = new Map<number, number>();
+  if (files.length === 0) return mediaBytesByChapterId;
+  if (!isTauriRuntime()) return mediaBytesByChapterId;
 
   const chaptersById = new Map(
     manifest.chapters.map((chapter) => [chapter.id, chapter]),
   );
   const novelsById = new Map(manifest.novels.map((novel) => [novel.id, novel]));
+  const restoredFilesByChapterId = new Map<
+    number,
+    Array<{
+      bytes: number;
+      fileName: string;
+      path: string;
+      sourceUrl: string;
+      status: "stored";
+      updatedAt: number;
+    }>
+  >();
 
-  await invoke("chapter_media_clear_all");
   for (const file of files) {
-    const { cacheKey, chapterId, fileName } = parseBackupChapterMediaSource(
+    const { chapterId, fileName } = parseBackupChapterMediaSource(
       file.mediaSrc,
     );
     const chapter = chaptersById.get(chapterId);
     const novel = chapter ? novelsById.get(chapter.novelId) : undefined;
     await invoke("chapter_media_store", {
       body: file.body,
-      cacheKey,
       chapterId,
       ...(chapter?.name ? { chapterName: chapter.name } : {}),
       ...(chapter?.chapterNumber
@@ -352,7 +356,44 @@ async function restoreBackupChapterMediaFiles(
       ...(novel ? { novelPath: novel.path } : {}),
       ...(novel ? { sourceId: novel.pluginId } : {}),
     });
+    const restoredFiles = restoredFilesByChapterId.get(chapterId) ?? [];
+    restoredFiles.push({
+      bytes: file.body.length,
+      fileName,
+      path: `media/${fileName}`,
+      sourceUrl: file.mediaSrc,
+      status: "stored",
+      updatedAt: Date.now(),
+    });
+    restoredFilesByChapterId.set(chapterId, restoredFiles);
   }
+
+  for (const [chapterId, restoredFiles] of restoredFilesByChapterId) {
+    const chapter = chaptersById.get(chapterId);
+    const novel = chapter ? novelsById.get(chapter.novelId) : undefined;
+    const context = {
+      chapterId,
+      ...(chapter?.name ? { chapterName: chapter.name } : {}),
+      ...(chapter?.chapterNumber
+        ? { chapterNumber: chapter.chapterNumber }
+        : {}),
+      ...(chapter ? { chapterPosition: chapter.position } : {}),
+      ...(chapter ? { novelId: chapter.novelId } : {}),
+      ...(novel ? { novelName: novel.name } : {}),
+      ...(novel ? { novelPath: novel.path } : {}),
+      ...(novel ? { sourceId: novel.pluginId } : {}),
+    };
+    await invoke("chapter_media_write_manifest", {
+      ...context,
+      files: restoredFiles,
+    });
+    const archiveBytes = await invoke<number>(
+      "chapter_media_archive_cache",
+      context,
+    );
+    mediaBytesByChapterId.set(chapterId, archiveBytes);
+  }
+  return mediaBytesByChapterId;
 }
 
 function toCategory(row: RawCategoryRow): BackupCategory {
@@ -375,6 +416,28 @@ function toInstalledPlugin(row: RawInstalledPluginRow): BackupInstalledPlugin {
     sourceCode: row.sourceCode,
     installedAt: row.installedAt,
   };
+}
+
+async function beginChapterMediaRestore(): Promise<string> {
+  return isAndroidRuntime()
+    ? beginAndroidStorageRestore()
+    : invoke<string>("chapter_media_begin_restore");
+}
+
+async function commitChapterMediaRestore(token: string): Promise<void> {
+  if (isAndroidRuntime()) {
+    await commitAndroidStorageRestore(token);
+    return;
+  }
+  await invoke("chapter_media_commit_restore", { token });
+}
+
+async function rollbackChapterMediaRestore(token: string): Promise<void> {
+  if (isAndroidRuntime()) {
+    await rollbackAndroidStorageRestore(token);
+    return;
+  }
+  await invoke("chapter_media_rollback_restore", { token });
 }
 
 /**
@@ -423,25 +486,43 @@ export async function gatherBackupSnapshot(): Promise<BackupManifest> {
 export async function applyBackupSnapshot(
   manifest: BackupManifest,
 ): Promise<void> {
-  const mediaBytesByChapterId = hasBackupChapterMediaFiles(manifest)
-    ? getBackupChapterMediaBytesByChapterId(
-        getBackupChapterMediaFiles(manifest),
-      )
-    : new Map<number, number>();
-
   await getDb();
-  await runExclusiveDatabaseOperation(() =>
-    invoke("backup_restore_snapshot", {
-      manifestJson: encodeBackupManifest(manifest),
-      mediaBytesByChapterId: Object.fromEntries(mediaBytesByChapterId),
-    }),
-  );
+  let mediaRestoreToken: string | null = null;
+  let mediaBytesByChapterId = new Map<number, number>();
+  const shouldRestoreChapterMedia =
+    hasBackupChapterMediaFiles(manifest) && isTauriRuntime();
+  if (shouldRestoreChapterMedia) {
+    mediaRestoreToken = await beginChapterMediaRestore();
+  }
 
-  if (hasBackupChapterMediaFiles(manifest)) {
-    await restoreBackupChapterMediaFiles(
-      manifest,
-      getBackupChapterMediaFiles(manifest),
+  try {
+    if (shouldRestoreChapterMedia) {
+      mediaBytesByChapterId = await restoreBackupChapterMediaFiles(
+        manifest,
+        getBackupChapterMediaFiles(manifest),
+      );
+    }
+    await runExclusiveDatabaseOperation(() =>
+      invoke("backup_restore_snapshot", {
+        manifestJson: encodeBackupManifest(manifest),
+        mediaBytesByChapterId: Object.fromEntries(mediaBytesByChapterId),
+      }),
     );
+  } catch (error) {
+    if (mediaRestoreToken) {
+      await rollbackChapterMediaRestore(mediaRestoreToken).catch(
+        (rollbackError) => {
+          console.warn("[backup] media restore rollback failed", rollbackError);
+        },
+      );
+    }
+    throw error;
+  }
+
+  if (mediaRestoreToken) {
+    await commitChapterMediaRestore(mediaRestoreToken).catch((error) => {
+      console.warn("[backup] media restore cleanup failed", error);
+    });
   }
 
   if (manifest.settings !== undefined) {

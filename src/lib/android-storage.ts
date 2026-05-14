@@ -13,6 +13,8 @@ interface AndroidStorageBridge {
   ) => string;
   deletePath: (rootUri: string, relativePath: string) => string;
   deleteRootChildren: (rootUri: string) => string;
+  beginRestore: (rootUri: string, token: string) => string;
+  commitRestore: (rootUri: string, token: string) => string;
   pathSize: (rootUri: string, relativePath: string) => string;
   pickMediaStorageRoot: (requestId: string) => void;
   readBase64: (rootUri: string, relativePath: string) => string;
@@ -23,6 +25,17 @@ interface AndroidStorageBridge {
     archiveRelativePath: string,
     entryName: string,
   ) => string;
+  extractZip: (
+    rootUri: string,
+    archiveRelativePath: string,
+    targetRelativePath: string,
+  ) => string;
+  renamePath: (
+    rootUri: string,
+    relativePath: string,
+    newName: string,
+  ) => string;
+  rollbackRestore: (rootUri: string, token: string) => string;
   writeContentUriFile: (
     uri: string,
     inputPath: string,
@@ -327,6 +340,21 @@ export async function readAndroidStorageZipEntryDataUrl(
   }
 }
 
+export async function extractAndroidStorageZip(
+  archiveRelativePath: string,
+  targetRelativePath: string,
+): Promise<number> {
+  const root = await androidStorageRoot();
+  const response = parseStorageResponse<AndroidStorageSizeResponse>(
+    androidStorageBridge().extractZip(
+      root,
+      archiveRelativePath,
+      targetRelativePath,
+    ),
+  );
+  return response.bytes ?? 0;
+}
+
 export async function androidStoragePathSize(
   relativePath: string,
 ): Promise<number> {
@@ -353,6 +381,35 @@ export async function deleteAndroidStoragePath(
 ): Promise<void> {
   const root = await androidStorageRoot();
   parseStorageResponse(androidStorageBridge().deletePath(root, relativePath));
+}
+
+export async function beginAndroidStorageRestore(): Promise<string> {
+  const root = await androidStorageRoot();
+  const token = makeRequestId();
+  parseStorageResponse(androidStorageBridge().beginRestore(root, token));
+  return token;
+}
+
+export async function commitAndroidStorageRestore(token: string): Promise<void> {
+  const root = await androidStorageRoot();
+  parseStorageResponse(androidStorageBridge().commitRestore(root, token));
+}
+
+export async function rollbackAndroidStorageRestore(
+  token: string,
+): Promise<void> {
+  const root = await androidStorageRoot();
+  parseStorageResponse(androidStorageBridge().rollbackRestore(root, token));
+}
+
+export async function renameAndroidStoragePath(
+  relativePath: string,
+  newName: string,
+): Promise<void> {
+  const root = await androidStorageRoot();
+  parseStorageResponse(
+    androidStorageBridge().renamePath(root, relativePath, newName),
+  );
 }
 
 export async function deleteAndroidStorageChildrenExcept(

@@ -101,6 +101,42 @@ describe("encodeBackupManifest + parseBackupManifest", () => {
     expect(round.chapters[0]?.content).toBe("<p>hi</p>");
   });
 
+  it("normalizes markdown chapter content type to html in the round trip", () => {
+    const manifest: BackupManifest = {
+      ...VALID_MANIFEST,
+      chapters: [
+        {
+          ...VALID_MANIFEST.chapters[0]!,
+          contentType: "markdown",
+          content: `<section class="reader-markdown-content"><h1>Hi</h1></section>`,
+        },
+      ],
+    };
+
+    const round = parseBackupManifest(encodeBackupManifest(manifest));
+
+    expect(round.chapters[0]?.contentType).toBe("html");
+    expect(round.chapters[0]?.content).toContain("reader-markdown-content");
+  });
+
+  it("preserves epub chapter content type in the round trip", () => {
+    const manifest: BackupManifest = {
+      ...VALID_MANIFEST,
+      chapters: [
+        {
+          ...VALID_MANIFEST.chapters[0]!,
+          contentType: "epub",
+          content: `<article class="reader-epub-content" data-epub-rendered="true"><section>Hi</section></article>`,
+        },
+      ],
+    };
+
+    const round = parseBackupManifest(encodeBackupManifest(manifest));
+
+    expect(round.chapters[0]?.contentType).toBe("epub");
+    expect(round.chapters[0]?.content).toContain("reader-epub-content");
+  });
+
   it("normalizes older v1 manifests that lack discovery timestamps", () => {
     const legacy = JSON.parse(
       encodeBackupManifest(VALID_MANIFEST),

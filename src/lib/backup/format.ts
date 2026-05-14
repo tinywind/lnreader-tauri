@@ -14,6 +14,7 @@
 import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
+  storedChapterContentType,
   type ChapterContentType,
 } from "../chapter-content";
 
@@ -181,7 +182,9 @@ function isChapter(value: unknown): value is BackupChapter {
     (value.contentType === undefined ||
       value.contentType === "html" ||
       value.contentType === "text" ||
-      value.contentType === "pdf") &&
+      value.contentType === "pdf" ||
+      value.contentType === "markdown" ||
+      value.contentType === "epub") &&
     (value.mediaBytes === undefined || typeof value.mediaBytes === "number") &&
     typeof value.updatedAt === "number" &&
     (value.createdAt === undefined || typeof value.createdAt === "number") &&
@@ -201,8 +204,10 @@ function normalizeChapter(chapter: BackupChapter): BackupChapter {
   const createdAt = chapter.createdAt ?? chapter.updatedAt;
   return {
     ...chapter,
-    contentType: normalizeChapterContentType(
-      chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+    contentType: storedChapterContentType(
+      normalizeChapterContentType(
+        chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
+      ),
     ),
     mediaBytes: chapter.mediaBytes ?? 0,
     createdAt,

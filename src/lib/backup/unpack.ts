@@ -15,7 +15,7 @@ export interface BackupChapterMediaFile {
 
 const BACKUP_CHAPTER_MEDIA_FILES = Symbol("backupChapterMediaFiles");
 const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
-  /^norea-media:\/\/chapter\/([1-9]\d*)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+  /^norea-media:\/\/chapter\/([1-9]\d*)\/[A-Za-z0-9._-]+$/;
 
 type BackupManifestWithChapterMedia = BackupManifest & {
   [BACKUP_CHAPTER_MEDIA_FILES]?: readonly BackupChapterMediaFile[];

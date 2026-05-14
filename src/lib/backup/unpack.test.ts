@@ -132,7 +132,7 @@ describe("unpackBackup", () => {
       chapters: [],
       chapter_media: [
         {
-          media_src: "norea-media://chapter/10/cache/image.png",
+          media_src: "norea-media://chapter/10/image.png",
           body: [1, 2, 3],
         },
       ],
@@ -143,7 +143,7 @@ describe("unpackBackup", () => {
     expect(restored.chapters[0]?.mediaBytes).toBe(3);
     expect(getBackupChapterMediaFiles(restored)).toEqual([
       {
-        mediaSrc: "norea-media://chapter/10/cache/image.png",
+        mediaSrc: "norea-media://chapter/10/image.png",
         body: [1, 2, 3],
       },
     ]);

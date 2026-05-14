@@ -3,17 +3,15 @@
 //! The current zip layout is:
 //!
 //! ```text
-//! manifest.json           — JSON envelope (see src/lib/backup/format.ts)
+//! manifest.json
+//! chapter-media/<chapterId>/<fileName>
 //! ```
 //!
-//! The manifest is the source of truth for structure (novels,
-//! categories, repository, chapter rows, etc.). Downloaded chapter
-//! bodies and media stay in the configured storage folder so backup
-//! archives stay small. `backup_unpack` still accepts the old
-//! `chapters/<id>.html` and `chapter-media/...` entries for backups
-//! produced before that content was externalized.
+//! The manifest is the source of truth for structure, downloaded
+//! chapter content, and metadata. Chapter media files are stored as
+//! flat `chapter-media/<chapterId>/<fileName>` entries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -159,7 +157,7 @@ fn bool_to_int(value: bool) -> i64 {
 fn backup_content_type(value: Option<&str>) -> &str {
     match value {
         Some("pdf") => "pdf",
-        Some("text") => "text",
+        Some("epub") => "epub",
         _ => "html",
     }
 }
@@ -220,7 +218,7 @@ fn contains_remote_media_tag(content: &str) -> bool {
 }
 
 fn chapter_media_repair_needed(content: Option<&str>, content_type: Option<&str>) -> i64 {
-    if backup_content_type(content_type) != "html" {
+    if !matches!(backup_content_type(content_type), "html" | "epub") {
         return 0;
     }
     let Some(content) = content else {
@@ -434,11 +432,70 @@ fn write_manifest_entry<W: Write + Seek>(
     Ok(())
 }
 
-fn write_backup_zip(manifest_json: String, output_path: String) -> Result<(), String> {
+fn media_backup_entry_name(media_src: &str) -> Result<String, String> {
+    let payload = media_src
+        .strip_prefix("norea-media://chapter/")
+        .ok_or_else(|| "backup_pack: unsupported chapter media uri".to_string())?;
+    let mut parts = payload.split('/');
+    let chapter_id = parts
+        .next()
+        .ok_or_else(|| "backup_pack: missing chapter media id".to_string())?
+        .parse::<i64>()
+        .map_err(|err| format!("backup_pack: invalid chapter media id: {err}"))?;
+    if chapter_id <= 0 {
+        return Err("backup_pack: chapter media id must be positive".to_string());
+    }
+    let file_name = parts
+        .next()
+        .ok_or_else(|| "backup_pack: missing chapter media file name".to_string())?;
+    if parts.next().is_some()
+        || file_name.is_empty()
+        || file_name == "."
+        || file_name == ".."
+        || file_name.contains('\0')
+        || file_name.contains('/')
+        || file_name.contains('\\')
+    {
+        return Err("backup_pack: invalid chapter media file name".to_string());
+    }
+    Ok(format!("chapter-media/{chapter_id}/{file_name}"))
+}
+
+fn write_chapter_media_entries<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    chapter_media: &[ChapterMediaContent],
+    error_prefix: &str,
+) -> Result<(), String> {
+    if chapter_media.is_empty() {
+        return Ok(());
+    }
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    let mut written = HashSet::new();
+    for file in chapter_media {
+        let entry_name = media_backup_entry_name(&file.media_src)?;
+        if !written.insert(entry_name.clone()) {
+            continue;
+        }
+        zip.start_file(&entry_name, options)
+            .map_err(|err| format!("{error_prefix}: start media entry: {err}"))?;
+        zip.write_all(&file.body)
+            .map_err(|err| format!("{error_prefix}: write media entry: {err}"))?;
+    }
+    Ok(())
+}
+
+fn write_backup_zip(
+    manifest_json: String,
+    chapter_media: Vec<ChapterMediaContent>,
+    output_path: String,
+) -> Result<(), String> {
     let file = File::create(&output_path)
         .map_err(|err| format!("backup_pack: failed to create '{output_path}': {err}"))?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
     write_manifest_entry(&mut zip, &manifest_json, "backup_pack")?;
+    write_chapter_media_entries(&mut zip, &chapter_media, "backup_pack")?;
     zip.finish()
         .map_err(|err| format!("backup_pack: finalize: {err}"))?;
     Ok(())
@@ -447,10 +504,12 @@ fn write_backup_zip(manifest_json: String, output_path: String) -> Result<(), St
 fn write_backup_zip_file<W: Write + Seek>(
     file: W,
     manifest_json: String,
+    chapter_media: Vec<ChapterMediaContent>,
     error_prefix: &str,
 ) -> Result<(), String> {
     let mut zip = ZipWriter::new(BufWriter::new(file));
     write_manifest_entry(&mut zip, &manifest_json, error_prefix)?;
+    write_chapter_media_entries(&mut zip, &chapter_media, error_prefix)?;
     zip.finish()
         .map_err(|err| format!("{error_prefix}: finalize: {err}"))?;
     Ok(())
@@ -475,15 +534,22 @@ fn backup_temp_path(dir: &Path, attempt: u32) -> PathBuf {
     dir.join(format!("norea-backup-{now}-{attempt}.zip"))
 }
 
-fn write_backup_temp_file(app: AppHandle, manifest_json: String) -> Result<String, String> {
+fn write_backup_temp_file(
+    app: AppHandle,
+    manifest_json: String,
+    chapter_media: Vec<ChapterMediaContent>,
+) -> Result<String, String> {
     let dir = backup_temp_dir(&app)?;
     for attempt in 0..16 {
         let path = backup_temp_path(&dir, attempt);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => {
-                if let Err(err) =
-                    write_backup_zip_file(file, manifest_json, "backup_pack_temp_file")
-                {
+                if let Err(err) = write_backup_zip_file(
+                    file,
+                    manifest_json,
+                    chapter_media.clone(),
+                    "backup_pack_temp_file",
+                ) {
                     let _ = fs::remove_file(&path);
                     return Err(err);
                 }
@@ -498,9 +564,13 @@ fn write_backup_temp_file(app: AppHandle, manifest_json: String) -> Result<Strin
     Err("backup_pack_temp_file: failed to allocate a temp file".to_string())
 }
 
-fn backup_zip_bytes(manifest_json: String) -> Result<Vec<u8>, String> {
+fn backup_zip_bytes(
+    manifest_json: String,
+    chapter_media: Vec<ChapterMediaContent>,
+) -> Result<Vec<u8>, String> {
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
     write_manifest_entry(&mut zip, &manifest_json, "backup_pack_bytes")?;
+    write_chapter_media_entries(&mut zip, &chapter_media, "backup_pack_bytes")?;
     let cursor = zip
         .finish()
         .map_err(|err| format!("backup_pack_bytes: finalize: {err}"))?;
@@ -510,20 +580,25 @@ fn backup_zip_bytes(manifest_json: String) -> Result<Vec<u8>, String> {
 /// Write a backup zip to `output_path`.
 ///
 /// `manifest_json` should be the output of TS-side
-/// `encodeBackupManifest(...)` — this command does not validate or
+/// `encodeBackupManifest(...)`; this command does not validate or
 /// reshape it; the JS side owns the schema.
 #[tauri::command]
 pub fn backup_pack(
     _app: AppHandle,
     manifest_json: String,
+    chapter_media: Option<Vec<ChapterMediaContent>>,
     output_path: String,
 ) -> Result<(), String> {
-    write_backup_zip(manifest_json, output_path)
+    write_backup_zip(manifest_json, chapter_media.unwrap_or_default(), output_path)
 }
 
 #[tauri::command]
-pub fn backup_pack_temp_file(app: AppHandle, manifest_json: String) -> Result<String, String> {
-    write_backup_temp_file(app, manifest_json)
+pub fn backup_pack_temp_file(
+    app: AppHandle,
+    manifest_json: String,
+    chapter_media: Option<Vec<ChapterMediaContent>>,
+) -> Result<String, String> {
+    write_backup_temp_file(app, manifest_json, chapter_media.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -543,8 +618,12 @@ pub fn backup_delete_temp_file(app: AppHandle, path: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn backup_pack_bytes(_app: AppHandle, manifest_json: String) -> Result<Vec<u8>, String> {
-    backup_zip_bytes(manifest_json)
+pub fn backup_pack_bytes(
+    _app: AppHandle,
+    manifest_json: String,
+    chapter_media: Option<Vec<ChapterMediaContent>>,
+) -> Result<Vec<u8>, String> {
+    backup_zip_bytes(manifest_json, chapter_media.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -664,7 +743,7 @@ mod tests {
     fn media_repair_detection_ignores_local_media_refs() {
         assert_eq!(
             chapter_media_repair_needed(
-                Some(r#"<img src="norea-media://chapter/7/cache/page.png">"#),
+                Some(r#"<img src="norea-media://chapter/7/page.png">"#),
                 Some("html"),
             ),
             0
@@ -697,7 +776,7 @@ mod tests {
 
         let manifest_json = r#"{"version":1,"exportedAt":1700000000}"#.to_string();
 
-        write_backup_zip(manifest_json.clone(), zip_path_str.clone()).expect("pack");
+        write_backup_zip(manifest_json.clone(), Vec::new(), zip_path_str.clone()).expect("pack");
 
         let unpacked = backup_unpack(zip_path_str).expect("unpack");
         assert_eq!(unpacked.manifest_json, manifest_json);
@@ -706,7 +785,34 @@ mod tests {
     }
 
     #[test]
-    fn unpack_accepts_legacy_chapter_media() {
+    fn pack_includes_chapter_media_entries() {
+        let dir = tempdir().expect("tempdir");
+        let zip_path = dir.path().join("backup.zip");
+        let zip_path_str = zip_path.to_string_lossy().to_string();
+        let manifest_json = r#"{"version":1,"exportedAt":1700000000}"#.to_string();
+
+        write_backup_zip(
+            manifest_json.clone(),
+            vec![ChapterMediaContent {
+                media_src: "norea-media://chapter/10/image.png".to_string(),
+                body: vec![1, 2, 3, 4],
+            }],
+            zip_path_str.clone(),
+        )
+        .expect("pack");
+
+        let unpacked = backup_unpack(zip_path_str).expect("unpack");
+        assert_eq!(unpacked.manifest_json, manifest_json);
+        assert_eq!(unpacked.chapter_media.len(), 1);
+        assert_eq!(
+            unpacked.chapter_media[0].media_src.as_str(),
+            "norea-media://chapter/10/image.png"
+        );
+        assert_eq!(unpacked.chapter_media[0].body.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn unpack_accepts_chapter_media() {
         let dir = tempdir().expect("tempdir");
         let zip_path = dir.path().join("backup.zip");
         let zip_path_str = zip_path.to_string_lossy().to_string();
@@ -717,7 +823,7 @@ mod tests {
         zip.start_file(MANIFEST_ENTRY, options).expect("manifest");
         zip.write_all(br#"{"version":1,"exportedAt":1700000000}"#)
             .expect("manifest body");
-        zip.start_file("chapter-media/10/cache/image.png", options)
+        zip.start_file("chapter-media/10/image.png", options)
             .expect("media");
         zip.write_all(&[1, 2, 3, 4]).expect("media body");
         zip.finish().expect("finish");
@@ -726,7 +832,7 @@ mod tests {
         assert_eq!(unpacked.chapter_media.len(), 1);
         assert_eq!(
             unpacked.chapter_media[0].media_src.as_str(),
-            "norea-media://chapter/10/cache/image.png"
+            "norea-media://chapter/10/image.png"
         );
         assert_eq!(unpacked.chapter_media[0].body.as_slice(), &[1, 2, 3, 4]);
     }
