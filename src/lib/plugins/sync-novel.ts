@@ -3,7 +3,11 @@ import {
   getLatestSourceChapterAnchor,
   upsertChapter,
 } from "../../db/queries/chapter";
-import { normalizeChapterContentType } from "../chapter-content";
+import {
+  DEFAULT_CHAPTER_CONTENT_TYPE,
+  isKnownChapterContentType,
+  type ChapterContentType,
+} from "../chapter-content";
 import { markUpdatesIndexDirty } from "../updates/update-index-events";
 import type { ChapterItem, NovelItem, Plugin, SourceNovel } from "./types";
 
@@ -23,6 +27,16 @@ export interface SyncNovelFromSourceResult {
 
 function optionalText(value: string | undefined | null): string | null {
   return value ?? null;
+}
+
+function pluginChapterContentType(value: unknown): ChapterContentType {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_CHAPTER_CONTENT_TYPE;
+  }
+  if (!isKnownChapterContentType(value)) {
+    throw new Error(`sync-novel: unsupported chapter contentType "${String(value)}".`);
+  }
+  return value;
 }
 
 function metadataAssignment(
@@ -66,6 +80,7 @@ function assertSourceChapters(
         `Plugin '${pluginId}' ${method} returned duplicate chapterNumber ${chapterNumber}.`,
       );
     }
+    pluginChapterContentType(chapter.contentType);
     seen.add(chapterNumber);
   }
 
@@ -221,7 +236,7 @@ export async function syncNovelFromSource(
       chapterNumber: String(chapter.chapterNumber),
       page: chapter.page ?? "1",
       releaseTime: chapter.releaseTime ?? null,
-      contentType: normalizeChapterContentType(chapter.contentType),
+      contentType: pluginChapterContentType(chapter.contentType),
     });
     if (chapterMutation.rowsAffected > 0) changedChapters += 1;
   }

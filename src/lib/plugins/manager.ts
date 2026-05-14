@@ -9,10 +9,10 @@ import {
 } from "../http";
 import type { ScraperExecutorId } from "../tasks/scraper-queue";
 import { getPluginBaseUrl } from "./base-url";
-import { clearPluginInputValues } from "./inputs";
+import { clearPluginInputValues, setPluginInputValue } from "./inputs";
 import { loadPlugin } from "./sandbox";
 import { createShimResolver } from "./shims";
-import type { Plugin, PluginItem } from "./types";
+import type { Plugin, PluginInstallMode, PluginItem } from "./types";
 
 export class PluginValidationError extends Error {
   constructor(message: string) {
@@ -58,6 +58,20 @@ function readOptionalPluginString(value: unknown): string | undefined {
     : undefined;
 }
 
+function readOptionalPluginInstallMode(
+  value: unknown,
+): PluginInstallMode | undefined {
+  return value === "single" || value === "multiSource" ? value : undefined;
+}
+
+function slugifyPluginInstanceId(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "source";
+}
+
 function assertPluginContract(plugin: Plugin, sourceLabel: string): void {
   const value = plugin as unknown as Record<string, unknown>;
   for (const field of [...REQUIRED_PLUGIN_METADATA_FIELDS, "url"] as const) {
@@ -89,6 +103,7 @@ function pluginItemFromLocalSource(
     version: readRequiredPluginString(value.version, "version", sourceUrl),
     url: sourceUrl,
     iconUrl: readOptionalPluginString(value.iconUrl) ?? "",
+    installMode: readOptionalPluginInstallMode(value.installMode),
   };
 }
 
@@ -110,8 +125,23 @@ export function isValidPluginItem(value: unknown): value is PluginItem {
   );
 }
 
-function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
+function withPluginMetadata(
+  plugin: Plugin,
+  item: PluginItem,
+  options: { overrideIdentity?: boolean } = {},
+): Plugin {
   const target = plugin as Plugin & Partial<PluginItem>;
+  if (options.overrideIdentity) {
+    target.id = item.id;
+    target.name = item.name;
+    target.lang = item.lang;
+    target.version = item.version;
+    target.url = item.url;
+    target.iconUrl = item.iconUrl;
+    target.installMode = item.installMode;
+    return plugin;
+  }
+
   target.id = typeof target.id === "string" ? target.id : item.id;
   target.name = typeof target.name === "string" ? target.name : item.name;
   target.lang = typeof target.lang === "string" ? target.lang : item.lang;
@@ -120,6 +150,8 @@ function withPluginMetadata(plugin: Plugin, item: PluginItem): Plugin {
   target.url = typeof target.url === "string" ? target.url : item.url;
   target.iconUrl =
     typeof target.iconUrl === "string" ? target.iconUrl : item.iconUrl;
+  target.installMode =
+    readOptionalPluginInstallMode(target.installMode) ?? item.installMode;
   return plugin;
 }
 
@@ -131,7 +163,13 @@ function pluginItemFromPlugin(plugin: Plugin, sourceUrl: string): PluginItem {
     version: plugin.version,
     iconUrl: plugin.iconUrl,
     url: sourceUrl,
+    installMode: plugin.installMode,
   };
+}
+
+export interface PluginInstanceInstallInput {
+  name: string;
+  inputs?: Record<string, string>;
 }
 
 /**
@@ -182,6 +220,11 @@ export class PluginManager {
    * the loaded plugin's `id` doesn't match `item.id`.
    */
   async installPlugin(item: PluginItem): Promise<Plugin> {
+    if (item.installMode === "multiSource") {
+      throw new PluginValidationError(
+        `Plugin '${item.id}' must be installed as a source instance.`,
+      );
+    }
     const source = await appFetchText(item.url);
     const plugin = this.loadRuntimePlugin(source, item, "immediate");
     if (plugin.id !== item.id) {
@@ -190,6 +233,44 @@ export class PluginManager {
       );
     }
     await this.registerInstalledPlugin(plugin, item.url, source);
+    return plugin;
+  }
+
+  async installPluginInstance(
+    item: PluginItem,
+    input: PluginInstanceInstallInput,
+  ): Promise<Plugin> {
+    const name = input.name.trim();
+    if (name === "") {
+      throw new PluginValidationError("Source name is required.");
+    }
+
+    const source = await appFetchText(item.url);
+    const provider = this.loadRuntimePlugin(source, item, "immediate");
+    if (provider.id !== item.id) {
+      throw new PluginValidationError(
+        `Plugin id mismatch: repository index says '${item.id}', source says '${provider.id}'.`,
+      );
+    }
+
+    const idHint = input.inputs?.repository ?? name;
+    const instanceItem: PluginItem = {
+      ...item,
+      id: this.nextAvailablePluginId(
+        `${item.id}:${slugifyPluginInstanceId(idHint)}`,
+      ),
+      name,
+      installMode: "single",
+    };
+    const plugin = this.loadRuntimePlugin(source, instanceItem, "immediate", {
+      overrideIdentity: true,
+    });
+    await this.registerInstalledPlugin(plugin, item.url, source);
+
+    for (const [key, value] of Object.entries(input.inputs ?? {})) {
+      setPluginInputValue(plugin.id, key, value);
+    }
+
     return plugin;
   }
 
@@ -226,6 +307,7 @@ export class PluginManager {
     source: string,
     item: PluginItem,
     executor: ScraperExecutorId,
+    options: { overrideIdentity?: boolean } = {},
   ): Plugin {
     let plugin: Plugin | undefined;
     const baseUrl = () => {
@@ -242,6 +324,7 @@ export class PluginManager {
         fetch: createPluginFetchShim(baseUrl, item.id, executor),
       }),
       item,
+      options,
     );
     assertPluginContract(plugin, item.url);
     try {
@@ -320,6 +403,7 @@ export class PluginManager {
           row.sourceCode,
           item,
           "immediate",
+          { overrideIdentity: true },
         );
         this.installed.set(plugin.id, plugin);
         this.installedSources.set(plugin.id, {
@@ -358,6 +442,7 @@ export class PluginManager {
       installed.source,
       installed.item,
       executor,
+      { overrideIdentity: true },
     );
     this.executorRuntimes.set(runtimeKey, plugin);
     return plugin;
@@ -395,6 +480,14 @@ export class PluginManager {
   private clearExecutorRuntimes(pluginId: string): void {
     for (const key of [...this.executorRuntimes.keys()]) {
       if (key.endsWith(`:${pluginId}`)) this.executorRuntimes.delete(key);
+    }
+  }
+
+  private nextAvailablePluginId(baseId: string): string {
+    if (!this.installed.has(baseId)) return baseId;
+    for (let index = 2; ; index += 1) {
+      const candidate = `${baseId}-${index}`;
+      if (!this.installed.has(candidate)) return candidate;
     }
   }
 }

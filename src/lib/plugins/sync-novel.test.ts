@@ -195,4 +195,71 @@ describe("syncNovelFromSource", () => {
     expect(plugin.parseNovelSince).not.toHaveBeenCalled();
     expect(plugin.parseNovel).toHaveBeenCalledWith("/novel");
   });
+
+  it("preserves supported epub chapter content types", async () => {
+    const plugin = makePlugin({
+      parseNovel: vi.fn(() =>
+        Promise.resolve({
+          ...makeDetail([]),
+          chapters: [
+            {
+              chapterNumber: 1,
+              contentType: "epub" as const,
+              name: "EPUB Chapter",
+              path: "/chapter-1",
+            },
+          ],
+        }),
+      ),
+    });
+
+    await syncNovelFromSource(plugin, { name: "Novel", path: "/novel" });
+
+    expect(mockedUpsertChapter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentType: "epub",
+        path: "/chapter-1",
+      }),
+    );
+  });
+
+  it("defaults missing chapter content types to html", async () => {
+    const plugin = makePlugin({
+      parseNovel: vi.fn(() => Promise.resolve(makeDetail([1]))),
+    });
+
+    await syncNovelFromSource(plugin, { name: "Novel", path: "/novel" });
+
+    expect(mockedUpsertChapter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentType: "html",
+        path: "/chapter-1",
+      }),
+    );
+  });
+
+  it("rejects explicit unsupported chapter content types", async () => {
+    const plugin = makePlugin({
+      parseNovel: vi.fn(() =>
+        Promise.resolve({
+          ...makeDetail([]),
+          chapters: [
+            {
+              chapterNumber: 1,
+              contentType: "mobi" as never,
+              name: "Broken",
+              path: "/broken",
+            },
+          ],
+        }),
+      ),
+    });
+
+    await expect(
+      syncNovelFromSource(plugin, { name: "Novel", path: "/novel" }),
+    ).rejects.toThrow('unsupported chapter contentType "mobi"');
+
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockedUpsertChapter).not.toHaveBeenCalled();
+  });
 });

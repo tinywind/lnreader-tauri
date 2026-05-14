@@ -1,5 +1,10 @@
 export type PluginInputValue = string | boolean;
 
+export interface PluginInputOption {
+  label: string;
+  value: string;
+}
+
 export interface PluginInputDefinition {
   value?: PluginInputValue;
   label?: string;
@@ -7,6 +12,7 @@ export interface PluginInputDefinition {
   placeholder?: string;
   required?: boolean;
   private?: boolean;
+  options?: PluginInputOption[];
 }
 
 export type PluginInputSchema = Record<string, PluginInputDefinition>;

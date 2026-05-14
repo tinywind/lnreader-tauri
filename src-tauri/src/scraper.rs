@@ -396,7 +396,7 @@ struct ScraperEntry {
 
 /// Inbound JSON shape from `webview_fetch` callers (matches the
 /// browser `RequestInit` subset our pluginFetch surfaces).
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchInit {
     pub method: Option<String>,
@@ -1464,20 +1464,24 @@ async fn prepare_extract_context(scraper: &ScraperWebview, target: &Url) -> Resu
 }
 
 #[cfg(desktop)]
-fn fetch_context_url(url: &str, context_url: Option<&str>) -> Result<String, String> {
+fn fetch_context_urls(url: &str, context_url: Option<&str>) -> Result<Vec<String>, String> {
     let request_url: Url = url
         .parse()
         .map_err(|err| format!("scraper: invalid fetch url '{url}': {err}"))?;
     let Some(context_url) = context_url else {
-        return Ok(origin_url(&request_url));
+        return Ok(vec![origin_url(&request_url)]);
     };
     let parsed_context_url: Url = context_url
         .parse()
         .map_err(|err| format!("scraper: invalid context url '{context_url}': {err}"))?;
     if same_origin(&request_url, &parsed_context_url) {
-        return Ok(context_url.to_string());
+        return Ok(vec![context_url.to_string()]);
     }
-    Ok(origin_url(&request_url))
+    let mut contexts = vec![origin_url(&request_url)];
+    if !contexts.iter().any(|candidate| candidate == context_url) {
+        contexts.push(context_url.to_string());
+    }
+    Ok(contexts)
 }
 
 #[cfg(desktop)]
@@ -1519,10 +1523,11 @@ fn build_webview_fetch_start_script(
   window.__lnrFetchResults[requestId] = {{ done: false }};
   (async function () {{
     try {{
+      const requestOrigin = new URL(request.url, location.href).origin;
       const fetchInit = {{
         method: init.method || "GET",
         headers,
-        credentials: "include",
+        credentials: requestOrigin === location.origin ? "include" : "same-origin",
         redirect: "follow",
         signal: controller.signal
       }};
@@ -1795,10 +1800,10 @@ pub async fn webview_fetch(
     let queue = normalize_scraper_executor(queue.as_deref())?;
     let queue_lock = scraper_executor_lock(&state, &queue);
     let _queue_guard = queue_lock.lock().await;
-    let fetch_context = fetch_context_url(&url, context_url.as_deref())?;
+    let fetch_contexts = fetch_context_urls(&url, context_url.as_deref())?;
     let init_log = fetch_init_for_log(&init);
     log::trace!(
-        "[scraper:fetch] request queue={queue} request_url={url} configured_context={:?} fetch_context={fetch_context} timeout_ms={timeout_ms:?} user_agent={user_agent:?} init={init_log}",
+        "[scraper:fetch] request queue={queue} request_url={url} configured_context={:?} fetch_contexts={fetch_contexts:?} timeout_ms={timeout_ms:?} user_agent={user_agent:?} init={init_log}",
         context_url
     );
     let scraper = scraper_handle_for_key(&app, &state, &queue, user_agent.as_deref())?;
@@ -1806,19 +1811,27 @@ pub async fn webview_fetch(
         &scraper,
         &queue,
         "before_webview_fetch",
-        vec![
-            ("request", url.clone()),
-            ("fetch_context", fetch_context.clone()),
-        ],
+        vec![("request", url.clone())],
     );
-    let result = webview_fetch_with_ready_scraper(
-        &scraper,
-        url.clone(),
-        init,
-        Some(fetch_context.clone()),
-        timeout_ms,
-    )
-    .await;
+    let mut result = Err("scraper: no fetch context available".to_string());
+    for (index, fetch_context) in fetch_contexts.iter().enumerate() {
+        result = webview_fetch_with_ready_scraper(
+            &scraper,
+            url.clone(),
+            init.clone(),
+            Some(fetch_context.clone()),
+            timeout_ms,
+        )
+        .await;
+        if result.is_ok() || index + 1 == fetch_contexts.len() {
+            break;
+        }
+        if let Err(err) = &result {
+            log::debug!(
+                "[scraper:fetch] retrying with fallback context queue={queue} request_url={url} failed_context={fetch_context} error={err}"
+            );
+        }
+    }
     match &result {
         Ok(result) => {
             let header_names: Vec<&String> = result.headers.keys().collect();
@@ -1836,7 +1849,10 @@ pub async fn webview_fetch(
             log::error!("[scraper:fetch] failed queue={queue} request_url={url} error={err}");
         }
     }
-    let mut cookie_log_urls = vec![("request", url.clone()), ("fetch_context", fetch_context)];
+    let mut cookie_log_urls = vec![("request", url.clone())];
+    for fetch_context in fetch_contexts {
+        cookie_log_urls.push(("fetch_context", fetch_context));
+    }
     if let Ok(result) = &result {
         cookie_log_urls.push(("final", result.final_url.clone()));
     }

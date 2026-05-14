@@ -9,6 +9,16 @@ import type { Filters, FilterToValues } from "./filterTypes";
 import type { PluginInputSchema } from "./inputs";
 import type { ChapterContentType } from "../chapter-content";
 
+export type ChapterBinaryMediaType = "application/pdf" | "application/epub+zip";
+
+export interface ChapterBinaryResource {
+  type: "binary";
+  contentType: "pdf" | "epub";
+  mediaType: ChapterBinaryMediaType;
+  bytes: ArrayBuffer | Uint8Array;
+  byteLength?: number;
+}
+
 export enum NovelStatus {
   Unknown = "Unknown",
   Ongoing = "Ongoing",
@@ -56,6 +66,8 @@ export interface SourcePage {
   chapters: ChapterItem[];
 }
 
+export type PluginInstallMode = "single" | "multiSource";
+
 export interface PluginItem {
   id: string;
   name: string;
@@ -69,6 +81,7 @@ export interface PluginItem {
   customCSS?: string;
   hasUpdate?: boolean;
   hasSettings?: boolean;
+  installMode?: PluginInstallMode;
 }
 
 export interface PluginPopularOptions {
@@ -101,8 +114,13 @@ export interface Plugin extends PluginItem {
     sinceChapterNumber: number,
   ) => Promise<SourceNovel>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
-  /** Return content matching the chapter row's `contentType`. */
+  /**
+   * Return content matching the chapter row's `contentType`.
+   * Text-like bodies are converted to HTML before storage.
+   */
   parseChapter: (chapterPath: string) => Promise<string>;
+  /** Return first-class PDF/EPUB chapter resources. */
+  parseChapterResource?: (chapterPath: string) => Promise<ChapterBinaryResource>;
   searchNovels: (
     searchTerm: string,
     pageNo: number,

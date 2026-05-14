@@ -7,6 +7,7 @@ import { getSourceRequestTimeoutMs } from "../../store/browse";
 import {
   type ContextUrlProvider,
   createPluginFetch,
+  createPluginFetchFile,
   createPluginFetchText,
   pluginFetch,
   pluginFetchText,
@@ -507,6 +508,7 @@ export function createShimResolver(
           scraperExecutor: init.scraperExecutor ?? scraperExecutor,
           sourceId: init.sourceId ?? pluginId,
         });
+  const fetchFile = createPluginFetchFile(baseUrl, pluginId, scraperExecutor);
 
   return (id) => {
     switch (id) {
@@ -521,6 +523,7 @@ export function createShimResolver(
       case "@libs/fetch":
         return {
           fetchApi,
+          fetchFile,
           fetchText,
           fetchProto: () =>
             Promise.reject(

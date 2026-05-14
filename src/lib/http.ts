@@ -141,6 +141,18 @@ function decodeBase64Body(bodyBase64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(
+      String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)),
+    );
+  }
+  return btoa(chunks.join(""));
+}
+
 function bodyFromWire(result: FetchResultWire): BodyInit {
   if (result.bodyBase64 !== undefined) {
     return new Blob([decodeBase64Body(result.bodyBase64)]);
@@ -586,6 +598,25 @@ export function createPluginFetchText(
       sourceId: init.sourceId ?? sourceId,
       scraperExecutor: init.scraperExecutor ?? scraperExecutor,
     });
+}
+
+export function createPluginFetchFile(
+  contextUrl?: ContextUrlProvider,
+  sourceId?: string,
+  scraperExecutor?: ScraperExecutorId,
+): (url: string, init?: HttpInit) => Promise<string> {
+  return async (url, init = {}) => {
+    const response = await pluginMediaFetch(url, {
+      ...init,
+      contextUrl:
+        init.contextUrl ??
+        (contextUrl === undefined ? undefined : resolveContextUrl(contextUrl)),
+      sourceId: init.sourceId ?? sourceId,
+      scraperExecutor: init.scraperExecutor ?? scraperExecutor,
+    });
+    if (!response.ok) return "";
+    return arrayBufferToBase64(await response.arrayBuffer());
+  };
 }
 
 function normalizeHeaders(

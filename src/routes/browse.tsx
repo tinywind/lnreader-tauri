@@ -9,6 +9,7 @@ import {
   Loader,
   Modal,
   MultiSelect,
+  PasswordInput,
   Stack,
   Tabs,
   Text,
@@ -65,9 +66,51 @@ const INSTALLED_QUERY_KEY = ["plugin", "installed"] as const;
 const MAX_PLUGIN_SOURCE_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_PLUGIN_SOURCE_FILE_SIZE_LABEL = "5 MiB";
 
+interface SourceInstanceForm {
+  workTitle: string;
+  repository: string;
+  ref: string;
+  workRoot: string;
+  chapterFilePattern: string;
+  chapterExcludePattern: string;
+  token: string;
+}
+
+const DEFAULT_SOURCE_INSTANCE_FORM: SourceInstanceForm = {
+  workTitle: "",
+  repository: "",
+  ref: "",
+  workRoot: "",
+  chapterFilePattern: "",
+  chapterExcludePattern: "",
+  token: "",
+};
+
 function localPluginSourceUrl(file: File): string {
   const safeName = file.name.trim().replace(/[\r\n]/g, " ") || "plugin.js";
   return `local:${encodeURIComponent(safeName)}`;
+}
+
+function isMultiSourcePlugin(item: PluginItem): boolean {
+  return item.installMode === "multiSource";
+}
+
+function sourceInstanceFormFor(): SourceInstanceForm {
+  return { ...DEFAULT_SOURCE_INSTANCE_FORM };
+}
+
+function sourceInstanceInputs(
+  form: SourceInstanceForm,
+): Record<string, string> {
+  return {
+    workTitle: form.workTitle.trim(),
+    repository: form.repository.trim(),
+    ref: form.ref.trim(),
+    workRoot: form.workRoot.trim(),
+    chapterFilePattern: form.chapterFilePattern.trim(),
+    chapterExcludePattern: form.chapterExcludePattern.trim(),
+    token: form.token.trim(),
+  };
 }
 
 interface AvailableEntry {
@@ -294,6 +337,10 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
   const [addOpen, setAddOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [settingsPlugin, setSettingsPlugin] = useState<Plugin | null>(null);
+  const [sourceTemplate, setSourceTemplate] = useState<PluginItem | null>(null);
+  const [sourceForm, setSourceForm] = useState<SourceInstanceForm>(
+    DEFAULT_SOURCE_INSTANCE_FORM,
+  );
 
   const navigateToSource = (pluginId: string) =>
     navigate({
@@ -335,7 +382,7 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
       sortEntriesByName(
         availableEntries.filter(
           ({ item }) =>
-            !installedIds.has(item.id) &&
+            (!installedIds.has(item.id) || isMultiSourcePlugin(item)) &&
             (pluginLanguageFilter.length === 0 ||
               pluginLanguageFilter.includes(item.lang)),
         ),
@@ -443,6 +490,31 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
       }).promise,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["plugin"] });
+    },
+  });
+
+  const installSourceMutation = useMutation({
+    mutationFn: async ({
+      item,
+      form,
+    }: {
+      item: PluginItem;
+      form: SourceInstanceForm;
+    }): Promise<Plugin> =>
+      enqueueMainTask({
+        kind: "plugin.install",
+        title: t("tasks.task.installPlugin", { name: form.workTitle }),
+        subject: { pluginId: item.id, url: item.url },
+        run: () =>
+          pluginManager.installPluginInstance(item, {
+            name: form.workTitle,
+            inputs: sourceInstanceInputs(form),
+          }),
+      }).promise,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["plugin"] });
+      setSourceTemplate(null);
+      setSourceForm(DEFAULT_SOURCE_INSTANCE_FORM);
     },
   });
 
@@ -613,8 +685,18 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
               locale={locale}
               hasRepository={hasRepository}
               installedIds={installedIds}
-              onInstall={(item) => installMutation.mutate(item)}
-              installing={installMutation.isPending}
+              onInstall={(item) => {
+                if (isMultiSourcePlugin(item)) {
+                  installSourceMutation.reset();
+                  setSourceForm(sourceInstanceFormFor());
+                  setSourceTemplate(item);
+                } else {
+                  installMutation.mutate(item);
+                }
+              }}
+              installing={
+                installMutation.isPending || installSourceMutation.isPending
+              }
               failures={availableFailures}
             />
 
@@ -671,6 +753,145 @@ export function BrowsePage({ active = true, query: q = "" }: BrowsePageProps) {
               }}
             >
               {t("common.save")}
+            </TextButton>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
+        opened={active && sourceTemplate !== null}
+        onClose={() => {
+          setSourceTemplate(null);
+          installSourceMutation.reset();
+        }}
+        size="lg"
+        title={t("browse.sourceInstance.title")}
+      >
+        <Stack gap="sm">
+          <TextInput
+            label={t("browse.sourceInstance.workTitle")}
+            placeholder="My novel"
+            value={sourceForm.workTitle}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                workTitle: value,
+              }));
+            }}
+            autoFocus
+          />
+          <TextInput
+            label={t("browse.sourceInstance.repository")}
+            placeholder="owner/repo"
+            value={sourceForm.repository}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                repository: value,
+              }));
+            }}
+          />
+          <TextInput
+            label={t("browse.sourceInstance.ref")}
+            placeholder="main"
+            value={sourceForm.ref}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                ref: value,
+              }));
+            }}
+          />
+          <TextInput
+            label={t("browse.sourceInstance.workRoot")}
+            placeholder="works/my-novel/manuscripts"
+            value={sourceForm.workRoot}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                workRoot: value,
+              }));
+            }}
+          />
+          <TextInput
+            label={t("browse.sourceInstance.chapterFiles")}
+            placeholder="regex:^arc-[0-9]{3}/ch-[0-9]+\\.md$"
+            value={sourceForm.chapterFilePattern}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                chapterFilePattern: value,
+              }));
+            }}
+          />
+          <TextInput
+            label={t("browse.sourceInstance.excludeFiles")}
+            placeholder="README.md,draft-*,regex:^legacy/"
+            value={sourceForm.chapterExcludePattern}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                chapterExcludePattern: value,
+              }));
+            }}
+          />
+          <PasswordInput
+            label={t("browse.sourceInstance.token")}
+            placeholder="Optional personal access token"
+            value={sourceForm.token}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setSourceForm((current) => ({
+                ...current,
+                token: value,
+              }));
+            }}
+          />
+          {installSourceMutation.error && (
+            <StateView
+              color="red"
+              title={t("common.saveFailed")}
+              message={
+                installSourceMutation.error instanceof Error
+                  ? installSourceMutation.error.message
+                  : String(installSourceMutation.error)
+              }
+            />
+          )}
+          <Group justify="flex-end">
+            <TextButton
+              variant="subtle"
+              onClick={() => {
+                setSourceTemplate(null);
+                installSourceMutation.reset();
+              }}
+            >
+              {t("common.cancel")}
+            </TextButton>
+            <TextButton
+              loading={installSourceMutation.isPending}
+              disabled={
+                sourceTemplate === null ||
+                sourceForm.workTitle.trim() === "" ||
+                sourceForm.repository.trim() === "" ||
+                sourceForm.workRoot.trim() === "" ||
+                sourceForm.chapterFilePattern.trim() === ""
+              }
+              onClick={() => {
+                if (sourceTemplate) {
+                  installSourceMutation.mutate({
+                    item: sourceTemplate,
+                    form: sourceForm,
+                  });
+                }
+              }}
+            >
+              {t("browse.addSource")}
             </TextButton>
           </Group>
         </Stack>
@@ -1244,6 +1465,13 @@ function AvailablePluginRow({
   onInstall,
 }: AvailablePluginRowProps) {
   const { t } = useTranslation();
+  const multiSource = isMultiSourcePlugin(item);
+  const disabled = isInstalled && !multiSource;
+  const actionLabel = multiSource
+    ? t("browse.addSource")
+    : isInstalled
+      ? t("common.installed")
+      : t("common.install");
 
   return (
     <div className="lnr-browse-plugin-row">
@@ -1282,15 +1510,15 @@ function AvailablePluginRow({
         </Box>
         <Group className="lnr-action-strip" gap={4} wrap="nowrap" justify="flex-end">
           <IconButton
-            label={`${isInstalled ? t("common.installed") : t("common.install")}: ${item.name}`}
+            label={`${actionLabel}: ${item.name}`}
             size="lg"
             variant="light"
-            disabled={isInstalled}
-            loading={installing && !isInstalled}
-            title={isInstalled ? t("common.installed") : t("common.install")}
+            disabled={disabled}
+            loading={installing && !disabled}
+            title={actionLabel}
             onClick={() => onInstall(item)}
           >
-            {isInstalled ? <CheckGlyph /> : <PlusGlyph />}
+            {disabled ? <CheckGlyph /> : <PlusGlyph />}
           </IconButton>
         </Group>
       </Group>

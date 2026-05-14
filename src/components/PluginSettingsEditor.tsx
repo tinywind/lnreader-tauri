@@ -1,6 +1,7 @@
 import { useMemo, useState, type ChangeEvent } from "react";
 import {
   PasswordInput,
+  Select,
   Stack,
   Switch,
   Text,
@@ -45,6 +46,20 @@ function asSettingDefinition(value: unknown): PluginInputDefinition | null {
       typeof setting.placeholder === "string" ? setting.placeholder : undefined,
     required: typeof setting.required === "boolean" ? setting.required : undefined,
     private: typeof setting.private === "boolean" ? setting.private : undefined,
+    options: Array.isArray(setting.options)
+      ? setting.options
+          .map((option) => {
+            if (option === null || typeof option !== "object") return null;
+            const entry = option as Record<string, unknown>;
+            return typeof entry.label === "string" &&
+              typeof entry.value === "string"
+              ? { label: entry.label, value: entry.value }
+              : null;
+          })
+          .filter((option): option is { label: string; value: string } =>
+            option !== null,
+          )
+      : undefined,
   };
 }
 
@@ -145,6 +160,26 @@ export function PluginSettingsEditor({
             }));
           },
         };
+
+        if (inputType(definition) === "select" && definition.options?.length) {
+          return (
+            <SettingsFieldRow key={key} label={label}>
+              <Select
+                aria-label={label}
+                data={definition.options}
+                placeholder={definition.placeholder}
+                required={definition.required}
+                value={String(value)}
+                onChange={(nextValue) => {
+                  setValues((current) => ({
+                    ...current,
+                    [key]: nextValue ?? "",
+                  }));
+                }}
+              />
+            </SettingsFieldRow>
+          );
+        }
 
         return isPasswordSetting(key, label, definition) ? (
           <SettingsFieldRow key={key} label={label}>

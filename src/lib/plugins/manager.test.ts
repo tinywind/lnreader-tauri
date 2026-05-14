@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../http", () => ({
   appFetchText: vi.fn(),
   createPluginFetch: vi.fn(() => vi.fn()),
+  createPluginFetchFile: vi.fn(() => vi.fn()),
   createPluginFetchShim: vi.fn(() => vi.fn()),
   createPluginFetchText: vi.fn(() => vi.fn()),
   pluginFetch: vi.fn(),

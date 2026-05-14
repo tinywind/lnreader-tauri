@@ -145,12 +145,59 @@ describe("createShimResolver", () => {
   it("@libs/fetch surfaces the host fetch wrappers", () => {
     const lib = resolve("@libs/fetch") as {
       fetchApi: unknown;
+      fetchFile: unknown;
       fetchText: unknown;
       fetchProto: unknown;
     };
     expect(typeof lib.fetchApi).toBe("function");
+    expect(typeof lib.fetchFile).toBe("function");
     expect(typeof lib.fetchText).toBe("function");
     expect(typeof lib.fetchProto).toBe("function");
+  });
+
+  it("@libs/fetch fetchFile uses the native media fallback after browser fetch failures", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "webview_fetch") {
+        throw new Error("scraper: eval browser fetch script timed out");
+      }
+      if (command === "scraper_media_fetch") {
+        return {
+          status: 200,
+          statusText: "OK",
+          bodyBase64: "AQID",
+          headers: {},
+          finalUrl: "https://files.test/chapter.pdf",
+        };
+      }
+      throw new Error(`Unexpected command ${command}`);
+    });
+    const lib = resolve("@libs/fetch") as {
+      fetchFile: (url: string) => Promise<string>;
+    };
+
+    try {
+      await expect(
+        lib.fetchFile("https://files.test/chapter.pdf"),
+      ).resolves.toBe("AQID");
+
+      expect(invokeMock).toHaveBeenCalledWith(
+        "webview_fetch",
+        expect.objectContaining({
+          url: "https://files.test/chapter.pdf",
+        }),
+      );
+      expect(invokeMock).toHaveBeenCalledWith(
+        "scraper_media_fetch",
+        expect.objectContaining({
+          url: "https://files.test/chapter.pdf",
+        }),
+      );
+    } finally {
+      errorSpy.mockRestore();
+      debugSpy.mockRestore();
+    }
   });
 
   it("@libs/webView uses the configured source request timeout by default", async () => {
