@@ -1275,7 +1275,6 @@ async function collectStoredManifestMediaSources({
   const existing = new Map<string, string>();
   for (const file of manifest.media.files) {
     if (
-      file.status !== "stored" ||
       !requestedUrls.has(file.sourceUrl) ||
       !isFetchableMediaUrl(file.sourceUrl)
     ) {
@@ -1319,7 +1318,6 @@ async function collectMissingManifestMediaSources({
     const manifestFile = filesByName.get(fileName);
     if (
       !manifestFile ||
-      manifestFile.status !== "stored" ||
       !isFetchableMediaUrl(manifestFile.sourceUrl)
     ) {
       continue;
