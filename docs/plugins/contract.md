@@ -54,6 +54,9 @@ export interface Plugin extends PluginItem {
   ) => Promise<SourceNovel>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
   parseChapter: (chapterPath: string) => Promise<string>;
+  parseChapterResource?: (
+    chapterPath: string,
+  ) => Promise<ChapterBinaryResource>;
   searchNovels: (searchTerm: string, pageNo: number) => Promise<NovelItem[]>;
   resolveUrl?: (path: string, isNovel?: boolean) => string;
   webStorageUtilized?: boolean;
@@ -80,10 +83,25 @@ export interface NovelItem {
   cover?: string;
 }
 
+export type ChapterContentType = "html" | "text" | "pdf" | "epub";
+
+export type ChapterBinaryMediaType = "application/pdf" | "application/epub+zip";
+
+export interface ChapterBinaryResource {
+  type: "binary";
+  contentType: "pdf" | "epub";
+  mediaType: ChapterBinaryMediaType;
+  filename?: string;
+  byteLength: number;
+  bytes: ArrayBuffer | Uint8Array;
+  sha256?: string;
+  fallbackHtml?: string;
+}
+
 export interface ChapterItem {
   name: string;
   path: string;
-  contentType?: "html" | "text" | "pdf";
+  contentType?: ChapterContentType;
   chapterNumber: number;
   releaseTime?: string;
   page?: string;
@@ -130,11 +148,23 @@ fetch a partial list may return the same full result as `parseNovel()`.
 
 `contentType` is stored per chapter and defaults to `"html"` for older plugins.
 Use `"html"` when `parseChapter` returns a reader-ready HTML fragment, `"text"`
-when it returns plain text that the host must escape and wrap, and `"pdf"` when
-the chapter represents a PDF resource. For HTML chapters, the host resolves
-`<img src>` values against `resolveUrl(chapter.path, false)` or the chapter path
-and stores downloaded media in the local chapter cache before saving the
-rewritten HTML.
+when it returns plain text that the host must escape and wrap, and `"pdf"` or
+`"epub"` when the chapter represents a first-class binary document.
+`parseChapter()` remains required for every chapter and must return a readable
+HTML fallback for PDF/EPUB chapters. Plugins that can provide the real binary
+document should additionally implement `parseChapterResource()` and return a
+`ChapterBinaryResource` with `bytes` as an `ArrayBuffer` or `Uint8Array`.
+For HTML chapters, the host resolves `<img src>` values against
+`resolveUrl(chapter.path, false)` or the chapter path and stores downloaded media
+in the local chapter cache before saving the rewritten HTML.
+
+Binary chapter resources must contain bytes and metadata only. Do not return
+base64 strings, token-bearing URLs, authorization headers, cookies, or request
+init objects from `parseChapterResource()`. Private raw/download URLs must not
+appear in `NovelItem.path`, `ChapterItem.path`, `parseChapter()` output, or
+`parseChapterResource()` output. If the source requires credentials, the plugin
+must fetch the resource itself through host-supported fetch helpers and return
+only the resulting `ArrayBuffer` or `Uint8Array`.
 
 ## Filters
 
@@ -437,8 +467,11 @@ The host does not tolerate missing `parseNovelSince()` or invalid
    returns the same full chapter list as `parseNovel()`.
 6. Call `parseChapter(chapter.path)` and expect content that matches the
    chapter's `contentType`: reader-ready HTML for `"html"`, plain text for
-   `"text"`, or a PDF payload/resource string for `"pdf"`.
-7. For protected sites, open the site browser overlay first, then repeat the
+   `"text"`, or readable fallback HTML for `"pdf"` and `"epub"`.
+7. If `contentType` is `"pdf"` or `"epub"` and the plugin implements
+   `parseChapterResource()`, call it and expect `{ type: "binary", bytes,
+   byteLength, mediaType }` without URLs, headers, or request init values.
+8. For protected sites, open the site browser overlay first, then repeat the
    fetch path.
 
 ## References
