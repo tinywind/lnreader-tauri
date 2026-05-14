@@ -48,6 +48,10 @@ export interface Plugin extends PluginItem {
     options?: { showLatestNovels?: boolean; filters?: FilterToValues<Filters> },
   ) => Promise<NovelItem[]>;
   parseNovel: (novelPath: string) => Promise<SourceNovel>;
+  parseNovelSince: (
+    novelPath: string,
+    sinceChapterNumber: number,
+  ) => Promise<SourceNovel>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
   parseChapter: (chapterPath: string) => Promise<string>;
   searchNovels: (searchTerm: string, pageNo: number) => Promise<NovelItem[]>;
@@ -80,7 +84,7 @@ export interface ChapterItem {
   name: string;
   path: string;
   contentType?: "html" | "text" | "pdf";
-  chapterNumber?: number;
+  chapterNumber: number;
   releaseTime?: string;
   page?: string;
 }
@@ -111,13 +115,26 @@ export interface SourcePage {
 ```
 
 The host assigns local database ids. Plugin `path` values are opaque and must be
-passed back to the same plugin. `contentType` is stored per chapter and defaults
-to `"html"` for older plugins. Use `"html"` when `parseChapter` returns a
-reader-ready HTML fragment, `"text"` when it returns plain text that the host
-must escape and wrap, and `"pdf"` when the chapter represents a PDF resource.
-For HTML chapters, the host resolves `<img src>` values against
-`resolveUrl(chapter.path, false)` or the chapter path and stores downloaded
-media in the local chapter cache before saving the rewritten HTML.
+passed back to the same plugin. `chapterNumber` is a required, stable,
+source-owned numeric order key. It must be unique within one novel and every
+chapter list must be returned in reading order by ascending `chapterNumber`.
+When a source does not expose a number, the plugin must assign a deterministic
+one-based reading-order number. The host rejects missing, non-finite, or
+duplicate `chapterNumber` values from source plugins.
+
+`parseNovel()` returns full metadata and a full chapter list. `parseNovelSince()`
+returns the same metadata fields and may limit `chapters` to
+`sinceChapterNumber` and newer chapters. The limit is inclusive: if the source
+still has that chapter, the returned list must contain it. Plugins that cannot
+fetch a partial list may return the same full result as `parseNovel()`.
+
+`contentType` is stored per chapter and defaults to `"html"` for older plugins.
+Use `"html"` when `parseChapter` returns a reader-ready HTML fragment, `"text"`
+when it returns plain text that the host must escape and wrap, and `"pdf"` when
+the chapter represents a PDF resource. For HTML chapters, the host resolves
+`<img src>` values against `resolveUrl(chapter.path, false)` or the chapter path
+and stores downloaded media in the local chapter cache before saving the
+rewritten HTML.
 
 ## Filters
 
@@ -203,7 +220,7 @@ Plugins may only import modules exposed by `createShimResolver`:
 | `@libs/csv` | `{ parseCsv }` |
 | `@libs/storage` | `{ storage, localStorage, sessionStorage }` |
 | `@libs/pluginInputs` | `{ inputs, pluginInputs }` |
-| `@libs/webView` | `{ webViewFetch }` |
+| `@libs/webView` | `{ webViewFetch, webViewLoad, webViewNavigate }` |
 
 Unsupported imports throw during plugin evaluation or method execution. Raw
 `window` and `document` access is not guaranteed.
@@ -302,9 +319,46 @@ If a protected site needs a browser challenge or login, the user opens that site
 in the in-app site browser overlay. The scraper WebView keeps the resulting
 session cookies for later plugin fetches.
 
-`@libs/webView.webViewFetch` is reserved for pages that must be rendered by a
-real WebView before content can be extracted. On desktop it invokes
-`webview_extract`; on Android it uses the Android scraper bridge.
+`@libs/webView` is reserved for pages that must be rendered by a real WebView
+before content can be extracted. On desktop these helpers invoke
+`webview_extract`; on Android they use the Android scraper bridge. They run on
+the scraper WebView assigned to the current source task, not the foreground
+site browser navigation command.
+
+```ts
+type WebViewFetchOptions = {
+  beforeContentScript?: string;
+  userAgent?: string;
+  timeoutMs?: number;
+};
+
+type WebViewLoadResult = {
+  html: string;
+  text: string;
+  url: string;
+  title: string;
+};
+
+type WebViewNavigateResult = {
+  url: string;
+  title?: string;
+};
+
+webViewFetch(url, options): Promise<string>;
+webViewLoad(url, options): Promise<WebViewLoadResult>;
+webViewNavigate(url, options): Promise<WebViewNavigateResult>;
+```
+
+`webViewFetch()` is the low-level extractor. The plugin script must call
+`window.ReactNativeWebView.postMessage(payload)` to resolve it. Use
+`webViewLoad()` when the host should wait for the document to be ready and
+return the current HTML, visible text, final URL, and title. Use
+`webViewNavigate()` when the plugin only needs to move the task-owned scraper
+WebView and observe the final URL/title. For `webViewLoad()` and
+`webViewNavigate()`, `beforeContentScript` must not call
+`ReactNativeWebView.postMessage`; the host owns the result message. None of
+these helpers claims to bypass manual browser challenges; protected sites still
+need the user to prepare the session through the site browser overlay.
 
 ## Storage
 
@@ -369,16 +423,22 @@ The host should tolerate plugins that:
 - Return long summaries.
 - Throw from one source operation without breaking unrelated installed plugins.
 
+The host does not tolerate missing `parseNovelSince()` or invalid
+`chapterNumber` values. Those are breaking contract errors.
+
 ## Smoke Test Recipe
 
 1. Add a repository URL that returns `PluginItem[]`.
 2. Install one simple plugin.
 3. Call `popularNovels(1)` and expect at least one `NovelItem`.
 4. Call `parseNovel(item.path)` and expect at least one chapter.
-5. Call `parseChapter(chapter.path)` and expect content that matches the
+5. Call `parseNovelSince(item.path, chapter.chapterNumber)` and expect the
+   returned chapter list to include `chapter.chapterNumber` unless the plugin
+   returns the same full chapter list as `parseNovel()`.
+6. Call `parseChapter(chapter.path)` and expect content that matches the
    chapter's `contentType`: reader-ready HTML for `"html"`, plain text for
    `"text"`, or a PDF payload/resource string for `"pdf"`.
-6. For protected sites, open the site browser overlay first, then repeat the
+7. For protected sites, open the site browser overlay first, then repeat the
    fetch path.
 
 ## References

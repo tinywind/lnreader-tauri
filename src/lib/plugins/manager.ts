@@ -31,6 +31,7 @@ const REQUIRED_PLUGIN_METADATA_FIELDS = [
 const REQUIRED_PLUGIN_METHOD_FIELDS = [
   "popularNovels",
   "parseNovel",
+  "parseNovelSince",
   "parseChapter",
   "searchNovels",
   "getBaseUrl",

@@ -33,7 +33,8 @@ export interface ChapterItem {
   path: string;
   /** Defaults to HTML for legacy plugins. */
   contentType?: ChapterContentType;
-  chapterNumber?: number;
+  /** Stable source-owned chapter order key, unique within one novel. */
+  chapterNumber: number;
   /** ISO-8601 preferred; UI does best-effort parse. */
   releaseTime?: string;
   /** Pagination cursor for `parsePage()`. */
@@ -95,6 +96,10 @@ export interface Plugin extends PluginItem {
     options?: PluginPopularOptions,
   ) => Promise<NovelItem[]>;
   parseNovel: (novelPath: string) => Promise<SourceNovel>;
+  parseNovelSince: (
+    novelPath: string,
+    sinceChapterNumber: number,
+  ) => Promise<SourceNovel>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
   /** Return content matching the chapter row's `contentType`. */
   parseChapter: (chapterPath: string) => Promise<string>;

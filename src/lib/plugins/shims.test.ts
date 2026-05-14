@@ -133,6 +133,7 @@ describe("createShimResolver", () => {
     expect(typeof resolve("@libs/csv")).toBe("object");
     expect(typeof resolve("@libs/storage")).toBe("object");
     expect(typeof resolve("@libs/pluginInputs")).toBe("object");
+    expect(typeof resolve("@libs/webView")).toBe("object");
   });
 
   it("throws for any module outside the whitelist", () => {
@@ -169,6 +170,78 @@ describe("createShimResolver", () => {
       timeoutMs: 45_000,
       userAgent: globalThis.navigator?.userAgent ?? null,
       queue: "immediate",
+    });
+  });
+
+  it("@libs/webView exposes a high-level page load helper", async () => {
+    invokeMock.mockResolvedValueOnce(
+      JSON.stringify({
+        ok: true,
+        result: {
+          html: "<html><body>Loaded</body></html>",
+          text: "Loaded",
+          title: "Loaded title",
+          url: "https://source.test/page",
+        },
+      }),
+    );
+    const lib = resolve("@libs/webView") as {
+      webViewLoad: (url: string) => Promise<{
+        html: string;
+        text: string;
+        title: string;
+        url: string;
+      }>;
+    };
+
+    await expect(lib.webViewLoad("https://source.test/page")).resolves.toEqual({
+      html: "<html><body>Loaded</body></html>",
+      text: "Loaded",
+      title: "Loaded title",
+      url: "https://source.test/page",
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("webview_extract", {
+      url: "https://source.test/page",
+      beforeScript: expect.stringContaining("document.documentElement.outerHTML"),
+      timeoutMs: 30_000,
+      userAgent: globalThis.navigator?.userAgent ?? null,
+      queue: "immediate",
+    });
+  });
+
+  it("@libs/webView exposes executor-bound navigation", async () => {
+    invokeMock.mockResolvedValueOnce(
+      JSON.stringify({
+        ok: true,
+        result: {
+          title: "Target",
+          url: "https://source.test/target",
+        },
+      }),
+    );
+    const resolveForPool = createShimResolver(
+      "test-plugin",
+      undefined,
+      "pool:2",
+    );
+    const lib = resolveForPool("@libs/webView") as {
+      webViewNavigate: (url: string) => Promise<{ title?: string; url: string }>;
+    };
+
+    await expect(
+      lib.webViewNavigate("https://source.test/target"),
+    ).resolves.toEqual({
+      title: "Target",
+      url: "https://source.test/target",
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("webview_extract", {
+      url: "https://source.test/target",
+      beforeScript: expect.stringContaining("if (false)"),
+      timeoutMs: 30_000,
+      userAgent: globalThis.navigator?.userAgent ?? null,
+      queue: "pool:2",
     });
   });
 

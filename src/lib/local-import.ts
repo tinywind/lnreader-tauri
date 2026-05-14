@@ -424,6 +424,7 @@ function singleChapterConversion(
   const chapter: LocalImportConvertedChapter = {
     name: analysis.title,
     path: chapterPath(analysis.pathKey, 0),
+    chapterNumber: 1,
     contentType,
     content,
     contentBytes: utf8ByteLength(content),
@@ -438,6 +439,7 @@ function singleChapterConversion(
         {
           name: chapter.name,
           path: chapter.path,
+          chapterNumber: chapter.chapterNumber,
           contentType,
         },
       ],
@@ -709,9 +711,10 @@ async function convertEpub(
   }
 
   const chapters: LocalImportConvertedChapter[] = chapterSources.map(
-    (chapter) => ({
+    (chapter, index) => ({
       name: chapter.name,
       path: chapter.path,
+      chapterNumber: index + 1,
       contentType: "html",
       content: chapter.html,
       contentBytes: utf8ByteLength(chapter.html),
@@ -730,6 +733,7 @@ async function convertEpub(
       chapters: chapters.map((chapter) => ({
         name: chapter.name,
         path: chapter.path,
+        chapterNumber: chapter.chapterNumber,
         contentType: chapter.contentType,
       })),
     },

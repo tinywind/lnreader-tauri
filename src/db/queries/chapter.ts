@@ -143,6 +143,11 @@ export interface InsertChapterInput {
   contentType?: ChapterContentType;
 }
 
+export interface LatestSourceChapterAnchor {
+  novelId: number;
+  chapterNumber: number;
+  position: number;
+}
 export interface ChapterMutationResult {
   rowsAffected: number;
 }
@@ -172,6 +177,36 @@ export async function insertChapterIfAbsent(
   );
 }
 
+export async function getLatestSourceChapterAnchor(
+  novelId: number,
+): Promise<LatestSourceChapterAnchor | null> {
+  const db = await getDb();
+  const rows = await db.select<
+    { chapterNumber: string | null; position: number }[]
+  >(
+    `SELECT chapter_number AS chapterNumber, position
+     FROM chapter
+     WHERE novel_id = $1`,
+    [novelId],
+  );
+  if (rows.length === 0) return null;
+
+  let latest: LatestSourceChapterAnchor | null = null;
+  for (const row of rows) {
+    if (row.chapterNumber === null) return null;
+    const chapterNumber = Number(row.chapterNumber);
+    if (!Number.isFinite(chapterNumber)) return null;
+    if (!latest || chapterNumber > latest.chapterNumber) {
+      latest = {
+        novelId,
+        chapterNumber,
+        position: row.position,
+      };
+    }
+  }
+
+  return latest;
+}
 export async function upsertChapter(
   input: InsertChapterInput,
 ): Promise<ChapterMutationResult> {

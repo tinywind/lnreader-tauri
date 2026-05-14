@@ -24,6 +24,8 @@ function makePlugin(
     popularNovels: () => Promise.resolve([]),
     parseNovel: () =>
       Promise.resolve({ name: "", path: "", chapters: [] }),
+    parseNovelSince: () =>
+      Promise.resolve({ name: "", path: "", chapters: [] }),
     parseChapter: () => Promise.resolve(""),
     searchNovels: searchImpl,
   };

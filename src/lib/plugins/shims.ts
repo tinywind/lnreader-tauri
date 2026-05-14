@@ -38,6 +38,120 @@ interface WebViewFetchOptions {
   sourceId?: string;
 }
 
+interface WebViewLoadResult {
+  html: string;
+  text: string;
+  url: string;
+  title: string;
+}
+
+interface WebViewNavigateResult {
+  url: string;
+  title?: string;
+}
+
+type WebViewEnvelope = {
+  ok?: boolean;
+  error?: string;
+  result?: unknown;
+};
+
+function webViewSnapshotScript(
+  includeContent: boolean,
+  beforeContentScript?: string,
+): string {
+  const beforeScript = JSON.stringify(beforeContentScript ?? "");
+  return `(function () {
+  var beforeContentScript = ${beforeScript};
+  function post(payload) {
+    window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+  }
+  function errorMessage(error) {
+    return (error && (error.message || error.toString())) || String(error);
+  }
+  function runBeforeContentScript() {
+    if (!beforeContentScript) return;
+    (0, eval)(beforeContentScript);
+  }
+  function readPage() {
+    var payload = {
+      url: location.href,
+      title: document.title || ""
+    };
+    if (${includeContent ? "true" : "false"}) {
+      payload.html = document.documentElement ? document.documentElement.outerHTML : "";
+      payload.text = document.body ? document.body.innerText || "" : "";
+    }
+    post({ ok: true, result: payload });
+  }
+  function readWhenReady() {
+    setTimeout(function () {
+      try {
+        readPage();
+      } catch (error) {
+        post({ ok: false, error: "webView snapshot error: " + errorMessage(error) });
+      }
+    }, 0);
+  }
+  try {
+    runBeforeContentScript();
+  } catch (error) {
+    post({ ok: false, error: "before-script error: " + errorMessage(error) });
+    return;
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", readWhenReady, { once: true });
+  } else {
+    readWhenReady();
+  }
+})(); true;`;
+}
+
+function parseWebViewEnvelope(raw: string, operation: string): unknown {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `${operation} returned invalid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const parsed = asRecord(value) as WebViewEnvelope;
+  if (parsed.ok === false) {
+    throw new Error(parsed.error ?? `${operation} failed`);
+  }
+  if (parsed.ok !== true) {
+    throw new Error(`${operation} returned an invalid result envelope`);
+  }
+  return parsed.result;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object") {
+    throw new Error("webView result was not an object");
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseWebViewLoadResult(raw: string): WebViewLoadResult {
+  const value = asRecord(parseWebViewEnvelope(raw, "webViewLoad"));
+  return {
+    html: typeof value.html === "string" ? value.html : "",
+    text: typeof value.text === "string" ? value.text : "",
+    url: typeof value.url === "string" ? value.url : "",
+    title: typeof value.title === "string" ? value.title : "",
+  };
+}
+
+function parseWebViewNavigateResult(raw: string): WebViewNavigateResult {
+  const value = asRecord(parseWebViewEnvelope(raw, "webViewNavigate"));
+  const url = typeof value.url === "string" ? value.url : "";
+  const title = typeof value.title === "string" ? value.title : undefined;
+  return title ? { url, title } : { url };
+}
+
 /**
  * Mirror of upstream `@libs/webView.webViewFetch`. Navigates the
  * scraper WebView to `url`, runs `beforeContentScript` before any
@@ -75,12 +189,64 @@ async function webViewFetch(
   });
 }
 
+async function webViewLoad(
+  url: string,
+  options: WebViewFetchOptions = {},
+): Promise<WebViewLoadResult> {
+  const raw = await webViewFetch(url, {
+    ...options,
+    beforeContentScript: webViewSnapshotScript(
+      true,
+      options.beforeContentScript,
+    ),
+  });
+  return parseWebViewLoadResult(raw);
+}
+
+async function webViewNavigate(
+  url: string,
+  options: WebViewFetchOptions = {},
+): Promise<WebViewNavigateResult> {
+  const raw = await webViewFetch(url, {
+    ...options,
+    beforeContentScript: webViewSnapshotScript(
+      false,
+      options.beforeContentScript,
+    ),
+  });
+  return parseWebViewNavigateResult(raw);
+}
+
 function createWebViewFetch(
   sourceId: string,
   scraperExecutor: ScraperExecutorId,
 ): typeof webViewFetch {
   return (url: string, options: WebViewFetchOptions = {}) =>
     webViewFetch(url, {
+      ...options,
+      scraperExecutor: options.scraperExecutor ?? scraperExecutor,
+      sourceId: options.sourceId ?? sourceId,
+    });
+}
+
+function createWebViewLoad(
+  sourceId: string,
+  scraperExecutor: ScraperExecutorId,
+): typeof webViewLoad {
+  return (url: string, options: WebViewFetchOptions = {}) =>
+    webViewLoad(url, {
+      ...options,
+      scraperExecutor: options.scraperExecutor ?? scraperExecutor,
+      sourceId: options.sourceId ?? sourceId,
+    });
+}
+
+function createWebViewNavigate(
+  sourceId: string,
+  scraperExecutor: ScraperExecutorId,
+): typeof webViewNavigate {
+  return (url: string, options: WebViewFetchOptions = {}) =>
+    webViewNavigate(url, {
       ...options,
       scraperExecutor: options.scraperExecutor ?? scraperExecutor,
       sourceId: options.sourceId ?? sourceId,
@@ -389,7 +555,11 @@ export function createShimResolver(
           pluginInputs,
         };
       case "@libs/webView":
-        return { webViewFetch: createWebViewFetch(pluginId, scraperExecutor) };
+        return {
+          webViewFetch: createWebViewFetch(pluginId, scraperExecutor),
+          webViewLoad: createWebViewLoad(pluginId, scraperExecutor),
+          webViewNavigate: createWebViewNavigate(pluginId, scraperExecutor),
+        };
       default:
         throw new Error(
           `Module '${id}' is not whitelisted in the plugin sandbox.`,

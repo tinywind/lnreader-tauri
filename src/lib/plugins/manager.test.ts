@@ -46,6 +46,7 @@ const VALID_PLUGIN_SOURCE = `
     iconUrl: "https://example.test/icon.png",
     popularNovels: () => Promise.resolve([]),
     parseNovel: () => Promise.resolve({ name: "", path: "", chapters: [] }),
+    parseNovelSince: () => Promise.resolve({ name: "", path: "", chapters: [] }),
     parseChapter: () => Promise.resolve(""),
     searchNovels: () => Promise.resolve([]),
     getBaseUrl: () => "https://example.test",
@@ -168,13 +169,16 @@ describe("PluginManager.installPluginFromSource", () => {
 
   it("rejects local sources that omit required contract functions", async () => {
     const manager = new PluginManager();
-    const missingSearch = VALID_PLUGIN_SOURCE.replace(
-      "    searchNovels: () => Promise.resolve([]),\n",
+    const missingIncrementalParser = VALID_PLUGIN_SOURCE.replace(
+      "    parseNovelSince: () => Promise.resolve({ name: \"\", path: \"\", chapters: [] }),\n",
       "",
     );
 
     await expect(
-      manager.installPluginFromSource(missingSearch, "local:broken.js"),
+      manager.installPluginFromSource(
+        missingIncrementalParser,
+        "local:broken.js",
+      ),
     ).rejects.toBeInstanceOf(PluginValidationError);
     expect(manager.has("demo")).toBe(false);
   });

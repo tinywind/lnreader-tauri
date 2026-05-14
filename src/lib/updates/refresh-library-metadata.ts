@@ -112,7 +112,12 @@ async function runLibraryMetadataRefresh(
               name: novel.name,
               path: novel.path,
             },
-            { notifyUpdatesIndex: false, preserveMissingMetadata: true },
+            {
+              chapterRefreshMode: "since",
+              novelId: novel.id,
+              notifyUpdatesIndex: false,
+              preserveMissingMetadata: true,
+            },
           ),
       });
       sourceTasks.push(
