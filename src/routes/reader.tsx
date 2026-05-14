@@ -28,10 +28,12 @@ import {
   hasRemoteChapterMedia,
   resolveLocalChapterMedia,
   resolveLocalChapterMediaPatches,
+  type ChapterMediaStorageContext,
   type ChapterMediaElementPatch,
 } from "../lib/chapter-media";
-import { renderChapterContentAsHtml } from "../lib/chapter-content";
+import { isHtmlLikeChapterContentType } from "../lib/chapter-content";
 import { pluginManager } from "../lib/plugins/manager";
+import { LOCAL_PLUGIN_ID } from "../lib/plugins/types";
 import {
   enqueueChapterDownload,
   enqueueChapterMediaRepair,
@@ -53,6 +55,7 @@ import "../styles/reader.css";
 const FINISHED_PROGRESS = 100;
 const FULL_PAGE_CHROME_HIDE_DELAY_MS = 5000;
 const READER_SEEKBAR_HIDE_DELAY_MS = 1000;
+const READER_FULL_MEDIA_PATCH_MAX_HTML_LENGTH = 350_000;
 
 type ReaderDocumentState = {
   chapterId: number;
@@ -64,6 +67,9 @@ const READER_RENDERABLE_MEDIA_SELECTOR =
   "img,video,audio,source,embed,track,object,iframe,link[rel~='preload']";
 
 function hasRenderableReaderHtml(html: string): boolean {
+  if (html.length > READER_FULL_MEDIA_PATCH_MAX_HTML_LENGTH) {
+    return html.trim().length > 0;
+  }
   if (typeof document === "undefined") return html.trim().length > 0;
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -304,7 +310,14 @@ function ReaderSettingsOverlay({
     <div
       className="lnr-reader-settings-overlay"
       onPointerDown={(event) => event.stopPropagation()}
+      onPointerUp={(event) => event.stopPropagation()}
       onPointerMove={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (event.target !== event.currentTarget) return;
+        event.preventDefault();
+        onClose();
+      }}
       onWheel={(event) => event.stopPropagation()}
     >
       <section
@@ -503,6 +516,9 @@ export function ReaderPage() {
     queryFn: async () => {
       const chapter = await getChapterById(chapterId);
       if (!chapter?.content) return chapter;
+      if (chapter.content.length > READER_FULL_MEDIA_PATCH_MAX_HTML_LENGTH) {
+        return chapter;
+      }
       const novel = await getNovelById(chapter.novelId);
       return {
         ...chapter,
@@ -520,8 +536,9 @@ export function ReaderPage() {
     },
     enabled: chapterId > 0,
   });
-  const chapter = chapterQuery.data;
-  const currentNovelId = chapterQuery.data?.novelId ?? 0;
+  const rawChapter = chapterQuery.data;
+  const chapter = rawChapter?.id === chapterId ? rawChapter : undefined;
+  const currentNovelId = chapter?.novelId ?? 0;
   const currentNovelQuery = useQuery({
     queryKey: ["novel", "detail", currentNovelId],
     queryFn: () => getNovelById(currentNovelId),
@@ -538,7 +555,7 @@ export function ReaderPage() {
   );
 
   useEffect(() => {
-    if (!chapter || chapter.contentType !== "html") return;
+    if (!chapter || !isHtmlLikeChapterContentType(chapter.contentType)) return;
     const unsubscribe = subscribeChapterPartialContentUpdates((event) => {
       if (event.chapterId !== chapter.id) return;
       logReaderMediaPipeline("partial-html", {
@@ -560,7 +577,7 @@ export function ReaderPage() {
   }, [chapter?.contentType, chapter?.id]);
 
   useEffect(() => {
-    if (!chapter || chapter.contentType !== "html") return;
+    if (!chapter || !isHtmlLikeChapterContentType(chapter.contentType)) return;
     let cancelled = false;
     const unsubscribe = subscribeChapterMediaPatches((event) => {
       if (event.chapterId !== chapter.id) return;
@@ -1135,10 +1152,7 @@ export function ReaderPage() {
     chapterIndex >= 0 && chapterIndex < chapters.length - 1
       ? chapters[chapterIndex + 1]
       : undefined;
-  const chapterContentHtml =
-    chapter?.content
-      ? renderChapterContentAsHtml(chapter.content, chapter.contentType)
-      : null;
+  const chapterContentHtml = chapter?.content ?? null;
 
   useEffect(() => {
     if (!chapter || !chapterContentHtml) {
@@ -1148,13 +1162,11 @@ export function ReaderPage() {
       return;
     }
     setReaderDocument((current) => {
-      if (
-        chapter.contentType === "html" &&
-        !hasRenderableReaderHtml(chapterContentHtml)
-      ) {
+      const htmlLikeContent = isHtmlLikeChapterContentType(chapter.contentType);
+      if (htmlLikeContent && !hasRenderableReaderHtml(chapterContentHtml)) {
         return current?.chapterId === chapter.id ? current : null;
       }
-      if (chapter.contentType === "html" && current?.chapterId === chapter.id) {
+      if (htmlLikeContent && current?.chapterId === chapter.id) {
         return current;
       }
       if (!current || current.chapterId !== chapter.id) {
@@ -1164,7 +1176,7 @@ export function ReaderPage() {
           html: chapterContentHtml,
         };
       }
-      if (chapter.contentType === "html" && !chapter.isDownloaded) {
+      if (htmlLikeContent && !chapter.isDownloaded) {
         return current;
       }
       if (
@@ -1190,11 +1202,20 @@ export function ReaderPage() {
   useEffect(() => {
     if (
       !chapter ||
-      chapter.contentType !== "html" ||
+      !isHtmlLikeChapterContentType(chapter.contentType) ||
       !chapterContentHtml ||
       !readerDocument ||
       readerDocument.chapterId !== chapter.id
     ) {
+      return;
+    }
+    if (chapterContentHtml.length > READER_FULL_MEDIA_PATCH_MAX_HTML_LENGTH) {
+      logReaderMediaPipeline("query-html-patch-skipped", {
+        chapterId: chapter.id,
+        htmlLength: chapterContentHtml.length,
+        maxHtmlLength: READER_FULL_MEDIA_PATCH_MAX_HTML_LENGTH,
+        reason: "large-html",
+      });
       return;
     }
     const rawPatches = collectChapterMediaElementPatches(chapterContentHtml);
@@ -1262,6 +1283,36 @@ export function ReaderPage() {
   const activeContentType =
     chapter?.contentType ?? activeReaderDocument?.contentType;
   const activeChapterId = chapter?.id ?? activeReaderDocument?.chapterId;
+  const readerContentKey =
+    chapterId > 0 ? chapterId : (activeChapterId ?? "sample");
+  const readerLocalMediaContext = useMemo<
+    ChapterMediaStorageContext | undefined
+  >(
+    () =>
+      chapter
+        ? {
+            chapterId: chapter.id,
+            chapterName: chapter.name,
+            chapterNumber: chapter.chapterNumber,
+            chapterPosition: chapter.position,
+            novelId: currentNovel?.id ?? chapter.novelId,
+            novelName: currentNovel?.name,
+            novelPath: currentNovel?.path,
+            sourceId: currentNovel?.pluginId,
+          }
+        : undefined,
+    [
+      chapter?.chapterNumber,
+      chapter?.id,
+      chapter?.name,
+      chapter?.novelId,
+      chapter?.position,
+      currentNovel?.id,
+      currentNovel?.name,
+      currentNovel?.path,
+      currentNovel?.pluginId,
+    ],
+  );
   useEffect(() => {
     setRemoteMediaError(false);
   }, [activeChapterId]);
@@ -1269,10 +1320,14 @@ export function ReaderPage() {
     () =>
       Boolean(
         chapter?.isDownloaded &&
-          activeContentType === "html" &&
+          currentNovel?.pluginId !== LOCAL_PLUGIN_ID &&
+          activeContentType &&
+          isHtmlLikeChapterContentType(activeContentType) &&
           (chapter.mediaRepairNeeded ||
             remoteMediaError ||
             (activeReaderHtml &&
+              activeReaderHtml.length <=
+                READER_FULL_MEDIA_PATCH_MAX_HTML_LENGTH &&
               hasRemoteChapterMedia(activeReaderHtml, "https://norea.invalid/"))),
       ),
     [
@@ -1280,6 +1335,7 @@ export function ReaderPage() {
       activeReaderHtml,
       chapter?.isDownloaded,
       chapter?.mediaRepairNeeded,
+      currentNovel?.pluginId,
       remoteMediaError,
     ],
   );
@@ -1456,7 +1512,7 @@ export function ReaderPage() {
       </Box>
     ) : isPdfChapter ? (
       <PdfReaderContent
-        key={activeChapterId ?? "sample"}
+        key={readerContentKey}
         ref={contentRef}
         appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}
@@ -1475,13 +1531,15 @@ export function ReaderPage() {
       />
     ) : (
       <ReaderContent
-        key={activeChapterId ?? "sample"}
+        key={readerContentKey}
         ref={contentRef}
         appearanceSettings={effectiveReaderAppearance}
         bottomOverlayOffset={readerOverlayBottom}
+        contentKey={readerContentKey}
         generalSettings={readerContentGeneral}
         html={content}
         initialProgress={readerProgress}
+        localMediaContext={readerLocalMediaContext}
         onToggleChrome={
           readerChromeAutoHide ? handleToggleFullPageChrome : undefined
         }

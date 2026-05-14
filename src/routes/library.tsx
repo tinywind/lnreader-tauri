@@ -73,6 +73,8 @@ import {
   type LocalImportAnalysis,
   type LocalImportFormat,
 } from "../lib/local-import";
+import { cacheLocalImportedChapterMedia } from "../lib/local-import-media";
+import { syncLocalChapterStorageAfterOrderChange } from "../lib/local-chapter-storage";
 import { mirrorStoredNovelChapters } from "../lib/chapter-content-storage";
 import {
   enqueueChapterDownloadBatch,
@@ -96,7 +98,7 @@ import {
 import "../styles/library.css";
 
 const SEARCH_DEBOUNCE_MS = 200;
-const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
+const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.md,.markdown,.epub,.pdf";
 const EMPTY_LOCAL_NOVEL_FORM: LocalNovelMetadataInput = {
   name: "",
   cover: "",
@@ -1894,6 +1896,7 @@ function LibrarySortPicker({
 }: LibrarySortPickerProps) {
   const [opened, setOpened] = useState(false);
   const activeLabel = t(SORT_LABEL_KEYS[sortOrder]);
+  const sortDirection = sortOrder.endsWith("Asc") ? "asc" : "desc";
 
   return (
     <Popover
@@ -1907,6 +1910,7 @@ function LibrarySortPicker({
         <IconButton
           active={opened}
           className="lnr-library-icon-button lnr-library-sort-button"
+          data-sort-direction={sortDirection}
           label={t("librarySettings.sort")}
           onClick={() => setOpened((current) => !current)}
           size="sm"
@@ -2115,28 +2119,50 @@ async function importLocalFileToLibrary(
   file: File,
 ): Promise<LocalNovelImportResult> {
   const conversion = await convertLocalImportFile(file);
+  const chapters = conversion.chapters.map((chapter, index) => ({
+    chapterNumber:
+      chapter.chapterNumber == null ? null : String(chapter.chapterNumber),
+    content: chapter.content,
+    contentBytes: chapter.contentBytes,
+    contentType: chapter.contentType,
+    mediaResources: chapter.mediaResources,
+    name: chapter.name,
+    page: chapter.page,
+    path: chapter.path,
+    position: index + 1,
+    releaseTime: chapter.releaseTime ?? null,
+  }));
 
+  const previousNovel = await findLocalNovelByPath(conversion.novel.path);
+  const previousChapters = previousNovel
+    ? await listChaptersByNovel(previousNovel.id)
+    : [];
   const result = await upsertLocalNovel({
     artist: conversion.novel.artist ?? null,
     author: conversion.novel.author ?? null,
-    chapters: conversion.chapters.map((chapter, index) => ({
-      chapterNumber:
-        chapter.chapterNumber == null ? null : String(chapter.chapterNumber),
-      content: chapter.content,
-      contentBytes: chapter.contentBytes,
-      contentType: chapter.contentType,
-      name: chapter.name,
-      page: chapter.page,
-      path: chapter.path,
-      position: index + 1,
-      releaseTime: chapter.releaseTime ?? null,
-    })),
+    chapters,
     cover: conversion.novel.cover ?? null,
     genres: conversion.novel.genres ?? null,
     name: conversion.novel.name,
     path: conversion.novel.path,
     status: conversion.novel.status ?? null,
     summary: conversion.novel.summary ?? null,
+  });
+  const nextNovel = await getNovelById(result.novelId);
+  if (previousNovel && nextNovel?.isLocal) {
+    const nextChapters = await listChaptersByNovel(result.novelId);
+    await syncLocalChapterStorageAfterOrderChange({
+      nextChapters,
+      novel: nextNovel,
+      previousChapters,
+      previousNovel,
+    });
+  }
+  await cacheLocalImportedChapterMedia({
+    chapters,
+    novelId: result.novelId,
+    novelName: conversion.novel.name,
+    novelPath: conversion.novel.path,
   });
   await mirrorStoredNovelChapters(result.novelId);
   return result;

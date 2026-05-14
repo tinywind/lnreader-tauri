@@ -13,7 +13,8 @@ export type ReaderHtmlImagePagingMode =
 export type ReaderCustomCssPresetId =
   | "webtoon"
   | "comic-spread"
-  | "comic-page";
+  | "comic-page"
+  | "page-fit-media";
 export type ReaderTapPresetId =
   | "balanced"
   | "side-columns"
@@ -55,6 +56,36 @@ export interface ReaderThemeDefinition {
   backgroundColor: string;
   textColor: string;
 }
+
+const PAGE_FIT_MEDIA_CSS = `.reader-viewport-paged .reader-content {
+  --lnr-page-fit-media-height: var(--lnr-reader-page-media-max-height, 100dvh);
+}
+
+.reader-viewport-paged .reader-content :where(p, div, figure, a):has(> :where(img, picture, svg, video, canvas):only-child) {
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.reader-viewport-paged .reader-content :where(img, picture, svg, video, canvas) {
+  display: block !important;
+  max-width: 100% !important;
+  max-height: var(--lnr-page-fit-media-height) !important;
+  width: auto !important;
+  height: auto !important;
+  object-fit: contain !important;
+  margin-inline: auto !important;
+}
+
+.reader-viewport-paged .reader-content picture > img {
+  max-height: var(--lnr-page-fit-media-height) !important;
+  width: auto !important;
+  height: auto !important;
+}`;
+
+const LEGACY_PAGE_FIT_MEDIA_CSS = PAGE_FIT_MEDIA_CSS.replace(
+  "var(--lnr-reader-page-media-max-height, 100dvh)",
+  "calc(100dvh - 8rem)",
+);
 
 export interface ReaderGeneralSettings {
   fullPageReader: boolean;
@@ -329,6 +360,10 @@ export const READER_CUSTOM_CSS_PRESETS: ReaderCustomCssPreset[] = [
   max-width: 100% !important;
   height: auto !important;
 }`,
+  },
+  {
+    id: "page-fit-media",
+    css: PAGE_FIT_MEDIA_CSS,
   },
 ];
 
@@ -605,8 +640,13 @@ function normalizeTapZones(
 function normalizeAppearance(
   settings: Partial<ReaderAppearanceSettings>,
 ): Partial<ReaderAppearanceSettings> {
+  const customCss =
+    settings.customCss?.trim() === LEGACY_PAGE_FIT_MEDIA_CSS.trim()
+      ? PAGE_FIT_MEDIA_CSS
+      : settings.customCss;
   return {
     ...settings,
+    ...(customCss !== undefined ? { customCss } : {}),
     ...(settings.textSize !== undefined
       ? { textSize: Math.round(clamp(settings.textSize, 12, 36)) }
       : {}),

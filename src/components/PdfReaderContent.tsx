@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
   type Ref,
   type WheelEvent,
@@ -62,8 +63,7 @@ interface PdfRenderBounds {
 }
 
 const MAX_CANVAS_SCALE = 3;
-const MIN_CANVAS_WIDTH = 240;
-const MIN_CANVAS_HEIGHT = 240;
+const MIN_RENDER_BOUND_PX = 1;
 const PDF_PAGE_GAP_PX = 16;
 const SCROLL_PAGE_FRACTION = 0.9;
 const TWO_PAGE_MEDIA_QUERY = "(min-width: 992px)";
@@ -491,6 +491,17 @@ function PdfReaderContentInner(
       (_, index) => pageNumber + index,
     );
   }, [isPagedReader, pageCount, pageNumber, visiblePageCount]);
+  const showTrailingPageSlot =
+    isTwoPageReader && pageNumbers.length === 1 && renderBounds.width > 0;
+  const pageWrapStyle = useMemo<CSSProperties>(
+    () =>
+      isTwoPageReader && renderBounds.width > 0
+        ? ({
+            "--lnr-pdf-page-slot-width": `${renderBounds.width}px`,
+          } as CSSProperties)
+        : {},
+    [isTwoPageReader, renderBounds.width],
+  );
 
   useEffect(() => {
     const nextProgress = clampProgress(initialProgress);
@@ -876,11 +887,12 @@ function PdfReaderContentInner(
   }, [pageCount, visiblePageCount]);
 
   useEffect(() => {
-    const node = canvasWrapRef.current;
-    if (!node) return;
+    const wrapNode = canvasWrapRef.current;
+    const viewportNode = viewportRef.current;
+    if (!wrapNode || !viewportNode) return;
 
     const syncRenderBounds = () => {
-      const style = window.getComputedStyle(node);
+      const style = window.getComputedStyle(wrapNode);
       const horizontalPadding =
         (Number.parseFloat(style.paddingLeft) || 0) +
         (Number.parseFloat(style.paddingRight) || 0);
@@ -890,19 +902,19 @@ function PdfReaderContentInner(
       const gap = Number.parseFloat(style.columnGap) || PDF_PAGE_GAP_PX;
       const columns = isTwoPageReader ? 2 : 1;
       const availableWidth = Math.max(
-        MIN_CANVAS_WIDTH,
-        node.clientWidth - horizontalPadding,
+        MIN_RENDER_BOUND_PX,
+        wrapNode.clientWidth - horizontalPadding,
       );
       const nextHeight =
         pdfPageFitMode === "width"
           ? 0
           : Math.max(
-              MIN_CANVAS_HEIGHT,
-              Math.floor(node.clientHeight - verticalPadding),
+              MIN_RENDER_BOUND_PX,
+              Math.floor(viewportNode.clientHeight - verticalPadding),
             );
       const nextBounds: PdfRenderBounds = {
         width: Math.max(
-          MIN_CANVAS_WIDTH,
+          MIN_RENDER_BOUND_PX,
           Math.floor((availableWidth - gap * (columns - 1)) / columns),
         ),
         height: nextHeight,
@@ -926,9 +938,10 @@ function PdfReaderContentInner(
 
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(syncRenderBounds);
-    observer.observe(node);
+    observer.observe(wrapNode);
+    observer.observe(viewportNode);
     return () => observer.disconnect();
-  }, [isTwoPageReader, pdfPageFitMode]);
+  }, [isPagedReader, isTwoPageReader, pdfPageFitMode]);
 
   useEffect(() => {
     restorePendingRef.current = true;
@@ -1260,6 +1273,7 @@ function PdfReaderContentInner(
         className={`lnr-pdf-reader-viewport${
           isTwoPageReader ? " reader-viewport-two-page" : ""
         }`}
+        data-fit-mode={pdfPageFitMode}
         data-mode={isPagedReader ? "paged" : "scroll"}
         data-two-page={isTwoPageReader}
         onClickCapture={stopPdfReaderMediaClick}
@@ -1296,8 +1310,10 @@ function PdfReaderContentInner(
         <div
           ref={canvasWrapRef}
           className="lnr-pdf-reader-page-wrap"
+          data-fit-mode={pdfPageFitMode}
           data-mode={isPagedReader ? "paged" : "scroll"}
           data-two-page={isTwoPageReader}
+          style={pageWrapStyle}
         >
           {loading ? (
             <div className="lnr-pdf-reader-state">
@@ -1321,6 +1337,12 @@ function PdfReaderContentInner(
                 />
               ))
             : null}
+          {showTrailingPageSlot ? (
+            <div
+              aria-hidden="true"
+              className="lnr-pdf-reader-page-frame lnr-pdf-reader-page-frame--placeholder"
+            />
+          ) : null}
         </div>
       </div>
       <ReaderSeekbars

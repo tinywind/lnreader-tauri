@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,7 +14,11 @@ import {
   type WheelEvent,
 } from "react";
 import { Box } from "@mantine/core";
-import type { ChapterMediaElementPatch } from "../lib/chapter-media";
+import {
+  resolveLocalChapterMediaPatches,
+  type ChapterMediaElementPatch,
+  type ChapterMediaStorageContext,
+} from "../lib/chapter-media";
 import { formatTimeForLocale, useTranslation, type AppLocale } from "../i18n";
 import {
   useReaderStore,
@@ -34,10 +39,12 @@ export interface ReaderContentHandle {
 interface ReaderContentProps {
   appearanceSettings?: ReaderAppearanceSettings;
   bottomOverlayOffset?: number | string;
+  contentKey?: number | string;
   generalSettings?: ReaderGeneralSettings;
   html: string;
   initialProgress?: number;
   interactionBlocked?: boolean;
+  localMediaContext?: ChapterMediaStorageContext;
   onProgressChange?: (progress: number) => void;
   onPageIndexChange?: (pageIndex: number) => void;
   onMediaError?: (source: string | null) => void;
@@ -60,10 +67,34 @@ interface PageInfo {
   total: number;
 }
 
-const SCROLL_MAX_WIDTH = 760;
+interface ReaderVirtualSegment {
+  estimatedHeight: number;
+  html: string;
+  index: number;
+}
+
+interface ReaderVirtualDocument {
+  contentClassName: string;
+  contentDirection?: "ltr" | "rtl" | "auto";
+  contentLanguage?: string;
+  segments: ReaderVirtualSegment[];
+  staticHtml: string;
+}
+
+interface ReaderViewportSize {
+  width: number;
+  height: number;
+}
+
+interface ReaderInitialProgressRestore {
+  contentKey: number | string | undefined;
+  progress: number;
+}
+
 const SCROLL_PAGE_FRACTION = 0.9;
-const TWO_PAGE_MEDIA_QUERY = "(min-width: 992px)";
-const PAGED_SCROLL_ANIMATION_MS = 120;
+const TWO_PAGE_MIN_COLUMN_WIDTH = 320;
+const PAGED_SCROLL_ANIMATION_MS = 500;
+const PAGED_SCROLL_ANIMATION_FRAME_MS = 16;
 const PROGRESS_SAVE_DELAY_MS = 350;
 const WHEEL_PAGE_COOLDOWN_MS = 220;
 const WHEEL_PAGE_DELTA_THRESHOLD = 20;
@@ -100,6 +131,10 @@ const READER_MEDIA_PATCH_SELECTOR = [
   'link[href][rel~="preload"][as="image"]',
   'link[href][rel~="preload"][as="video"]',
   'link[href][rel~="preload"][as="audio"]',
+  "image[href]",
+  "image[xlink\\:href]",
+  "use[href]",
+  "use[xlink\\:href]",
   "img[srcset]",
   "source[srcset]",
   "[style]",
@@ -110,20 +145,74 @@ const READER_MEDIA_PATCH_ATTRIBUTES = [
   "poster",
   "data",
   "href",
+  "xlink:href",
   "data-src",
   "data-original",
   "data-lazy-src",
   "data-orig-src",
   "style",
 ] as const;
+const READER_PROTECTED_LOCAL_MEDIA_ATTRIBUTES = {
+  src: "data-norea-reader-local-media-src",
+  srcset: "data-norea-reader-local-media-srcset",
+  poster: "data-norea-reader-local-media-poster",
+  data: "data-norea-reader-local-media-data",
+  href: "data-norea-reader-local-media-href",
+  "xlink:href": "data-norea-reader-local-media-xlink-href",
+  "data-src": "data-norea-reader-local-media-data-src",
+  "data-original": "data-norea-reader-local-media-data-original",
+  "data-lazy-src": "data-norea-reader-local-media-data-lazy-src",
+  "data-orig-src": "data-norea-reader-local-media-data-orig-src",
+  style: "data-norea-reader-local-media-style",
+} as const satisfies Record<
+  (typeof READER_MEDIA_PATCH_ATTRIBUTES)[number],
+  string
+>;
 const READER_MEDIA_SOURCE_URL_ATTRIBUTE = "data-norea-media-source-url";
 const READER_PENDING_MEDIA_ATTRIBUTE = "data-norea-reader-media-pending";
 const READER_PENDING_BACKGROUND_ATTRIBUTE = "data-norea-reader-media-bg";
 const READER_PENDING_DISPLAY_ATTRIBUTE = "data-norea-reader-media-display";
 const READER_PENDING_HEIGHT_ATTRIBUTE = "data-norea-reader-media-height";
+const READER_MEDIA_INDEX_ATTRIBUTE = "data-norea-reader-media-index";
+const READER_SEGMENT_INDEX_ATTRIBUTE = "data-norea-reader-segment-index";
 const READER_PENDING_PLACEHOLDER_SRC =
   "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221000%22%20height%3D%221400%22%20viewBox%3D%220%200%201000%201400%22%2F%3E";
+const READER_EMPTY_MEDIA_PLACEHOLDER_SRC =
+  "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221%22%20height%3D%221%22%2F%3E";
 const READER_PENDING_PLACEHOLDER_HEIGHT = "min(72vh, 56rem)";
+const READER_LOCAL_MEDIA_SRC_PREFIX = "norea-media://chapter/";
+const READER_STYLE_URL_PATTERN =
+  /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")]*?))\s*\)/gi;
+const READER_SCROLL_OVERSCAN_PX = 1800;
+const READER_SEGMENT_DEFAULT_HEIGHT = 96;
+const READER_SEGMENT_MEDIA_HEIGHT = 520;
+const READER_DOM_PREPROCESS_MAX_HTML_LENGTH = 350_000;
+const READER_LARGE_SEGMENT_TARGET_LENGTH = 24_000;
+const READER_LARGE_SEGMENT_MAX_LENGTH = 80_000;
+const READER_PAGE_MEDIA_ELEMENTS = [
+  "img",
+  "svg",
+  "video",
+  "canvas",
+  "iframe",
+] as const;
+const READER_PAGE_SINGLE_MEDIA_ELEMENTS = [
+  "img",
+  "picture",
+  "svg",
+  "video",
+  "canvas",
+  "iframe",
+] as const;
+const READER_PAGE_SINGLE_FLOW_ELEMENTS = ["p", "div", "figure", "a"] as const;
+
+function cssSelectorList(
+  prefix: string,
+  elements: readonly string[],
+  suffix = "",
+): string {
+  return elements.map((element) => `${prefix}${element}${suffix}`).join(",\n");
+}
 
 function clampProgress(progress: number): number {
   if (!Number.isFinite(progress)) return 0;
@@ -157,15 +246,12 @@ function logReaderMediaPipeline(
   console.warn("[reader-media:content]", event, details);
 }
 
-function easeOutCubic(progress: number): number {
-  return 1 - Math.pow(1 - progress, 3);
+function dispatchReaderScrollEvent(node: HTMLElement): void {
+  node.dispatchEvent(new Event("scroll", { bubbles: true }));
 }
 
-function getTwoPageMediaMatches(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.matchMedia(TWO_PAGE_MEDIA_QUERY).matches
-  );
+function easeOutCubic(progress: number): number {
+  return 1 - Math.pow(1 - progress, 3);
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -244,6 +330,107 @@ function mediaLogHost(value: string): string {
   }
 }
 
+function hasLocalChapterMediaValue(value: string | null): value is string {
+  return !!value?.includes(READER_LOCAL_MEDIA_SRC_PREFIX);
+}
+
+function protectedLocalMediaAttribute(
+  attribute: string,
+): string | undefined {
+  return READER_PROTECTED_LOCAL_MEDIA_ATTRIBUTES[
+    attribute as keyof typeof READER_PROTECTED_LOCAL_MEDIA_ATTRIBUTES
+  ];
+}
+
+function setReaderLocalMediaPlaceholder(
+  element: Element,
+  attribute: string,
+  value: string,
+  resolvedLocalMedia?: ReadonlyMap<string, string>,
+): void {
+  const resolvedValue = resolvedLocalMedia?.get(value);
+  if (resolvedValue) {
+    element.setAttribute(attribute, resolvedValue);
+    return;
+  }
+  const protectedAttribute = protectedLocalMediaAttribute(attribute);
+  if (!protectedAttribute) return;
+  element.setAttribute(protectedAttribute, value);
+  if (attribute === "style") {
+    element.setAttribute(
+      "style",
+      value.replace(
+        READER_STYLE_URL_PATTERN,
+        (match, doubleQuoted, singleQuoted, unquoted) => {
+          const source = String(
+            doubleQuoted ?? singleQuoted ?? unquoted ?? "",
+          ).trim();
+          if (!source.includes(READER_LOCAL_MEDIA_SRC_PREFIX)) return match;
+          const resolvedStyleUrl = resolvedLocalMedia?.get(source);
+          return `url("${resolvedStyleUrl ?? READER_EMPTY_MEDIA_PLACEHOLDER_SRC}")`;
+        },
+      ),
+    );
+    return;
+  }
+  if (attribute === "src" && element instanceof HTMLImageElement) {
+    setReaderPendingImagePlaceholder(element);
+    return;
+  }
+  element.setAttribute(attribute, READER_EMPTY_MEDIA_PLACEHOLDER_SRC);
+}
+
+function protectLocalReaderMedia(
+  html: string,
+  resolvedLocalMedia?: ReadonlyMap<string, string>,
+): string {
+  if (
+    typeof document === "undefined" ||
+    !html.includes(READER_LOCAL_MEDIA_SRC_PREFIX)
+  ) {
+    return html;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  let protectedCount = 0;
+  let changed = false;
+
+  for (const element of template.content.querySelectorAll<Element>(
+    READER_MEDIA_PATCH_SELECTOR,
+  )) {
+    for (const attribute of READER_MEDIA_PATCH_ATTRIBUTES) {
+      const value = element.getAttribute(attribute);
+      if (!hasLocalChapterMediaValue(value)) continue;
+      setReaderLocalMediaPlaceholder(
+        element,
+        attribute,
+        value,
+        resolvedLocalMedia,
+      );
+      changed = true;
+      if (!resolvedLocalMedia?.has(value)) {
+        protectedCount += 1;
+      }
+    }
+  }
+
+  if (protectedCount > 0) {
+    logReaderMediaPipeline("protect-local-media", {
+      htmlLength: html.length,
+      protectedCount,
+    });
+  }
+  return changed ? template.innerHTML : html;
+}
+
+function stripLocalMediaFontFaces(html: string): string {
+  if (!html.includes(READER_LOCAL_MEDIA_SRC_PREFIX)) return html;
+  return html.replace(
+    /@font-face\s*{[^}]*norea-media:\/\/chapter\/[^}]*}/gi,
+    "",
+  );
+}
+
 function prepareReaderHtmlForDisplay(html: string): string {
   if (
     typeof document === "undefined" ||
@@ -260,20 +447,7 @@ function prepareReaderHtmlForDisplay(html: string): string {
     `img[${READER_MEDIA_SOURCE_URL_ATTRIBUTE}]`,
   )) {
     if ((image.getAttribute("src") ?? "").trim() !== "") continue;
-    image.setAttribute("src", READER_PENDING_PLACEHOLDER_SRC);
-    image.setAttribute(READER_PENDING_MEDIA_ATTRIBUTE, "true");
-    if (image.style.display === "") {
-      image.style.display = "block";
-      image.setAttribute(READER_PENDING_DISPLAY_ATTRIBUTE, "true");
-    }
-    if (image.style.minHeight === "") {
-      image.style.minHeight = READER_PENDING_PLACEHOLDER_HEIGHT;
-      image.setAttribute(READER_PENDING_HEIGHT_ATTRIBUTE, "true");
-    }
-    if (image.style.backgroundColor === "") {
-      image.style.backgroundColor = "rgba(148, 163, 184, 0.12)";
-      image.setAttribute(READER_PENDING_BACKGROUND_ATTRIBUTE, "true");
-    }
+    setReaderPendingImagePlaceholder(image);
     placeholderCount += 1;
     changed = true;
   }
@@ -285,6 +459,38 @@ function prepareReaderHtmlForDisplay(html: string): string {
     });
   }
   return changed ? template.innerHTML : html;
+}
+
+function annotateReaderMediaElements(html: string): string {
+  if (typeof document === "undefined") return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const elements = [
+    ...template.content.querySelectorAll<HTMLElement>(
+      READER_MEDIA_PATCH_SELECTOR,
+    ),
+  ];
+  elements.forEach((element, index) => {
+    element.setAttribute(READER_MEDIA_INDEX_ATTRIBUTE, String(index));
+  });
+  return template.innerHTML;
+}
+
+function setReaderPendingImagePlaceholder(image: HTMLImageElement): void {
+  image.setAttribute("src", READER_PENDING_PLACEHOLDER_SRC);
+  image.setAttribute(READER_PENDING_MEDIA_ATTRIBUTE, "true");
+  if (image.style.display === "") {
+    image.style.display = "block";
+    image.setAttribute(READER_PENDING_DISPLAY_ATTRIBUTE, "true");
+  }
+  if (image.style.minHeight === "") {
+    image.style.minHeight = READER_PENDING_PLACEHOLDER_HEIGHT;
+    image.setAttribute(READER_PENDING_HEIGHT_ATTRIBUTE, "true");
+  }
+  if (image.style.backgroundColor === "") {
+    image.style.backgroundColor = "rgba(148, 163, 184, 0.12)";
+    image.setAttribute(READER_PENDING_BACKGROUND_ATTRIBUTE, "true");
+  }
 }
 
 function clearReaderPendingMedia(element: HTMLElement): void {
@@ -304,6 +510,16 @@ function clearReaderPendingMedia(element: HTMLElement): void {
   }
 }
 
+function clearProtectedLocalMediaAttribute(
+  element: HTMLElement,
+  attribute: string,
+): void {
+  const protectedAttribute = protectedLocalMediaAttribute(attribute);
+  if (protectedAttribute) {
+    element.removeAttribute(protectedAttribute);
+  }
+}
+
 function mergeMediaElementPatches(
   current: Map<number, ChapterMediaElementPatch>,
   patches: ChapterMediaElementPatch[],
@@ -316,8 +532,36 @@ function mergeMediaElementPatches(
         ...(existing?.attributes ?? {}),
         ...patch.attributes,
       },
+      sourceAttributes: {
+        ...(existing?.sourceAttributes ?? {}),
+        ...(patch.sourceAttributes ?? {}),
+      },
     });
   }
+}
+
+function localMediaPatchTargets(
+  elements: HTMLElement[],
+  patch: ChapterMediaElementPatch,
+): HTMLElement[] | null {
+  const sourceAttributes = patch.sourceAttributes;
+  if (!sourceAttributes || Object.keys(sourceAttributes).length === 0) {
+    return null;
+  }
+  const targets = new Set<HTMLElement>();
+  for (const element of elements) {
+    for (const [attribute, source] of Object.entries(sourceAttributes)) {
+      const protectedAttribute = protectedLocalMediaAttribute(attribute);
+      if (
+        (protectedAttribute &&
+          element.getAttribute(protectedAttribute) === source) ||
+        element.getAttribute(attribute) === source
+      ) {
+        targets.add(element);
+      }
+    }
+  }
+  return [...targets];
 }
 
 function patchReaderMediaElements(
@@ -332,41 +576,112 @@ function patchReaderMediaElements(
   const srcKinds = new Set<string>();
 
   for (const patch of patches) {
-    const current = currentElements[patch.index];
-    if (!current) continue;
-    let changed = false;
-    for (const [attribute, value] of Object.entries(patch.attributes)) {
-      if (
-        !(READER_MEDIA_PATCH_ATTRIBUTES as readonly string[]).includes(
-          attribute,
-        )
-      ) {
-        continue;
+    const localTargets = localMediaPatchTargets(currentElements, patch);
+    const indexedElements = [
+      ...container.querySelectorAll<HTMLElement>(
+        `[${READER_MEDIA_INDEX_ATTRIBUTE}="${patch.index}"]`,
+      ),
+    ];
+    const targets =
+      localTargets
+        ? localTargets
+        : indexedElements.length > 0
+        ? indexedElements
+        : currentElements[patch.index]
+          ? [currentElements[patch.index]]
+          : [];
+    for (const current of targets) {
+      let changed = false;
+      for (const [attribute, value] of Object.entries(patch.attributes)) {
+        if (
+          !(READER_MEDIA_PATCH_ATTRIBUTES as readonly string[]).includes(
+            attribute,
+          )
+        ) {
+          continue;
+        }
+        if (value.trim() === "") continue;
+        if (attribute === "src" || attribute === "srcset") {
+          srcKinds.add(mediaPatchValueKind(value));
+        }
+        if ((current.getAttribute(attribute) ?? "") !== value) {
+          current.setAttribute(attribute, value);
+          changed = true;
+        }
+        clearProtectedLocalMediaAttribute(current, attribute);
       }
-      if (value.trim() === "") continue;
-      if (attribute === "src" || attribute === "srcset") {
-        srcKinds.add(mediaPatchValueKind(value));
+      if (changed) {
+        changedCount += 1;
+        clearReaderPendingMedia(current);
       }
-      if ((current.getAttribute(attribute) ?? "") !== value) {
-        current.setAttribute(attribute, value);
-        changed = true;
-      }
-    }
-    if (changed) {
-      changedCount += 1;
-      clearReaderPendingMedia(current);
     }
   }
-  logReaderMediaPipeline("patch-elements", {
-    changedCount,
-    patchCount: patches.length,
-    srcKinds: [...srcKinds],
-    firstIndexes: patches.slice(0, 8).map((patch) => patch.index),
-    mediaElementCount: currentElements.length,
+  if (changedCount > 0) {
+    logReaderMediaPipeline("patch-elements", {
+      changedCount,
+      patchCount: patches.length,
+      srcKinds: [...srcKinds],
+      firstIndexes: patches.slice(0, 8).map((patch) => patch.index),
+      mediaElementCount: currentElements.length,
+    });
+  }
+}
+
+function collectMountedLocalMediaPatches(
+  container: HTMLElement,
+): ChapterMediaElementPatch[] {
+  const elements = [
+    ...container.querySelectorAll<HTMLElement>(READER_MEDIA_PATCH_SELECTOR),
+  ];
+  const patches: ChapterMediaElementPatch[] = [];
+  elements.forEach((element, index) => {
+    const attributes: Record<string, string> = {};
+    const sourceAttributes: Record<string, string> = {};
+    for (const attribute of READER_MEDIA_PATCH_ATTRIBUTES) {
+      const protectedAttribute = protectedLocalMediaAttribute(attribute);
+      const value =
+        (protectedAttribute
+          ? element.getAttribute(protectedAttribute)
+          : null) ?? element.getAttribute(attribute);
+      if (hasLocalChapterMediaValue(value)) {
+        attributes[attribute] = value;
+        sourceAttributes[attribute] = value;
+      }
+    }
+    if (Object.keys(attributes).length > 0) {
+      patches.push({ index, attributes, sourceAttributes });
+    }
   });
+  return patches;
+}
+
+function localMediaPatchSignature(patches: ChapterMediaElementPatch[]): string {
+  return patches
+    .map((patch) =>
+      READER_MEDIA_PATCH_ATTRIBUTES.map((attribute) => {
+        const source = patch.sourceAttributes?.[attribute];
+        return source ? `${attribute}=${source}` : "";
+      })
+        .filter(Boolean)
+        .join("&"),
+    )
+    .filter(Boolean)
+    .join("|");
+}
+
+function hasLocalMediaSourceAttributes(
+  patch: ChapterMediaElementPatch,
+): boolean {
+  return (
+    !!patch.sourceAttributes &&
+    Object.keys(patch.sourceAttributes).length > 0
+  );
 }
 
 function countBlankReaderMedia(html: string): number {
+  if (html.length > READER_DOM_PREPROCESS_MAX_HTML_LENGTH) {
+    return html.match(/<img\b[^>]*\bsrc\s*=\s*["']\s*["'][^>]*>/gi)?.length ?? 0;
+  }
   if (typeof document === "undefined") return 0;
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -378,12 +693,268 @@ function countBlankReaderMedia(html: string): number {
 }
 
 function countDataUrlReaderMedia(html: string): number {
+  if (html.length > READER_DOM_PREPROCESS_MAX_HTML_LENGTH) {
+    return html.match(/\b(?:src|poster|data|href)\s*=\s*["']data:/gi)?.length ?? 0;
+  }
   if (typeof document === "undefined") return 0;
   const template = document.createElement("template");
   template.innerHTML = html;
   return [...template.content.querySelectorAll<HTMLImageElement>("img")].filter(
     (image) => (image.getAttribute("src") ?? "").startsWith("data:"),
   ).length;
+}
+
+function serializeNode(node: Node): string {
+  const container = document.createElement("div");
+  container.appendChild(node.cloneNode(true));
+  return container.innerHTML;
+}
+
+function estimatedSegmentHeight(element: Element): number {
+  if (element.querySelector("img,picture,svg,video,canvas,iframe")) {
+    return READER_SEGMENT_MEDIA_HEIGHT;
+  }
+  const textLength = element.textContent?.trim().length ?? 0;
+  if (textLength <= 0) return READER_SEGMENT_DEFAULT_HEIGHT;
+  return Math.max(
+    READER_SEGMENT_DEFAULT_HEIGHT,
+    Math.min(1200, Math.ceil(textLength / 4)),
+  );
+}
+
+function nodeSegmentHtml(node: Node, index: number): string | null {
+  if (node instanceof Text) {
+    const text = node.textContent ?? "";
+    if (text.trim() === "") return null;
+    const paragraph = document.createElement("p");
+    paragraph.setAttribute(READER_SEGMENT_INDEX_ATTRIBUTE, String(index));
+    paragraph.textContent = text;
+    return paragraph.outerHTML;
+  }
+  if (!(node instanceof Element)) return null;
+  const element = node.cloneNode(true) as Element;
+  element.setAttribute(READER_SEGMENT_INDEX_ATTRIBUTE, String(index));
+  return serializeNode(element);
+}
+
+function readerContentClassFromRoot(root: Element | null): string {
+  const classes = new Set(["reader-content"]);
+  for (const className of root?.classList ?? []) {
+    classes.add(className);
+  }
+  return [...classes].join(" ");
+}
+
+function htmlAttributeValue(attributes: string, name: string): string | undefined {
+  const match = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(
+    attributes,
+  );
+  return match?.[1];
+}
+
+function stripSingleReaderContentWrapper(html: string): {
+  contentClassName: string;
+  contentDirection?: "ltr" | "rtl" | "auto";
+  contentHtml: string;
+  contentLanguage?: string;
+} {
+  const trimmed = html.trim();
+  const match = /^<([a-z][\w:-]*)([^>]*\bclass\s*=\s*["'][^"']*\breader-content\b[^"']*["'][^>]*)>([\s\S]*)<\/\1>\s*$/i.exec(
+    trimmed,
+  );
+  if (!match) {
+    return {
+      contentClassName: "reader-content",
+      contentHtml: html,
+    };
+  }
+  const attributes = match[2] ?? "";
+  const classes = new Set(["reader-content"]);
+  for (const className of (htmlAttributeValue(attributes, "class") ?? "").split(
+    /\s+/,
+  )) {
+    if (className) classes.add(className);
+  }
+  const dir = htmlAttributeValue(attributes, "dir");
+  const lang = htmlAttributeValue(attributes, "lang");
+  return {
+    contentClassName: [...classes].join(" "),
+    ...(dir === "ltr" || dir === "rtl" || dir === "auto"
+      ? { contentDirection: dir }
+      : {}),
+    contentHtml: match[3] ?? "",
+    ...(lang ? { contentLanguage: lang } : {}),
+  };
+}
+
+function estimateHtmlSegmentHeight(html: string): number {
+  if (/<(?:img|picture|svg|video|canvas|iframe)\b/i.test(html)) {
+    return READER_SEGMENT_MEDIA_HEIGHT;
+  }
+  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return READER_SEGMENT_DEFAULT_HEIGHT;
+  return Math.max(
+    READER_SEGMENT_DEFAULT_HEIGHT,
+    Math.min(1200, Math.ceil(text.length / 4)),
+  );
+}
+
+function largeHtmlSplitIndex(html: string): number {
+  const limit = Math.min(READER_LARGE_SEGMENT_MAX_LENGTH, html.length - 1);
+  if (limit <= READER_LARGE_SEGMENT_TARGET_LENGTH) return 0;
+  const boundaryPattern =
+    /<\/(?:p|div|section|article|figure|blockquote|pre|ul|ol|li|h[1-6]|table|tr|hr)>/gi;
+  let splitIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = boundaryPattern.exec(html)) !== null) {
+    const boundaryEnd = match.index + match[0].length;
+    if (boundaryEnd > limit) break;
+    splitIndex = boundaryEnd;
+  }
+  return splitIndex >= READER_LARGE_SEGMENT_TARGET_LENGTH ? splitIndex : 0;
+}
+
+function pushLargeHtmlSegment(
+  segments: ReaderVirtualSegment[],
+  html: string,
+): void {
+  const trimmed = html.trim();
+  if (!trimmed) return;
+  if (trimmed.length > READER_LARGE_SEGMENT_MAX_LENGTH) {
+    const splitIndex = largeHtmlSplitIndex(trimmed);
+    if (splitIndex > 0) {
+      pushLargeHtmlSegment(segments, trimmed.slice(0, splitIndex));
+      pushLargeHtmlSegment(segments, trimmed.slice(splitIndex));
+      return;
+    }
+  }
+  const index = segments.length;
+  segments.push({
+    estimatedHeight: estimateHtmlSegmentHeight(trimmed),
+    html: `<div ${READER_SEGMENT_INDEX_ATTRIBUTE}="${index}">${trimmed}</div>`,
+    index,
+  });
+}
+
+function buildLargeReaderVirtualDocument(html: string): ReaderVirtualDocument {
+  const staticHtmlParts: string[] = [];
+  const withoutStyles = html.replace(
+    /<style\b[^>]*>[\s\S]*?<\/style>/gi,
+    (style) => {
+      staticHtmlParts.push(style);
+      return "";
+    },
+  );
+  const stripped = stripSingleReaderContentWrapper(withoutStyles);
+  const segments: ReaderVirtualSegment[] = [];
+  const boundaryPattern =
+    /<\/(?:p|div|section|article|figure|blockquote|pre|ul|ol|li|h[1-6]|table|tr|hr)>/gi;
+  let cursor = 0;
+  let segmentStart = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = boundaryPattern.exec(stripped.contentHtml)) !== null) {
+    const boundaryEnd = match.index + match[0].length;
+    if (boundaryEnd - segmentStart < READER_LARGE_SEGMENT_TARGET_LENGTH) {
+      cursor = boundaryEnd;
+      continue;
+    }
+    pushLargeHtmlSegment(
+      segments,
+      stripped.contentHtml.slice(segmentStart, boundaryEnd),
+    );
+    segmentStart = boundaryEnd;
+    cursor = boundaryEnd;
+  }
+
+  if (segmentStart < stripped.contentHtml.length) {
+    pushLargeHtmlSegment(segments, stripped.contentHtml.slice(segmentStart));
+  }
+  if (segments.length === 0 && cursor < stripped.contentHtml.length) {
+    for (
+      let start = 0;
+      start < stripped.contentHtml.length;
+      start += READER_LARGE_SEGMENT_MAX_LENGTH
+    ) {
+      pushLargeHtmlSegment(
+        segments,
+        stripped.contentHtml.slice(start, start + READER_LARGE_SEGMENT_MAX_LENGTH),
+      );
+    }
+  }
+
+  return {
+    contentClassName: stripped.contentClassName,
+    ...(stripped.contentDirection
+      ? { contentDirection: stripped.contentDirection }
+      : {}),
+    ...(stripped.contentLanguage
+      ? { contentLanguage: stripped.contentLanguage }
+      : {}),
+    segments,
+    staticHtml: staticHtmlParts.join(""),
+  };
+}
+
+function buildReaderVirtualDocument(html: string): ReaderVirtualDocument {
+  if (html.length > READER_DOM_PREPROCESS_MAX_HTML_LENGTH) {
+    return buildLargeReaderVirtualDocument(html);
+  }
+
+  if (typeof document === "undefined") {
+    return {
+      contentClassName: "reader-content",
+      segments: [{ estimatedHeight: 800, html, index: 0 }],
+      staticHtml: "",
+    };
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+
+  const staticNodes = [
+    ...template.content.querySelectorAll<HTMLStyleElement>("style"),
+  ];
+  const staticHtml = staticNodes.map((node) => node.outerHTML).join("");
+  staticNodes.forEach((node) => node.remove());
+
+  const elementChildren = [...template.content.children];
+  const root =
+    elementChildren.length === 1 &&
+    elementChildren[0] instanceof Element &&
+    elementChildren[0].children.length > 0
+      ? elementChildren[0]
+      : null;
+  const sourceNodes = root
+    ? [...root.childNodes]
+    : [...template.content.childNodes];
+  const segments: ReaderVirtualSegment[] = [];
+
+  for (const node of sourceNodes) {
+    const htmlSegment = nodeSegmentHtml(node, segments.length);
+    if (!htmlSegment) continue;
+    const estimatedHeight =
+      node instanceof Element
+        ? estimatedSegmentHeight(node)
+        : READER_SEGMENT_DEFAULT_HEIGHT;
+    segments.push({
+      estimatedHeight,
+      html: htmlSegment,
+      index: segments.length,
+    });
+  }
+
+  return {
+    contentClassName: readerContentClassFromRoot(root),
+    ...(root?.getAttribute("dir")
+      ? { contentDirection: root.getAttribute("dir") as "ltr" | "rtl" | "auto" }
+      : {}),
+    ...(root?.getAttribute("lang")
+      ? { contentLanguage: root.getAttribute("lang") ?? undefined }
+      : {}),
+    segments,
+    staticHtml,
+  };
 }
 
 function formatClock(date: Date, locale: AppLocale): string {
@@ -443,7 +1014,7 @@ function getPagedPageIndex(node: HTMLElement): number {
   const maxLeft = Math.max(0, node.scrollWidth - node.clientWidth);
   if (maxLeft <= 2) return 1;
   if (node.scrollLeft >= maxLeft - 2) return total;
-  const current = Math.floor(node.scrollLeft / getPagedStep(node)) + 1;
+  const current = Math.round(node.scrollLeft / getPagedStep(node)) + 1;
   return Math.max(1, Math.min(total, current));
 }
 
@@ -460,7 +1031,7 @@ function getProgressPageIndex(node: HTMLElement, progress: number): number {
   const targetLeft = node.scrollWidth * ratio;
   const maxLeft = Math.max(0, node.scrollWidth - node.clientWidth);
   if (targetLeft >= maxLeft - 2) return total;
-  const pageIndex = Math.floor(targetLeft / getPagedStep(node)) + 1;
+  const pageIndex = Math.round(targetLeft / getPagedStep(node)) + 1;
   return Math.max(1, Math.min(total, pageIndex));
 }
 
@@ -513,6 +1084,34 @@ function scrollToProgress(
   node.scrollTo({ top: maxTop * ratio, behavior });
 }
 
+function prefixSegmentHeights(heights: number[]): number[] {
+  const offsets = [0];
+  for (const height of heights) {
+    offsets.push(offsets[offsets.length - 1]! + height);
+  }
+  return offsets;
+}
+
+function virtualRangeForScroll(
+  scrollTop: number,
+  viewportHeight: number,
+  offsets: number[],
+): { start: number; end: number } {
+  const count = Math.max(0, offsets.length - 1);
+  if (count === 0) return { start: 0, end: -1 };
+  const startY = Math.max(0, scrollTop - READER_SCROLL_OVERSCAN_PX);
+  const endY = scrollTop + viewportHeight + READER_SCROLL_OVERSCAN_PX;
+  let start = 0;
+  while (start < count - 1 && offsets[start + 1]! < startY) {
+    start += 1;
+  }
+  let end = start;
+  while (end < count - 1 && offsets[end]! <= endY) {
+    end += 1;
+  }
+  return { start, end };
+}
+
 function getNormalizedWheelDelta(event: WheelEvent<HTMLElement>): number {
   const primaryDelta =
     Math.abs(event.deltaY) >= Math.abs(event.deltaX)
@@ -550,8 +1149,10 @@ function ReaderContentInner(
   const {
     html,
     bottomOverlayOffset,
+    contentKey,
     initialProgress = 0,
     interactionBlocked = false,
+    localMediaContext,
     onProgressChange,
     onPageIndexChange,
     onMediaError,
@@ -577,12 +1178,21 @@ function ReaderContentInner(
   const latestMediaElementPatchesRef = useRef<
     Map<number, ChapterMediaElementPatch>
   >(new Map());
+  const localMediaPatchGenerationRef = useRef(0);
+  const latestLocalMediaSignatureRef = useRef<string | null>(null);
+  const pendingLocalMediaSignatureRef = useRef<string | null>(null);
   const latestRenderedHtmlRef = useRef<string | null>(null);
+  const appliedInitialContentKeyRef = useRef<number | string | undefined | null>(
+    null,
+  );
+  const pendingInitialProgressRestoreRef =
+    useRef<ReaderInitialProgressRestore | null>(null);
+  const restoredLayoutKeyRef = useRef<string | null>(null);
+  const pageScrollTimerRef = useRef<number | null>(null);
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
   const nativeWheelActionLockedUntilRef = useRef(0);
-  const pageScrollAnimationRef = useRef<number | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [progress, setProgress] = useState(clampProgress(initialProgress));
   const [pageInfo, setPageInfo] = useState<PageInfo>({
@@ -591,23 +1201,43 @@ function ReaderContentInner(
   });
   const [now, setNow] = useState(() => new Date());
   const [battery, setBattery] = useState<string | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(0);
-  const [twoPageMediaMatches, setTwoPageMediaMatches] = useState(
-    getTwoPageMediaMatches,
+  const [viewportSize, setViewportSize] = useState<ReaderViewportSize>({
+    width: 0,
+    height: 0,
+  });
+  const [segmentHeights, setSegmentHeights] = useState<number[]>([]);
+  const [virtualRange, setVirtualRange] = useState({ start: 0, end: -1 });
+  const [resolvedLocalMedia, setResolvedLocalMedia] = useState<
+    Record<string, string>
+  >({});
+  const resolvedLocalMediaMap = useMemo(
+    () => new Map(Object.entries(resolvedLocalMedia)),
+    [resolvedLocalMedia],
   );
 
   const renderedHtml = useMemo(
     () => {
+      if (html.length > READER_DOM_PREPROCESS_MAX_HTML_LENGTH) {
+        return html;
+      }
       const preparedHtml = prepareReaderHtmlForDisplay(html);
-      return general.bionicReading
+      const displayHtml = general.bionicReading
         ? applyBionicReading(preparedHtml)
         : preparedHtml;
+      return protectLocalReaderMedia(
+        annotateReaderMediaElements(displayHtml),
+        resolvedLocalMediaMap,
+      );
     },
-    [general.bionicReading, html],
+    [general.bionicReading, html, resolvedLocalMediaMap],
   );
-  const renderedHtmlMarkup = useMemo(
-    () => ({ __html: renderedHtml }),
+  const virtualDocument = useMemo(
+    () => buildReaderVirtualDocument(renderedHtml),
     [renderedHtml],
+  );
+  const displayStaticHtml = useMemo(
+    () => stripLocalMediaFontFaces(virtualDocument.staticHtml),
+    [virtualDocument.staticHtml],
   );
 
   useEffect(() => {
@@ -623,46 +1253,98 @@ function ReaderContentInner(
   const viewportHeight =
     requestedViewportHeight ??
     "calc(var(--lnr-app-content-height) - 3.75rem)";
+  const viewportWidth = viewportSize.width;
+  const viewportHeightPx =
+    viewportSize.height > 0
+      ? viewportSize.height
+      : typeof window !== "undefined"
+        ? window.innerHeight
+        : 0;
   const overlayBottom = bottomOverlayOffset ?? "0.5rem";
   const isPagedReader = general.pageReader;
-  const isTwoPageReader =
-    isPagedReader && general.twoPageReader && twoPageMediaMatches;
-  const visiblePageColumns = isTwoPageReader ? 2 : 1;
+  const requestedPageColumnsPerSpread = general.twoPageReader ? 2 : 1;
+  const availablePageColumnsPerSpread = Math.max(
+    1,
+    Math.floor(viewportWidth / TWO_PAGE_MIN_COLUMN_WIDTH),
+  );
+  const pageColumnsPerSpread = isPagedReader
+    ? Math.max(
+        1,
+        Math.min(requestedPageColumnsPerSpread, availablePageColumnsPerSpread),
+      )
+    : 1;
+  const isMultiPageReader = isPagedReader && pageColumnsPerSpread > 1;
+  const getActiveScrollNode = useCallback(
+    () => (isPagedReader ? contentRef.current : viewportRef.current),
+    [isPagedReader],
+  );
+  const effectiveSegmentHeights = useMemo(
+    () =>
+      virtualDocument.segments.map(
+        (segment) => segmentHeights[segment.index] ?? segment.estimatedHeight,
+      ),
+    [segmentHeights, virtualDocument.segments],
+  );
+  const segmentOffsets = useMemo(
+    () => prefixSegmentHeights(effectiveSegmentHeights),
+    [effectiveSegmentHeights],
+  );
+  const virtualContentHeight =
+    segmentOffsets[segmentOffsets.length - 1] ?? 0;
 
   const scrollPagedTo = useCallback((targetLeft: number) => {
-    const node = viewportRef.current;
+    const node = getActiveScrollNode();
     if (!node) return;
-    if (pageScrollAnimationRef.current !== null) {
-      window.cancelAnimationFrame(pageScrollAnimationRef.current);
-      pageScrollAnimationRef.current = null;
+    if (pageScrollTimerRef.current !== null) {
+      window.clearTimeout(pageScrollTimerRef.current);
+      pageScrollTimerRef.current = null;
     }
-
     const startLeft = node.scrollLeft;
     const distance = targetLeft - startLeft;
+    logReaderInput("page-scroll-start", {
+      startLeft: Math.round(startLeft),
+      targetLeft: Math.round(targetLeft),
+      distance: Math.round(distance),
+      snapshot: getReaderDebugSnapshot(node),
+    });
     if (Math.abs(distance) <= 1) {
-      node.scrollTo({ left: targetLeft, behavior: "auto" });
+      node.scrollLeft = targetLeft;
+      dispatchReaderScrollEvent(node);
+      logReaderInput("page-scroll-complete", {
+        targetLeft: Math.round(targetLeft),
+        snapshot: getReaderDebugSnapshot(node),
+      });
       return;
     }
-
     const startedAt = performance.now();
-    const step = (timestamp: number) => {
-      const elapsed = timestamp - startedAt;
-      const progress = Math.min(1, elapsed / PAGED_SCROLL_ANIMATION_MS);
+    const step = () => {
+      const progress = Math.min(
+        1,
+        (performance.now() - startedAt) / PAGED_SCROLL_ANIMATION_MS,
+      );
       node.scrollLeft = startLeft + distance * easeOutCubic(progress);
       if (progress < 1) {
-        pageScrollAnimationRef.current = window.requestAnimationFrame(step);
+        pageScrollTimerRef.current = window.setTimeout(
+          step,
+          PAGED_SCROLL_ANIMATION_FRAME_MS,
+        );
         return;
       }
       node.scrollLeft = targetLeft;
-      pageScrollAnimationRef.current = null;
+      dispatchReaderScrollEvent(node);
+      logReaderInput("page-scroll-complete", {
+        targetLeft: Math.round(targetLeft),
+        snapshot: getReaderDebugSnapshot(node),
+      });
+      pageScrollTimerRef.current = null;
     };
 
-    pageScrollAnimationRef.current = window.requestAnimationFrame(step);
-  }, []);
+    step();
+  }, [getActiveScrollNode]);
 
   const scrollByPage = useCallback(
     (direction: 1 | -1, source = "imperative") => {
-      const node = viewportRef.current;
+      const node = getActiveScrollNode();
       if (!node) return;
       if (direction === -1) {
         completedForNavigationRef.current = false;
@@ -729,7 +1411,12 @@ function ReaderContentInner(
       });
       node.scrollBy({ top: amount * direction, behavior: "auto" });
     },
-    [isPagedReader, onBoundaryPage, scrollPagedTo],
+    [
+      isPagedReader,
+      onBoundaryPage,
+      getActiveScrollNode,
+      scrollPagedTo,
+    ],
   );
 
   const flushProgress = useCallback(
@@ -771,11 +1458,21 @@ function ReaderContentInner(
     [],
   );
 
+  useLayoutEffect(() => {
+    latestMediaElementPatchesRef.current.clear();
+    latestLocalMediaSignatureRef.current = null;
+    pendingLocalMediaSignatureRef.current = null;
+    localMediaPatchGenerationRef.current += 1;
+    setResolvedLocalMedia((current) =>
+      Object.keys(current).length === 0 ? current : {},
+    );
+  }, [contentKey]);
+
   useImperativeHandle(
     ref,
     () => ({
       completeIfAtEnd() {
-        const node = viewportRef.current;
+        const node = getActiveScrollNode();
         if (!node || !isAtReadingEnd(node, isPagedReader)) return false;
         completedForNavigationRef.current = true;
         latestProgressRef.current = 100;
@@ -790,13 +1487,19 @@ function ReaderContentInner(
       patchMediaElements,
       scrollByPage,
       scrollToStart() {
-        const node = viewportRef.current;
+        const node = getActiveScrollNode();
         if (!node) return;
+        if (pageScrollTimerRef.current !== null) {
+          window.clearTimeout(pageScrollTimerRef.current);
+          pageScrollTimerRef.current = null;
+        }
         node.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        dispatchReaderScrollEvent(node);
       },
     }),
     [
       flushProgress,
+      getActiveScrollNode,
       isPagedReader,
       patchMediaElements,
       scrollByPage,
@@ -818,97 +1521,311 @@ function ReaderContentInner(
 
   const restoreProgressPosition = useCallback(
     (value: number) => {
-      const node = viewportRef.current;
+      const node = getActiveScrollNode();
       if (!node) return;
-      scrollToProgress(node, value, isPagedReader, "auto");
+      if (isPagedReader) {
+        scrollToProgress(node, value, true, "auto");
+        if (!completedForNavigationRef.current) {
+          const restoredProgress = clampProgress(getProgress(node, true));
+          latestProgressRef.current = restoredProgress;
+          setProgress(restoredProgress);
+        }
+        applyPageInfo(getPageInfo(node, true));
+        return;
+      }
+      scrollToProgress(node, value, false, "auto");
       if (!completedForNavigationRef.current) {
-        const restoredProgress = clampProgress(
-          getProgress(node, isPagedReader),
-        );
+        const restoredProgress = clampProgress(getProgress(node, false));
         latestProgressRef.current = restoredProgress;
         setProgress(restoredProgress);
       }
-      applyPageInfo(getPageInfo(node, isPagedReader));
+      applyPageInfo(getPageInfo(node, false));
     },
-    [applyPageInfo, isPagedReader],
+    [
+      applyPageInfo,
+      getActiveScrollNode,
+      isPagedReader,
+    ],
   );
+  const restoreProgressPositionRef = useRef(restoreProgressPosition);
+
+  useEffect(() => {
+    restoreProgressPositionRef.current = restoreProgressPosition;
+  }, [restoreProgressPosition]);
 
   const updateProgressFromScroll = useCallback(() => {
-    const node = viewportRef.current;
+    const node = getActiveScrollNode();
     if (!node) return;
     if (completedForNavigationRef.current) return;
+    if (!isPagedReader) {
+      setVirtualRange(
+        virtualRangeForScroll(node.scrollTop, node.clientHeight, segmentOffsets),
+      );
+    }
     const nextProgress = clampProgress(getProgress(node, isPagedReader));
     latestProgressRef.current = nextProgress;
     setProgress(nextProgress);
     applyPageInfo(getPageInfo(node, isPagedReader));
     scheduleProgressSave(nextProgress);
-  }, [applyPageInfo, isPagedReader, scheduleProgressSave]);
-
-  useEffect(() => {
-    latestProgressRef.current = clampProgress(initialProgress);
-    setProgress(clampProgress(initialProgress));
-    lastSavedProgressRef.current = Math.round(clampProgress(initialProgress));
-    if (clampProgress(initialProgress) < 97) {
-      completedForNavigationRef.current = false;
-    }
-  }, [initialProgress]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const media = window.matchMedia(TWO_PAGE_MEDIA_QUERY);
-    const syncMedia = () => setTwoPageMediaMatches(media.matches);
-    syncMedia();
-    media.addEventListener("change", syncMedia);
-    return () => media.removeEventListener("change", syncMedia);
-  }, []);
-
-  useEffect(() => {
-    const node = viewportRef.current;
-    if (!node) return;
-    window.requestAnimationFrame(() => {
-      restoreProgressPosition(latestProgressRef.current);
-    });
   }, [
-    renderedHtml,
-    appearance.fontFamily,
-    appearance.lineHeight,
-    appearance.padding,
-    appearance.textSize,
-    general.htmlImagePagingMode,
-    viewportWidth,
-    visiblePageColumns,
-    restoreProgressPosition,
+    applyPageInfo,
+    getActiveScrollNode,
+    isPagedReader,
+    scheduleProgressSave,
+    segmentOffsets,
   ]);
 
   useEffect(() => {
-    const patches = [...latestMediaElementPatchesRef.current.values()];
-    if (patches.length === 0) return;
-    window.requestAnimationFrame(() => {
-      const content = contentRef.current;
-      if (content) patchReaderMediaElements(content, patches);
-    });
+    if (appliedInitialContentKeyRef.current === contentKey) return;
+    appliedInitialContentKeyRef.current = contentKey;
+    const nextProgress = clampProgress(initialProgress);
+    pendingInitialProgressRestoreRef.current = {
+      contentKey,
+      progress: nextProgress,
+    };
+    latestProgressRef.current = nextProgress;
+    setProgress(nextProgress);
+    lastSavedProgressRef.current = Math.round(nextProgress);
+    if (nextProgress < 97) {
+      completedForNavigationRef.current = false;
+    }
+  }, [contentKey, initialProgress]);
+
+  const layoutRestoreKey = useMemo(
+    () =>
+      [
+        renderedHtml.length,
+        contentKey ?? "",
+        appearance.fontFamily,
+        appearance.lineHeight,
+        appearance.padding,
+        appearance.textSize,
+        general.pageReader,
+        general.htmlImagePagingMode,
+        viewportSize.width,
+        viewportSize.height,
+        pageColumnsPerSpread,
+      ].join("|"),
+    [
+      appearance.fontFamily,
+      appearance.lineHeight,
+      appearance.padding,
+      appearance.textSize,
+      contentKey,
+      general.pageReader,
+      general.htmlImagePagingMode,
+      renderedHtml.length,
+      viewportSize.height,
+      viewportSize.width,
+      pageColumnsPerSpread,
+    ],
+  );
+
+  useEffect(() => {
+    restoredLayoutKeyRef.current = null;
   }, [renderedHtml]);
 
   useEffect(() => {
-    const node = viewportRef.current;
-    const content = contentRef.current;
+    setSegmentHeights([]);
+    setVirtualRange({ start: 0, end: -1 });
+  }, [virtualDocument]);
+
+  useEffect(() => {
+    const node = getActiveScrollNode();
     if (!node) return;
-    const syncViewportWidth = () => {
-      setViewportWidth((current) =>
-        current === node.clientWidth ? current : node.clientWidth,
+    if (restoredLayoutKeyRef.current === layoutRestoreKey) return;
+    restoredLayoutKeyRef.current = layoutRestoreKey;
+    const pendingInitialProgress = pendingInitialProgressRestoreRef.current;
+    const progressToRestore =
+      pendingInitialProgress &&
+      pendingInitialProgress.contentKey === contentKey
+        ? pendingInitialProgress.progress
+        : latestProgressRef.current;
+    let disposed = false;
+    const restore = () => {
+      if (disposed) return;
+      restoreProgressPositionRef.current(progressToRestore);
+    };
+    const frame = window.requestAnimationFrame(restore);
+    const timeout = window.setTimeout(restore, 120);
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [contentKey, getActiveScrollNode, layoutRestoreKey]);
+
+  useEffect(() => {
+    if (!localMediaContext) return;
+    const content = contentRef.current;
+    if (!content || !content.innerHTML.includes(READER_LOCAL_MEDIA_SRC_PREFIX)) {
+      return;
+    }
+    const rawPatches = collectMountedLocalMediaPatches(content);
+    if (rawPatches.length === 0) return;
+    const signature = localMediaPatchSignature(rawPatches);
+    const cachedLocalPatches = [
+      ...latestMediaElementPatchesRef.current.values(),
+    ].filter(hasLocalMediaSourceAttributes);
+    if (
+      signature === latestLocalMediaSignatureRef.current &&
+      cachedLocalPatches.length > 0
+    ) {
+      patchReaderMediaElements(content, cachedLocalPatches);
+      return;
+    }
+    if (signature === pendingLocalMediaSignatureRef.current) return;
+    latestLocalMediaSignatureRef.current = signature;
+    pendingLocalMediaSignatureRef.current = signature;
+    const generation = ++localMediaPatchGenerationRef.current;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const patches = await resolveLocalChapterMediaPatches(
+          rawPatches,
+          localMediaContext,
+        );
+        if (
+          cancelled ||
+          generation !== localMediaPatchGenerationRef.current ||
+          contentRef.current !== content
+        ) {
+          return;
+        }
+        if (patches.length > 0) {
+          setResolvedLocalMedia((current) => {
+            let changed = false;
+            const next = { ...current };
+            rawPatches.forEach((rawPatch, patchIndex) => {
+              const resolvedPatch = patches[patchIndex];
+              if (!resolvedPatch) return;
+              for (const attribute of READER_MEDIA_PATCH_ATTRIBUTES) {
+                const source = rawPatch.sourceAttributes?.[attribute];
+                const resolved = resolvedPatch.attributes[attribute];
+                if (
+                  !source ||
+                  !resolved ||
+                  resolved.includes(READER_LOCAL_MEDIA_SRC_PREFIX) ||
+                  next[source] === resolved
+                ) {
+                  continue;
+                }
+                next[source] = resolved;
+                changed = true;
+              }
+            });
+            return changed ? next : current;
+          });
+          for (const [index, patch] of latestMediaElementPatchesRef.current) {
+            if (hasLocalMediaSourceAttributes(patch)) {
+              latestMediaElementPatchesRef.current.delete(index);
+            }
+          }
+          patchReaderMediaElements(content, patches);
+        }
+      } finally {
+        if (pendingLocalMediaSignatureRef.current === signature) {
+          pendingLocalMediaSignatureRef.current = null;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  useEffect(() => {
+    const node = viewportRef.current;
+    if (!node) return;
+    const syncViewportSize = () => {
+      const next = {
+        width: node.clientWidth,
+        height: node.clientHeight,
+      };
+      setViewportSize((current) =>
+        current.width === next.width && current.height === next.height
+          ? current
+          : next,
       );
     };
-    syncViewportWidth();
-    if (!content || typeof ResizeObserver === "undefined") return;
+    syncViewportSize();
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      syncViewportWidth();
+      syncViewportSize();
     });
     observer.observe(node);
-    observer.observe(content);
     return () => {
       observer.disconnect();
     };
   }, [restoreProgressPosition]);
+
+  useEffect(() => {
+    if (isPagedReader) return;
+    const content = contentRef.current;
+    if (!content) return;
+
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const measurements = [...content.querySelectorAll<HTMLElement>(
+        `[${READER_SEGMENT_INDEX_ATTRIBUTE}]`,
+      )].map((element) => {
+        const index = Number.parseInt(
+          element.getAttribute(READER_SEGMENT_INDEX_ATTRIBUTE) ?? "",
+          10,
+        );
+        if (!Number.isFinite(index) || index < 0) return null;
+        const style = window.getComputedStyle(element);
+        const marginTop = Number.parseFloat(style.marginTop) || 0;
+        const marginBottom = Number.parseFloat(style.marginBottom) || 0;
+        const height = Math.ceil(
+          element.getBoundingClientRect().height + marginTop + marginBottom,
+        );
+        return height > 0 ? { height, index } : null;
+      });
+      setSegmentHeights((current) => {
+        const next = [...current];
+        let changed = false;
+        for (const measurement of measurements) {
+          if (!measurement || next[measurement.index] === measurement.height) {
+            continue;
+          }
+          next[measurement.index] = measurement.height;
+          changed = true;
+        }
+        return changed ? next : current;
+      });
+    };
+    const scheduleMeasure = () => {
+      if (frame !== 0) return;
+      frame = window.requestAnimationFrame(measure);
+    };
+
+    scheduleMeasure();
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        if (frame !== 0) window.cancelAnimationFrame(frame);
+      };
+    }
+    const observer = new ResizeObserver(scheduleMeasure);
+    for (const element of content.querySelectorAll<HTMLElement>(
+      `[${READER_SEGMENT_INDEX_ATTRIBUTE}]`,
+    )) {
+      observer.observe(element);
+    }
+    return () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [isPagedReader, virtualRange.end, virtualRange.start, viewportSize.width]);
+
+  useEffect(() => {
+    const node = viewportRef.current;
+    if (!node || isPagedReader) return;
+    setVirtualRange(
+      virtualRangeForScroll(node.scrollTop, node.clientHeight, segmentOffsets),
+    );
+  }, [isPagedReader, segmentOffsets, viewportSize.height]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -920,7 +1837,13 @@ function ReaderContentInner(
       // eslint-disable-next-line no-console
       console.warn("[reader] custom JS failed", error);
     }
-  }, [appearance.customJs, renderedHtml]);
+  }, [
+    appearance.customJs,
+    isPagedReader,
+    renderedHtml,
+    virtualRange.end,
+    virtualRange.start,
+  ]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -937,7 +1860,13 @@ function ReaderContentInner(
     return () => {
       content.removeEventListener("error", handleMediaError, true);
     };
-  }, [onMediaError, renderedHtml]);
+  }, [
+    isPagedReader,
+    onMediaError,
+    renderedHtml,
+    virtualRange.end,
+    virtualRange.start,
+  ]);
 
   useEffect(() => {
     if (!general.showBatteryAndTime) return;
@@ -1028,9 +1957,9 @@ function ReaderContentInner(
       if (wheelCooldownTimerRef.current !== null) {
         window.clearTimeout(wheelCooldownTimerRef.current);
       }
-      if (pageScrollAnimationRef.current !== null) {
-        window.cancelAnimationFrame(pageScrollAnimationRef.current);
-        pageScrollAnimationRef.current = null;
+      if (pageScrollTimerRef.current !== null) {
+        window.clearTimeout(pageScrollTimerRef.current);
+        pageScrollTimerRef.current = null;
       }
       flushProgress(latestProgressRef.current);
     },
@@ -1080,11 +2009,12 @@ function ReaderContentInner(
     }
 
     event.preventDefault();
+    const node = getActiveScrollNode();
     if (wheelPagingLockedRef.current) {
       logReaderInput("wheel-suppressed", {
         delta: Math.round(delta),
         reason: "wheel-cooldown",
-        snapshot: getReaderDebugSnapshot(viewportRef.current),
+        snapshot: getReaderDebugSnapshot(node),
       });
       return;
     }
@@ -1094,7 +2024,7 @@ function ReaderContentInner(
       logReaderInput("wheel-accumulate", {
         delta: Math.round(delta),
         accumulated: Math.round(wheelDeltaRef.current),
-        snapshot: getReaderDebugSnapshot(viewportRef.current),
+        snapshot: getReaderDebugSnapshot(node),
       });
       return;
     }
@@ -1104,7 +2034,7 @@ function ReaderContentInner(
     wheelPagingLockedRef.current = true;
     logReaderInput("wheel-page-step", {
       direction,
-      snapshot: getReaderDebugSnapshot(viewportRef.current),
+      snapshot: getReaderDebugSnapshot(node),
     });
     scrollByPage(direction, "wheel-page-step");
 
@@ -1119,20 +2049,34 @@ function ReaderContentInner(
 
   const seekToProgress = useCallback(
     (value: number) => {
-      const node = viewportRef.current;
+      const node = getActiveScrollNode();
       if (!node) return;
       const clamped = clampProgress(value);
       if (clamped < 97) {
         completedForNavigationRef.current = false;
       }
-      scrollToProgress(node, clamped, isPagedReader, "auto");
-      const nextProgress = clampProgress(getProgress(node, isPagedReader));
+      if (isPagedReader) {
+        scrollToProgress(node, clamped, true, "auto");
+        const nextProgress = clampProgress(getProgress(node, true));
+        latestProgressRef.current = nextProgress;
+        setProgress(nextProgress);
+        applyPageInfo(getPageInfo(node, true));
+        scheduleProgressSave(nextProgress);
+        return;
+      }
+      scrollToProgress(node, clamped, false, "auto");
+      const nextProgress = clampProgress(getProgress(node, false));
       latestProgressRef.current = nextProgress;
       setProgress(nextProgress);
-      applyPageInfo(getPageInfo(node, isPagedReader));
+      applyPageInfo(getPageInfo(node, false));
       scheduleProgressSave(nextProgress);
     },
-    [applyPageInfo, isPagedReader, scheduleProgressSave],
+    [
+      applyPageInfo,
+      getActiveScrollNode,
+      isPagedReader,
+      scheduleProgressSave,
+    ],
   );
 
   const commitSeekProgress = useCallback(() => {
@@ -1140,15 +2084,20 @@ function ReaderContentInner(
   }, [flushProgress]);
 
   const contentStyle = useMemo<CSSProperties>(
-    () => ({
-      boxSizing: "border-box",
-      color: appearance.textColor,
-      fontSize: `${appearance.textSize}px`,
-      lineHeight: appearance.lineHeight,
-      textAlign: appearance.textAlign,
-      fontFamily: appearance.fontFamily || undefined,
-      padding: `${appearance.padding}px`,
-    }),
+    () =>
+      ({
+        "--lnr-reader-page-media-max-height": `${Math.max(
+          1,
+          viewportHeightPx - appearance.padding * 2,
+        )}px`,
+        boxSizing: "border-box",
+        color: appearance.textColor,
+        fontSize: `${appearance.textSize}px`,
+        lineHeight: appearance.lineHeight,
+        textAlign: appearance.textAlign,
+        fontFamily: appearance.fontFamily || undefined,
+        padding: `${appearance.padding}px`,
+      }) as CSSProperties,
     [
       appearance.fontFamily,
       appearance.lineHeight,
@@ -1156,9 +2105,9 @@ function ReaderContentInner(
       appearance.textAlign,
       appearance.textColor,
       appearance.textSize,
+      viewportHeightPx,
     ],
   );
-
   const pagedViewportWidth =
     viewportWidth > 0
       ? viewportWidth
@@ -1173,24 +2122,28 @@ function ReaderContentInner(
   const pageColumnWidth = Math.max(
     1,
     Math.floor(
-      visiblePageColumns > 1
-        ? (pageContentWidth - pageColumnGap) / visiblePageColumns
+      pageColumnsPerSpread > 1
+        ? (pageContentWidth - pageColumnGap) / pageColumnsPerSpread
         : pageContentWidth,
     ),
   );
   const pageStyle = useMemo<CSSProperties>(
     () =>
       isPagedReader
-        ? {
+        ? ({
+            "--lnr-reader-page-column-width": `${pageColumnWidth}px`,
             columnWidth: `${pageColumnWidth}px`,
             columnGap: `${pageColumnGap}px`,
             height: "100%",
             maxWidth: "none",
-          }
+            overflowX: "auto",
+            overflowY: "hidden",
+          } as CSSProperties)
         : {
-            maxWidth: `${SCROLL_MAX_WIDTH}px`,
+            maxWidth: "none",
             minHeight: "100%",
-            margin: "0 auto",
+            margin: "0",
+            width: "100%",
           },
     [isPagedReader, pageColumnGap, pageColumnWidth],
   );
@@ -1201,9 +2154,267 @@ function ReaderContentInner(
     }),
     [contentStyle, pageStyle],
   );
+  const readerContentRuntimeCss = useMemo(() => {
+    const pageDividerGradients =
+      pageColumnsPerSpread > 1
+        ? Array.from({ length: pageColumnsPerSpread - 1 }, (_, index) => {
+            const dividerLeft =
+              appearance.padding +
+              (index + 1) * pageColumnWidth +
+              index * pageColumnGap +
+              pageColumnGap / 2;
+            const start = Math.max(0, dividerLeft - 0.5);
+            const end = dividerLeft + 0.5;
+            return `linear-gradient(to right, transparent ${start}px, color-mix(in srgb, currentColor 28%, transparent) ${start}px, color-mix(in srgb, currentColor 28%, transparent) ${end}px, transparent ${end}px)`;
+          }).join(",\n")
+        : "";
+    const readerMediaSelector = cssSelectorList(
+      ".reader-content ",
+      READER_PAGE_MEDIA_ELEMENTS,
+    );
+    const pagedMediaSelector = cssSelectorList(
+      ".reader-viewport-paged .reader-content ",
+      READER_PAGE_MEDIA_ELEMENTS,
+    );
+    const pagedAtomicMediaSelector = cssSelectorList(
+      ".reader-viewport-paged .reader-content ",
+      ["figure", "picture", ...READER_PAGE_MEDIA_ELEMENTS],
+    );
+    const autoMediaSelector = cssSelectorList(
+      '.reader-viewport-paged .reader-content[data-image-paging="auto"] ',
+      READER_PAGE_MEDIA_ELEMENTS,
+    );
+    const nextPageMediaSelector = cssSelectorList(
+      '.reader-viewport-paged .reader-content[data-image-paging="next-page"] ',
+      READER_PAGE_MEDIA_ELEMENTS,
+    );
+    const nextPageFirstMediaSelector = [
+      cssSelectorList(
+        '.reader-viewport-paged .reader-content[data-image-paging="next-page"] > ',
+        READER_PAGE_MEDIA_ELEMENTS,
+        ":first-child",
+      ),
+      cssSelectorList(
+        '.reader-viewport-paged .reader-content[data-image-paging="next-page"] > :first-child ',
+        READER_PAGE_MEDIA_ELEMENTS,
+      ),
+    ].join(",\n");
+    const singleImageFlowSelector = cssSelectorList(
+      '.reader-viewport-paged .reader-content[data-image-paging="single-image"] > ',
+      READER_PAGE_SINGLE_FLOW_ELEMENTS,
+    );
+    const singleImageMediaSelector = cssSelectorList(
+      '.reader-viewport-paged .reader-content[data-image-paging="single-image"] ',
+      READER_PAGE_SINGLE_MEDIA_ELEMENTS,
+    );
+    const singleImageFirstMediaSelector = [
+      cssSelectorList(
+        '.reader-viewport-paged .reader-content[data-image-paging="single-image"] > ',
+        READER_PAGE_SINGLE_MEDIA_ELEMENTS,
+        ":first-child",
+      ),
+      cssSelectorList(
+        '.reader-viewport-paged .reader-content[data-image-paging="single-image"] > :first-child ',
+        READER_PAGE_SINGLE_MEDIA_ELEMENTS,
+        ":first-child",
+      ),
+    ].join(",\n");
+    const singleImageLastMediaSelector = [
+      cssSelectorList(
+        '.reader-viewport-paged .reader-content[data-image-paging="single-image"] > ',
+        READER_PAGE_SINGLE_MEDIA_ELEMENTS,
+        ":last-child",
+      ),
+      cssSelectorList(
+        '.reader-viewport-paged .reader-content[data-image-paging="single-image"] > :last-child ',
+        READER_PAGE_SINGLE_MEDIA_ELEMENTS,
+        ":last-child",
+      ),
+    ].join(",\n");
+    const fragmentMediaSelector = cssSelectorList(
+      '.reader-viewport-paged .reader-content[data-image-paging="fragment"] ',
+      READER_PAGE_MEDIA_ELEMENTS,
+    );
+
+    return `
+          ${readerMediaSelector} {
+            max-width: 100%;
+            height: auto;
+          }
+          ${pagedMediaSelector} {
+            display: block;
+            margin-inline: auto;
+            max-height: var(--lnr-reader-page-media-max-height);
+            object-fit: contain;
+            vertical-align: top;
+          }
+          ${pagedAtomicMediaSelector} {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .reader-content,
+          .reader-content [data-norea-reader-virtual-spacer] {
+            overflow-anchor: none;
+          }
+          ${autoMediaSelector} {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          ${nextPageMediaSelector} {
+            break-before: column;
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          ${nextPageFirstMediaSelector} {
+            break-before: auto;
+          }
+          ${singleImageFlowSelector} {
+            break-inside: auto !important;
+            page-break-inside: auto !important;
+          }
+          ${singleImageMediaSelector} {
+            break-before: column !important;
+            break-after: column !important;
+            break-inside: avoid !important;
+            page-break-before: always !important;
+            page-break-after: always !important;
+            page-break-inside: avoid !important;
+          }
+          ${singleImageFirstMediaSelector} {
+            break-before: auto !important;
+            page-break-before: auto !important;
+          }
+          ${singleImageLastMediaSelector} {
+            break-after: auto !important;
+            page-break-after: auto !important;
+          }
+          ${fragmentMediaSelector} {
+            break-inside: auto;
+            page-break-inside: auto;
+          }
+          .reader-content p {
+            margin-block: ${
+              general.removeExtraParagraphSpacing ? "0.65em" : "1em"
+            };
+          }
+          .reader-content strong {
+            font-weight: 800;
+          }
+          .reader-viewport-paged.reader-viewport-multi-page .reader-content .reader-epub-content,
+          .reader-viewport-paged.reader-viewport-multi-page .reader-content .reader-epub-section,
+          .reader-viewport-paged.reader-viewport-multi-page .reader-content .reader-epub-body,
+          .reader-viewport-paged.reader-viewport-multi-page .reader-content .reader-epub-body > .body {
+            box-sizing: border-box;
+            max-width: var(--lnr-reader-page-column-width) !important;
+            width: var(--lnr-reader-page-column-width) !important;
+          }
+          .reader-viewport-paged.reader-viewport-multi-page::after {
+            content: none;
+          }
+          .reader-viewport-paged.reader-viewport-multi-page .reader-content {
+            background-attachment: local;
+            background-image: ${pageDividerGradients};
+            background-repeat: repeat-x;
+            background-size: ${pagedViewportWidth}px 100%;
+          }
+          .reader-viewport-paged {
+            overscroll-behavior-x: contain;
+          }
+          .reader-viewport-paged .reader-content {
+            scrollbar-width: none;
+          }
+          .reader-viewport-paged[data-paged-renderer="columns"] .reader-content {
+            scroll-snap-type: x mandatory;
+          }
+          .reader-viewport-paged .reader-content::-webkit-scrollbar {
+            display: none;
+          }
+        `;
+  }, [
+    appearance.padding,
+    general.removeExtraParagraphSpacing,
+    pageColumnGap,
+    pageColumnWidth,
+    pageColumnsPerSpread,
+    pagedViewportWidth,
+  ]);
+
   const viewportClassName = `reader-viewport ${
     isPagedReader ? "reader-viewport-paged" : "reader-viewport-scroll"
-  }${isTwoPageReader ? " reader-viewport-two-page" : ""}`;
+  }${isMultiPageReader ? " reader-viewport-multi-page reader-viewport-two-page" : ""}`;
+  const normalizedVirtualRange = {
+    start: Math.max(0, virtualRange.start),
+    end: Math.min(virtualDocument.segments.length - 1, virtualRange.end),
+  };
+  const visibleSegments =
+    normalizedVirtualRange.end >= normalizedVirtualRange.start
+      ? virtualDocument.segments.slice(
+          normalizedVirtualRange.start,
+          normalizedVirtualRange.end + 1,
+        )
+      : virtualDocument.segments.slice(0, Math.min(8, virtualDocument.segments.length));
+  const firstVisibleIndex = visibleSegments[0]?.index ?? 0;
+  const lastVisibleIndex =
+    visibleSegments[visibleSegments.length - 1]?.index ?? -1;
+  const topSpacerHeight = segmentOffsets[firstVisibleIndex] ?? 0;
+  const bottomSpacerHeight =
+    lastVisibleIndex >= 0
+      ? Math.max(
+          0,
+          virtualContentHeight - (segmentOffsets[lastVisibleIndex + 1] ?? 0),
+        )
+      : 0;
+  const visibleSegmentsHtml = useMemo(
+    () => visibleSegments.map((segment) => segment.html).join(""),
+    [firstVisibleIndex, lastVisibleIndex, virtualDocument.segments],
+  );
+  const virtualSpacerStyle = useMemo(
+    () =>
+      ({
+        "--norea-reader-bottom-spacer-height": `${bottomSpacerHeight}px`,
+        "--norea-reader-content-height": `${virtualContentHeight}px`,
+        "--norea-reader-top-spacer-height": `${topSpacerHeight}px`,
+      }) as CSSProperties,
+    [bottomSpacerHeight, topSpacerHeight, virtualContentHeight],
+  );
+  const scrollVirtualHtml = useMemo(
+    () =>
+      protectLocalReaderMedia(
+        [
+          displayStaticHtml,
+          '<div data-norea-reader-virtual-canvas style="height:var(--norea-reader-content-height,0px);position:relative;width:100%">',
+          '<div data-norea-reader-virtual-window style="left:0;position:absolute;right:0;top:var(--norea-reader-top-spacer-height,0px)">',
+          visibleSegmentsHtml,
+          "</div></div>",
+        ].join(""),
+        resolvedLocalMediaMap,
+      ),
+    [displayStaticHtml, resolvedLocalMediaMap, visibleSegmentsHtml],
+  );
+  const pagedFullHtml = useMemo(
+    () =>
+      protectLocalReaderMedia(
+        displayStaticHtml +
+          virtualDocument.segments.map((segment) => segment.html).join(""),
+        resolvedLocalMediaMap,
+      ),
+    [displayStaticHtml, resolvedLocalMediaMap, virtualDocument.segments],
+  );
+  const readerContentHtml = isPagedReader ? pagedFullHtml : scrollVirtualHtml;
+  const readerContentStyle = useMemo<CSSProperties>(
+    () =>
+      isPagedReader
+        ? contentBoxStyle
+        : { ...contentBoxStyle, ...virtualSpacerStyle },
+    [contentBoxStyle, isPagedReader, virtualSpacerStyle],
+  );
+
+  useLayoutEffect(() => {
+    const patches = [...latestMediaElementPatchesRef.current.values()];
+    if (patches.length === 0) return;
+    const content = contentRef.current;
+    if (content) patchReaderMediaElements(content, patches);
+  }, [readerContentHtml]);
 
   return (
     <Box
@@ -1217,10 +2428,12 @@ function ReaderContentInner(
       <Box
         ref={viewportRef}
         className={viewportClassName}
+        data-page-columns={isPagedReader ? pageColumnsPerSpread : undefined}
+        data-paged-renderer={isPagedReader ? "columns" : undefined}
         onClickCapture={stopReaderMediaClick}
         onDoubleClickCapture={stopReaderMediaClick}
         onClick={handleClick}
-        onScroll={updateProgressFromScroll}
+        onScroll={isPagedReader ? undefined : updateProgressFromScroll}
         onWheel={handleWheel}
         onTouchStart={(event) => {
           if (interactionBlocked) return;
@@ -1254,81 +2467,24 @@ function ReaderContentInner(
           scrollBehavior: "auto",
         }}
       >
-        {appearance.customCss.trim() ? (
-          <style>{appearance.customCss}</style>
-        ) : null}
         <Box
           ref={contentRef}
-          className="reader-content"
+          className={virtualDocument.contentClassName}
           data-image-paging={
             isPagedReader ? general.htmlImagePagingMode : undefined
           }
-          style={contentBoxStyle}
-          dangerouslySetInnerHTML={renderedHtmlMarkup}
+          dir={virtualDocument.contentDirection}
+          lang={virtualDocument.contentLanguage}
+          onScroll={isPagedReader ? updateProgressFromScroll : undefined}
+          style={readerContentStyle}
+          dangerouslySetInnerHTML={{
+            __html: readerContentHtml,
+          }}
         />
-        <style>
-          {`
-          .reader-content :where(img, svg, video, canvas, iframe) {
-            max-width: 100%;
-            height: auto;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="auto"] :where(img, svg, video, canvas, iframe) {
-            break-inside: avoid;
-            page-break-inside: avoid;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="next-page"] :where(img, svg, video, canvas, iframe) {
-            break-before: column;
-            break-inside: avoid;
-            page-break-inside: avoid;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="next-page"] > :where(img, svg, video, canvas, iframe):first-child,
-          .reader-viewport-paged .reader-content[data-image-paging="next-page"] > :first-child :where(img, svg, video, canvas, iframe) {
-            break-before: auto;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :where(p, div, figure, a) {
-            break-inside: auto !important;
-            page-break-inside: auto !important;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="single-image"] :where(img, picture, svg, video, canvas, iframe) {
-            break-before: column !important;
-            break-after: column !important;
-            break-inside: avoid !important;
-            page-break-before: always !important;
-            page-break-after: always !important;
-            page-break-inside: avoid !important;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :where(img, picture, svg, video, canvas, iframe):first-child,
-          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :first-child :where(img, picture, svg, video, canvas, iframe):first-child {
-            break-before: auto !important;
-            page-break-before: auto !important;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :where(img, picture, svg, video, canvas, iframe):last-child,
-          .reader-viewport-paged .reader-content[data-image-paging="single-image"] > :last-child :where(img, picture, svg, video, canvas, iframe):last-child {
-            break-after: auto !important;
-            page-break-after: auto !important;
-          }
-          .reader-viewport-paged .reader-content[data-image-paging="fragment"] :where(img, svg, video, canvas, iframe) {
-            break-inside: auto;
-            page-break-inside: auto;
-          }
-          .reader-content p {
-            margin-block: ${
-              general.removeExtraParagraphSpacing ? "0.65em" : "1em"
-            };
-          }
-          .reader-content strong {
-            font-weight: 800;
-          }
-          .reader-viewport-paged {
-            overscroll-behavior-x: contain;
-            scroll-snap-type: x mandatory;
-            scrollbar-width: none;
-          }
-          .reader-viewport-paged::-webkit-scrollbar {
-            display: none;
-          }
-        `}
-        </style>
+        <style>{readerContentRuntimeCss}</style>
+        {appearance.customCss.trim() ? (
+          <style>{appearance.customCss}</style>
+        ) : null}
         {(general.showScrollPercentage || general.showBatteryAndTime) && (
           <Box
             style={{

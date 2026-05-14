@@ -64,6 +64,7 @@ const CUSTOM_CSS_PRESET_LABEL_KEYS: Record<
   webtoon: "readerSettings.customCssPreset.webtoon",
   "comic-spread": "readerSettings.customCssPreset.comicSpread",
   "comic-page": "readerSettings.customCssPreset.comicPage",
+  "page-fit-media": "readerSettings.customCssPreset.pageFitMedia",
 };
 
 type ReaderModeOption = "scroll" | "paged" | "two-page";

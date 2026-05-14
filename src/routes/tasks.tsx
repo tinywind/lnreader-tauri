@@ -20,8 +20,6 @@ import { Progress, Text } from "@mantine/core";
 import { useState, type CSSProperties } from "react";
 import { PageFrame, PageHeader, StateView } from "../components/AppFrame";
 import {
-  ArrowDownGlyph,
-  ArrowUpGlyph,
   ChevronDownGlyph,
   ChevronUpGlyph,
   CloseGlyph,
@@ -39,7 +37,6 @@ import { useTaskSnapshot } from "../lib/tasks/hooks";
 import {
   taskScheduler,
   type SourceQueueSortMode,
-  type TaskMoveTarget,
   type TaskPriority,
   type TaskQueueSortMode,
   type TaskRecord,
@@ -279,6 +276,7 @@ function TaskSortMenu() {
         aria-expanded={open}
         label={t("tasks.sort")}
         onClick={() => setOpen((value) => !value)}
+        size="lg"
       >
         <SortGlyph />
       </IconButton>
@@ -375,9 +373,6 @@ function TaskRow({
     const handle = taskScheduler.retry(task.id);
     if (handle) void handle.promise.catch(() => undefined);
   };
-  const move = (target: TaskMoveTarget) => {
-    taskScheduler.moveQueuedTask(task.id, target);
-  };
   const {
     attributes,
     isDragging,
@@ -459,36 +454,18 @@ function TaskRow({
         ) : null}
       </div>
       <div className="lnr-task-row-actions">
-        <IconButton
-          disabled={!canMove || task.queueIndex === 0}
-          label={t("tasks.moveUp")}
-          onClick={() => move("up")}
-        >
-          <ArrowUpGlyph />
-        </IconButton>
-        <IconButton
-          disabled={
-            !canMove ||
-            task.queueIndex === undefined ||
-            task.queueSize === undefined ||
-            task.queueIndex >= task.queueSize - 1
-          }
-          label={t("tasks.moveDown")}
-          onClick={() => move("down")}
-        >
-          <ArrowDownGlyph />
-        </IconButton>
         {task.canCancel ? (
           <IconButton
             label={t("common.cancel")}
             onClick={() => taskScheduler.cancel(task.id)}
+            size="lg"
             tone="danger"
           >
             <CloseGlyph />
           </IconButton>
         ) : null}
         {task.canRetry ? (
-          <IconButton label={t("common.retry")} onClick={retry}>
+          <IconButton label={t("common.retry")} onClick={retry} size="lg">
             <RetryGlyph />
           </IconButton>
         ) : null}
@@ -573,6 +550,7 @@ function TaskGroup({
                 sourceCollapsed ? t("tasks.expand") : t("tasks.collapse")
               }
               onClick={onToggleCollapsed}
+              size="lg"
             >
               {sourceCollapsed ? <ChevronDownGlyph /> : <ChevronUpGlyph />}
             </IconButton>
@@ -590,6 +568,7 @@ function TaskGroup({
                   taskScheduler.pauseSourceQueue(sourceId);
                 }
               }}
+              size="lg"
             >
               {sourcePaused ? <PlayGlyph /> : <PauseGlyph />}
             </IconButton>
@@ -602,6 +581,7 @@ function TaskGroup({
                   sourceId,
                 })
               }
+              size="lg"
               tone="danger"
             >
               <CloseGlyph />
@@ -822,6 +802,7 @@ export function TasksPage() {
                   taskScheduler.pauseSourceQueue();
                 }
               }}
+              size="lg"
             >
               {snapshot.sourceQueuesPaused ? <PlayGlyph /> : <PauseGlyph />}
             </IconButton>
@@ -829,6 +810,7 @@ export function TasksPage() {
               disabled={!hasCancellableTasks}
               label={t("tasks.cancelAllCurrent")}
               onClick={() => taskScheduler.cancelActiveTasks()}
+              size="lg"
               tone="danger"
             >
               <CloseGlyph />
@@ -837,6 +819,7 @@ export function TasksPage() {
               disabled={taskStats.failed === 0}
               label={t("tasks.clearErrors")}
               onClick={() => taskScheduler.clearFailedTasks()}
+              size="lg"
               tone="danger"
             >
               <TrashGlyph />

@@ -40,8 +40,6 @@ import {
   Tooltip,
 } from "@mantine/core";
 import {
-  ChevronDownGlyph,
-  ChevronUpGlyph,
   DetailsGlyph,
   DownloadGlyph,
   DownloadedGlyph,
@@ -85,6 +83,8 @@ import {
   type NovelDetailRecord,
 } from "../db/queries/novel";
 import { convertLocalImportFile } from "../lib/local-import";
+import { syncLocalChapterStorageAfterOrderChange } from "../lib/local-chapter-storage";
+import { cacheLocalImportedChapterMedia } from "../lib/local-import-media";
 import { syncNovelFromSource } from "../lib/plugins/sync-novel";
 import { clearChapterMedia } from "../lib/chapter-media";
 import {
@@ -128,7 +128,7 @@ const CHAPTER_ROW_HEIGHT = 54;
 const CHAPTER_LIST_OVERSCAN = 8;
 const CHAPTER_LIST_FALLBACK_ROWS = 14;
 const CHAPTER_DND_PREFIX = "chapter:";
-const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.epub,.pdf";
+const LOCAL_IMPORT_ACCEPT = ".txt,.html,.htm,.md,.markdown,.epub,.pdf";
 const EMPTY_CHAPTERS: ChapterListRow[] = [];
 const EMPTY_LOCAL_NOVEL_FORM: LocalNovelMetadataInput = {
   name: "",
@@ -241,6 +241,7 @@ async function convertLocalChapterFiles(
         content: chapter.content,
         contentBytes: chapter.contentBytes,
         contentType: chapter.contentType,
+        mediaResources: chapter.mediaResources,
         name: chapter.name,
         page: chapter.page,
         path: chapter.path,
@@ -447,8 +448,6 @@ interface ChapterListItemProps {
   onDownload: () => void;
   onDeleteDownload: () => void;
   onRepairMedia: () => void;
-  onMoveDown: () => void;
-  onMoveUp: () => void;
 }
 
 function ChapterListItem({
@@ -466,8 +465,6 @@ function ChapterListItem({
   onDownload,
   onDeleteDownload,
   onRepairMedia,
-  onMoveDown,
-  onMoveUp,
 }: ChapterListItemProps) {
   const { t } = useTranslation();
   const canDrag = (canMoveUp || canMoveDown) && !reorderBusy;
@@ -643,34 +640,6 @@ function ChapterListItem({
       </div>
 
       <div className="lnr-novel-chapter-actions">
-        {canMoveUp || canMoveDown ? (
-          <>
-            <IconButton
-              className="lnr-novel-icon-button"
-              disabled={!canMoveUp || reorderBusy}
-              label={t("novel.local.moveChapterUp")}
-              size="lg"
-              onClick={(event) => {
-                event.stopPropagation();
-                onMoveUp();
-              }}
-            >
-              <ChevronUpGlyph />
-            </IconButton>
-            <IconButton
-              className="lnr-novel-icon-button"
-              disabled={!canMoveDown || reorderBusy}
-              label={t("novel.local.moveChapterDown")}
-              size="lg"
-              onClick={(event) => {
-                event.stopPropagation();
-                onMoveDown();
-              }}
-            >
-              <ChevronDownGlyph />
-            </IconButton>
-          </>
-        ) : null}
         {showDownloadButton ? (
           <IconButton
             className="lnr-novel-icon-button"
@@ -735,7 +704,6 @@ interface VirtualChapterListProps {
   statuses: ReadonlyMap<number, ChapterDownloadStatus>;
   onDeleteDownload: (chapterId: number) => void;
   onDownload: (chapter: ChapterListRow) => void;
-  onMoveChapter: (chapterId: number, direction: -1 | 1) => void;
   onOpen: (chapter: ChapterListRow) => void;
   onRepairMedia: (chapter: ChapterListRow) => void;
   onReorderChapter: (chapterId: number, beforeChapterId: number | null) => void;
@@ -755,7 +723,6 @@ function VirtualChapterList({
   statuses,
   onDeleteDownload,
   onDownload,
-  onMoveChapter,
   onOpen,
   onRepairMedia,
   onReorderChapter,
@@ -886,8 +853,6 @@ function VirtualChapterList({
                     onDownload={() => onDownload(chapter)}
                     onDeleteDownload={() => onDeleteDownload(chapter.id)}
                     onRepairMedia={() => onRepairMedia(chapter)}
-                    onMoveDown={() => onMoveChapter(chapter.id, 1)}
-                    onMoveUp={() => onMoveChapter(chapter.id, -1)}
                   />
                 );
               })}
@@ -1142,6 +1107,7 @@ function ChapterSortPicker({ onChange, value }: ChapterSortPickerProps) {
     <IconButton
       active={value === "desc"}
       className="lnr-novel-icon-button lnr-novel-chapter-sort-button"
+      data-sort-direction={value}
       label={activeLabel}
       onClick={() => onChange(nextValue)}
       size="lg"
@@ -1629,7 +1595,23 @@ export function NovelDetailPage() {
         startPosition,
       );
       if (chapters.length === 0) return null;
+      const previousChapters = await listChaptersByNovel(id);
       const result = await upsertLocalNovelChapters(id, chapters);
+      const novel = novelQuery.data;
+      if (novel) {
+        const nextChapters = await listChaptersByNovel(id);
+        await syncLocalChapterStorageAfterOrderChange({
+          nextChapters,
+          novel,
+          previousChapters,
+        });
+        await cacheLocalImportedChapterMedia({
+          chapters,
+          novelId: id,
+          novelName: novel.name,
+          novelPath: novel.path,
+        });
+      }
       await mirrorStoredNovelChapters(id);
       return result;
     },
@@ -1647,8 +1629,18 @@ export function NovelDetailPage() {
   });
 
   const reorderLocalChapters = useMutation({
-    mutationFn: (chapterIds: number[]) =>
-      reorderLocalNovelChapters(id, chapterIds),
+    mutationFn: async (chapterIds: number[]) => {
+      const novel = novelQuery.data;
+      if (!novel?.isLocal) return;
+      const previousChapters = await listChaptersByNovel(id);
+      await reorderLocalNovelChapters(id, chapterIds);
+      const nextChapters = await listChaptersByNovel(id);
+      await syncLocalChapterStorageAfterOrderChange({
+        nextChapters,
+        novel,
+        previousChapters,
+      });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: chaptersKey(id) });
       void queryClient.invalidateQueries({ queryKey: ["novel", "library"] });
@@ -1941,26 +1933,6 @@ export function NovelDetailPage() {
     updateLocalMetadata.mutate(localMetadataForm);
   }
 
-  function moveLocalChapter(chapterId: number, direction: -1 | 1): void {
-    const novel = novelQuery.data;
-    if (!novel?.isLocal || reorderLocalChapters.isPending) return;
-
-    const displayOrder = [...chapters];
-    const currentIndex = displayOrder.findIndex(
-      (chapter) => chapter.id === chapterId,
-    );
-    const nextIndex = currentIndex + direction;
-    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= displayOrder.length) {
-      return;
-    }
-
-    const beforeChapterId =
-      direction > 0
-        ? displayOrder[nextIndex + 1]?.id ?? null
-        : displayOrder[nextIndex]?.id ?? null;
-    reorderLocalChapter(chapterId, beforeChapterId);
-  }
-
   function reorderLocalChapter(
     chapterId: number,
     beforeChapterId: number | null,
@@ -2156,7 +2128,6 @@ export function NovelDetailPage() {
                   void openChapter(chapter);
                 }}
                 onDownload={downloadChapter}
-                onMoveChapter={moveLocalChapter}
                 onRepairMedia={(chapter) => repairMedia.mutate(chapter)}
                 onReorderChapter={reorderLocalChapter}
                 onDeleteDownload={(chapterId) => {

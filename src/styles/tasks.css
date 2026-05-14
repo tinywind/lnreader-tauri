@@ -330,7 +330,7 @@
 
   .lnr-task-row-actions {
     display: grid;
-    grid-template-columns: repeat(2, 1.75rem);
+    grid-template-columns: repeat(2, 2.5rem);
   }
 }
 

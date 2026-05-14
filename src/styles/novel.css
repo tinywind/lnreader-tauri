@@ -584,6 +584,15 @@
   color: var(--lnr-design-ink);
 }
 
+.lnr-novel-chapter-sort-button svg {
+  transform-origin: center;
+  transition: transform 120ms ease;
+}
+
+.lnr-novel-chapter-sort-button[data-sort-direction="asc"] svg {
+  transform: rotate(180deg);
+}
+
 .lnr-novel-batch-download-menu {
   background: var(--lnr-design-surface);
   border-color: var(--lnr-design-rule-strong);
