@@ -36,6 +36,7 @@ vi.mock("../chapter-media", () => ({
   clearChapterMedia: vi.fn(),
   getStoredChapterMediaBytes: vi.fn(),
   hasRemoteChapterMedia: vi.fn(),
+  localChapterMediaSources: vi.fn(),
   storeEmbeddedChapterMedia: vi.fn(),
 }));
 vi.mock("../epub-html", () => ({
@@ -76,6 +77,7 @@ import {
   clearChapterMedia,
   getStoredChapterMediaBytes,
   hasRemoteChapterMedia,
+  localChapterMediaSources,
   storeEmbeddedChapterMedia,
 } from "../chapter-media";
 import { convertEpubToHtml, mergeEpubHtmlSections } from "../epub-html";
@@ -126,6 +128,7 @@ beforeEach(() => {
   vi.mocked(getNovelById).mockResolvedValue(null);
   vi.mocked(getStoredChapterMediaBytes).mockResolvedValue(3);
   vi.mocked(hasRemoteChapterMedia).mockReturnValue(true);
+  vi.mocked(localChapterMediaSources).mockReturnValue([]);
   vi.mocked(saveChapterContent).mockResolvedValue({ rowsAffected: 1 });
   vi.mocked(saveChapterPartialContent).mockResolvedValue({ rowsAffected: 1 });
   vi.mocked(convertEpubToHtml).mockResolvedValue({
@@ -709,11 +712,70 @@ describe("enqueueChapterMediaRepair", () => {
     expect(setDetail).toHaveBeenCalledWith("1 media assets repaired");
   });
 
+  it("repairs missing local media when downloaded HTML has no remote URLs", async () => {
+    const setDetail = vi.fn();
+    const storedHtml = `<img src="norea-media://chapter/7/0001-page.png">`;
+    vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
+    vi.mocked(localChapterMediaSources).mockReturnValueOnce([
+      "norea-media://chapter/7/0001-page.png",
+    ]);
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      chapterNumber: "7",
+      content: storedHtml,
+      contentType: "html",
+      id: 7,
+      isDownloaded: true,
+      name: "Chapter 7",
+      novelId: 11,
+      path: "/chapter/7",
+      position: 7,
+    } as never);
+    vi.mocked(getNovelById).mockResolvedValueOnce({
+      id: 11,
+      name: "Novel",
+      path: "/novel",
+    } as never);
+    vi.mocked(cacheHtmlChapterMedia).mockResolvedValueOnce({
+      html: storedHtml,
+      mediaFailures: [],
+      mediaBytes: 8,
+      storedMediaCount: 1,
+    });
+    vi.mocked(getStoredChapterMediaBytes).mockResolvedValueOnce(8);
+
+    enqueueChapterMediaRepair({
+      id: 7,
+      pluginId: "source-a",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      executor: "pool:1",
+      setDetail,
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        html: storedHtml,
+        previousHtml: storedHtml,
+        repair: true,
+      }),
+    );
+    expect(saveChapterContent).toHaveBeenCalledWith(7, storedHtml, "html", {
+      mediaBytes: 8,
+    });
+    expect(setDetail).toHaveBeenCalledWith("1 media assets repaired");
+  });
+
   it("succeeds without work when downloaded HTML has no remote media", async () => {
     const setDetail = vi.fn();
     vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
     vi.mocked(getChapterById).mockResolvedValueOnce({
-      content: `<img src="norea-media://chapter/7/page.png">`,
+      content: `<p>plain chapter</p>`,
       contentType: "html",
       id: 7,
       isDownloaded: true,

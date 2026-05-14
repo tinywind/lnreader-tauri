@@ -219,6 +219,7 @@ interface ChapterMediaManifest {
 interface MediaSrcTarget {
   attribute: MediaSrcAttribute;
   element: Element;
+  slotIndex: number;
   url: string;
 }
 
@@ -229,6 +230,7 @@ interface MediaStyleUrl {
 
 interface MediaStyleTarget {
   element: Element;
+  slotIndex: number;
   style: string;
   urls: MediaStyleUrl[];
 }
@@ -241,6 +243,7 @@ interface SrcsetCandidate {
 interface MediaSrcsetTarget {
   candidates: SrcsetCandidate[];
   element: Element;
+  slotIndex: number;
 }
 
 interface ExistingMediaSlots {
@@ -994,19 +997,28 @@ function collectMediaTargets(
   const srcsetTargets: MediaSrcsetTarget[] = [];
   const styleTargets: MediaStyleTarget[] = [];
   const urls: string[] = [];
+  let srcSlotIndex = 0;
+  let srcsetSlotIndex = 0;
+  let styleSlotIndex = 0;
 
   for (const element of root.querySelectorAll<Element>(MEDIA_SOURCE_SELECTOR)) {
     for (const attribute of MEDIA_SRC_ATTRIBUTES) {
       if (!shouldCollectMediaAttribute(element, attribute)) continue;
       const rawSource = element.getAttribute(attribute);
-      if (!rawSource) continue;
+      if (rawSource === null) continue;
       const url = absoluteMediaUrl(rawSource, baseUrl);
-      if (!url) continue;
-      srcTargets.push({ attribute, element, url });
-      addUniqueUrl(urls, url);
+      const slotIndex = srcSlotIndex;
+      srcSlotIndex += 1;
+      if (url) {
+        srcTargets.push({ attribute, element, slotIndex, url });
+        addUniqueUrl(urls, url);
+      }
     }
 
     const rawSrcset = element.getAttribute("srcset");
+    const slotIndex = srcsetSlotIndex;
+    if (rawSrcset === null) continue;
+    srcsetSlotIndex += 1;
     if (!rawSrcset) continue;
     const candidates = parseSrcset(rawSrcset);
     let hasRemoteCandidate = false;
@@ -1017,15 +1029,17 @@ function collectMediaTargets(
       addUniqueUrl(urls, url);
     }
     if (hasRemoteCandidate) {
-      srcsetTargets.push({ candidates, element });
+      srcsetTargets.push({ candidates, element, slotIndex });
     }
   }
 
   for (const element of root.querySelectorAll<Element>(MEDIA_STYLE_SELECTOR)) {
     const style = element.getAttribute("style") ?? "";
+    const slotIndex = styleSlotIndex;
+    styleSlotIndex += 1;
     const styleUrls = collectStyleMediaUrls(style, baseUrl);
     if (styleUrls.length === 0) continue;
-    styleTargets.push({ element, style, urls: styleUrls });
+    styleTargets.push({ element, slotIndex, style, urls: styleUrls });
     for (const { url } of styleUrls) {
       addUniqueUrl(urls, url);
     }
@@ -1148,13 +1162,13 @@ function collectSlotReusableMediaSources({
   const reusable = new Map<string, string>();
   const existingSlots = collectExistingMediaSlots(root);
 
-  srcTargets.forEach((target, index) => {
-    const src = existingSlots.srcSlots[index];
+  for (const target of srcTargets) {
+    const src = existingSlots.srcSlots[target.slotIndex];
     if (src) reusable.set(target.url, src);
-  });
+  }
 
-  srcsetTargets.forEach((target, index) => {
-    const localCandidates = existingSlots.srcsetSlots[index] ?? [];
+  for (const target of srcsetTargets) {
+    const localCandidates = existingSlots.srcsetSlots[target.slotIndex] ?? [];
     for (
       let candidateIndex = 0;
       candidateIndex < target.candidates.length &&
@@ -1168,10 +1182,10 @@ function collectSlotReusableMediaSources({
       const src = localCandidates[candidateIndex];
       if (sourceUrl && src) reusable.set(sourceUrl, src);
     }
-  });
+  }
 
-  styleTargets.forEach((target, index) => {
-    const localSources = existingSlots.styleSlots[index] ?? [];
+  for (const target of styleTargets) {
+    const localSources = existingSlots.styleSlots[target.slotIndex] ?? [];
     for (
       let styleIndex = 0;
       styleIndex < target.urls.length && styleIndex < localSources.length;
@@ -1180,7 +1194,7 @@ function collectSlotReusableMediaSources({
       const src = localSources[styleIndex];
       if (src) reusable.set(target.urls[styleIndex]!.url, src);
     }
-  });
+  }
 
   return reusable;
 }
@@ -1246,11 +1260,108 @@ async function filterExistingReusableMediaSources(
   return existing;
 }
 
+function isFetchableMediaUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+async function collectMissingManifestMediaSources({
+  chapterId,
+  context,
+  html,
+  manifest,
+}: {
+  chapterId: number;
+  context: ChapterMediaStorageContext;
+  html: string;
+  manifest: ChapterMediaManifest;
+}): Promise<Map<string, string>> {
+  const filesByName = new Map(
+    manifest.media.files.map((file) => [file.fileName, file]),
+  );
+  const missing = new Map<string, string>();
+  for (const src of localChapterMediaSources(html)) {
+    const fileName = fileNameFromLocalMediaSrc(src, chapterId);
+    if (!fileName) continue;
+    const manifestFile = filesByName.get(fileName);
+    if (
+      !manifestFile ||
+      manifestFile.status !== "stored" ||
+      !isFetchableMediaUrl(manifestFile.sourceUrl)
+    ) {
+      continue;
+    }
+    if ((await getStoredChapterMediaBytes(src, context)) <= 0) {
+      missing.set(manifestFile.sourceUrl, src);
+    }
+  }
+  return missing;
+}
+
 function outputMediaSourceForUrl(
   localSources: Map<string, string>,
   url: string,
 ): string {
   return localSources.get(url) ?? url;
+}
+
+function applyRemoteMediaFallback({
+  baseUrl,
+  srcTargets,
+  srcsetTargets,
+  styleTargets,
+  url,
+}: {
+  baseUrl: string | null | undefined;
+  srcTargets: MediaSrcTarget[];
+  srcsetTargets: MediaSrcsetTarget[];
+  styleTargets: MediaStyleTarget[];
+  url: string;
+}): void {
+  for (const target of srcTargets) {
+    if (target.url === url) {
+      const outputAttribute = mediaOutputAttribute(target.attribute);
+      target.element.setAttribute(outputAttribute, url);
+      if (target.attribute !== outputAttribute) {
+        target.element.removeAttribute(target.attribute);
+      }
+    }
+  }
+
+  for (const target of srcsetTargets) {
+    const currentCandidates = parseSrcset(
+      target.element.getAttribute("srcset") ?? "",
+    );
+    let changed = false;
+    const candidates = currentCandidates.map((candidate, index) => {
+      const sourceCandidate = target.candidates[index];
+      if (
+        sourceCandidate &&
+        absoluteMediaUrl(sourceCandidate.source, baseUrl) === url
+      ) {
+        changed = true;
+        return { ...candidate, source: url };
+      }
+      return candidate;
+    });
+    if (!changed) continue;
+    target.element.setAttribute("srcset", formatSrcset(candidates));
+  }
+
+  for (const target of styleTargets) {
+    if (!target.urls.some((styleUrl) => styleUrl.url === url)) continue;
+    const currentStyle = target.element.getAttribute("style") ?? "";
+    target.element.setAttribute(
+      "style",
+      rewriteStyleMediaUrls(currentStyle, baseUrl, (styleUrl) =>
+        styleUrl === url ? url : null,
+      ),
+    );
+  }
 }
 
 function applyResolvedMediaSource({
@@ -1492,7 +1603,7 @@ export async function cacheHtmlChapterMedia({
     baseUrl,
   );
 
-  if (urls.length === 0) {
+  if (urls.length === 0 && !repair) {
     return {
       html: template.innerHTML,
       mediaBytes: 0,
@@ -1536,6 +1647,14 @@ export async function cacheHtmlChapterMedia({
         storageContext,
       )
     : new Map<string, string>();
+  const missingManifestSources = repair
+    ? await collectMissingManifestMediaSources({
+        chapterId,
+        context: storageContext,
+        html: template.innerHTML,
+        manifest: previousManifest,
+      })
+    : new Map<string, string>();
   const localSources = new Map<string, string>(reusableSources);
   const mediaFilesBySourceUrl = new Map(
     previousManifest.media.files.map((file) => [file.sourceUrl, file]),
@@ -1567,10 +1686,32 @@ export async function cacheHtmlChapterMedia({
       updatedAt: Date.now(),
     });
   }
+  for (const url of missingManifestSources.keys()) {
+    const existing = mediaFilesBySourceUrl.get(url);
+    if (existing) {
+      mediaFilesBySourceUrl.set(url, {
+        ...existing,
+        status: "remote",
+        updatedAt: Date.now(),
+      });
+    }
+  }
+  const downloadUrls = [
+    ...new Set([...urls, ...missingManifestSources.keys()]),
+  ];
+  if (downloadUrls.length === 0) {
+    await cleanupChapterMediaWorkspace(storageContext).catch(() => undefined);
+    return {
+      html: template.innerHTML,
+      mediaBytes: 0,
+      mediaFailures,
+      storedMediaCount: 0,
+    };
+  }
   let storedMediaCount = 0;
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
   const reusableChangedElements = new Set<Element>();
-  for (const url of urls) {
+  for (const url of localSources.keys()) {
     const changedElements = applyResolvedMediaSource({
       baseUrl,
       localSources,
@@ -1583,17 +1724,20 @@ export async function cacheHtmlChapterMedia({
       reusableChangedElements.add(element);
     }
   }
-  await emitHtmlUpdate(onHtmlUpdate, template);
-  await emitMediaPatchUpdate(onMediaPatch, template, reusableChangedElements);
+  if (reusableChangedElements.size > 0) {
+    await emitHtmlUpdate(onHtmlUpdate, template);
+    await emitMediaPatchUpdate(onMediaPatch, template, reusableChangedElements);
+  }
   if (!repair) {
     await prepareChapterMediaWorkspace(storageContext, repair);
   }
 
-  for (let index = 0; index < urls.length; index += 1) {
+  for (let index = 0; index < downloadUrls.length; index += 1) {
     throwIfAborted(signal);
-    const url = urls[index]!;
+    const url = downloadUrls[index]!;
+    const mediaIndex = urls.indexOf(url);
     if (localSources.has(url)) {
-      onProgress?.({ current: index + 1, total: urls.length });
+      onProgress?.({ current: index + 1, total: downloadUrls.length });
       continue;
     }
     try {
@@ -1617,6 +1761,13 @@ export async function cacheHtmlChapterMedia({
           status: response.status,
           url,
         });
+        applyRemoteMediaFallback({
+          baseUrl,
+          srcTargets,
+          srcsetTargets,
+          styleTargets,
+          url,
+        });
       } else {
         throwIfAborted(signal);
         const body = bytesFromArrayBuffer(await response.arrayBuffer());
@@ -1626,7 +1777,12 @@ export async function cacheHtmlChapterMedia({
           mediaFilesBySourceUrl.get(url) ??
           ({
             bytes: 0,
-            fileName: mediaFileName(index, url, contentType, usedFileNames),
+            fileName: mediaFileName(
+              mediaIndex >= 0 ? mediaIndex : index,
+              url,
+              contentType,
+              usedFileNames,
+            ),
             path: "",
             sourceUrl: url,
             status: "remote",
@@ -1658,6 +1814,16 @@ export async function cacheHtmlChapterMedia({
           updatedAt: Date.now(),
         });
         storedMediaCount += 1;
+        const changedElements = applyResolvedMediaSource({
+          baseUrl,
+          localSources,
+          srcTargets,
+          srcsetTargets,
+          styleTargets,
+          url,
+        });
+        await emitHtmlUpdate(onHtmlUpdate, template);
+        await emitMediaPatchUpdate(onMediaPatch, template, changedElements);
       }
     } catch (error) {
       if (signal?.aborted) {
@@ -1671,19 +1837,16 @@ export async function cacheHtmlChapterMedia({
         sourceId,
         url,
       });
+      applyRemoteMediaFallback({
+        baseUrl,
+        srcTargets,
+        srcsetTargets,
+        styleTargets,
+        url,
+      });
     }
     throwIfAborted(signal);
-    const changedElements = applyResolvedMediaSource({
-      baseUrl,
-      localSources,
-      srcTargets,
-      srcsetTargets,
-      styleTargets,
-      url,
-    });
-    await emitHtmlUpdate(onHtmlUpdate, template);
-    await emitMediaPatchUpdate(onMediaPatch, template, changedElements);
-    onProgress?.({ current: index + 1, total: urls.length });
+    onProgress?.({ current: index + 1, total: downloadUrls.length });
   }
 
   await writeChapterMediaManifest({
@@ -1724,11 +1887,6 @@ export async function cacheHtmlChapterMedia({
     mediaBytes = await getStoredChapterMediaBytes(template.innerHTML, storageContext);
   }
   clearMediaSourceMetadata(template.content);
-  await emitMediaPatchUpdate(
-    onMediaPatch,
-    template,
-    collectAllMediaPatchElements(template.content),
-  );
 
   return {
     ...(archiveFailure ? { archiveFailure } : {}),
@@ -1912,7 +2070,7 @@ export async function resolveLocalChapterMediaPatches(
   patches: ChapterMediaElementPatch[],
   context?: ChapterMediaStorageContext,
 ): Promise<ChapterMediaElementPatch[]> {
-  return Promise.all(
+  const resolvedPatches = await Promise.all(
     patches.map(async (patch) => {
       const attributes: Record<string, string> = {};
       await Promise.all(
@@ -1961,12 +2119,16 @@ export async function resolveLocalChapterMediaPatches(
             );
             return;
           }
+          if (!value.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return;
           const src = await resolveLocalChapterMediaSrc(value, context);
           if (src) attributes[attribute] = src;
         }),
       );
       return { ...patch, attributes };
     }),
+  );
+  return resolvedPatches.filter(
+    (patch) => Object.keys(patch.attributes).length > 0,
   );
 }
 

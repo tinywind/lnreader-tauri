@@ -611,6 +611,7 @@ export function ReaderPage() {
           ),
         });
         if (cancelled) return;
+        if (patches.length === 0) return;
         const content =
           readerDocument?.chapterId === chapter.id ? contentRef.current : null;
         if (content) {
@@ -1250,7 +1251,7 @@ export function ReaderPage() {
           Object.values(patch.attributes).some((value) => value === ""),
         ),
       });
-      if (!cancelled) {
+      if (!cancelled && patches.length > 0) {
         contentRef.current?.patchMediaElements(patches);
       }
     })();

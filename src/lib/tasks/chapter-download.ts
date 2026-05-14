@@ -19,6 +19,7 @@ import {
   clearChapterMedia,
   getStoredChapterMediaBytes,
   hasRemoteChapterMedia,
+  localChapterMediaSources,
   storeEmbeddedChapterMedia,
   type ChapterMediaElementPatch,
 } from "../chapter-media";
@@ -766,7 +767,10 @@ export function enqueueChapterMediaRepair(
           `chapter-media-repair: failed to resolve chapter URL for "${chapter.name}".`,
         );
       }
-      if (!hasRemoteChapterMedia(chapter.content, baseUrl)) {
+      if (
+        !hasRemoteChapterMedia(chapter.content, baseUrl) &&
+        localChapterMediaSources(chapter.content).length === 0
+      ) {
         setDetail("No remote media to repair");
         setProgress({ current: progressTotal, total: progressTotal });
         return;
