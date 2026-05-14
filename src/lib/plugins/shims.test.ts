@@ -144,15 +144,58 @@ describe("createShimResolver", () => {
 
   it("@libs/fetch surfaces the host fetch wrappers", () => {
     const lib = resolve("@libs/fetch") as {
+      appFetch: unknown;
       fetchApi: unknown;
       fetchFile: unknown;
       fetchText: unknown;
       fetchProto: unknown;
     };
+    expect(typeof lib.appFetch).toBe("function");
     expect(typeof lib.fetchApi).toBe("function");
     expect(typeof lib.fetchFile).toBe("function");
     expect(typeof lib.fetchText).toBe("function");
     expect(typeof lib.fetchProto).toBe("function");
+  });
+
+  it("@libs/fetch appFetch uses the native app HTTP path", async () => {
+    invokeMock.mockImplementation(async (command, payload) => {
+      if (command === "plugin:http|fetch") {
+        expect(payload).toEqual({
+          clientConfig: {
+            method: "GET",
+            url: "https://api.example.test/repos/demo/project",
+            headers: [["Accept", "application/json"]],
+            data: null,
+          },
+        });
+        return 7;
+      }
+      if (command === "plugin:http|fetch_send") {
+        expect(payload).toEqual({ rid: 7 });
+        return {
+          status: 204,
+          statusText: "No Content",
+          url: "https://api.example.test/repos/demo/project",
+          headers: {},
+          rid: 7,
+        };
+      }
+      throw new Error(`Unexpected command ${command}`);
+    });
+    const lib = resolve("@libs/fetch") as {
+      appFetch: (
+        url: string,
+        init?: { headers?: Record<string, string> },
+      ) => Promise<Response>;
+    };
+
+    const response = await lib.appFetch(
+      "https://api.example.test/repos/demo/project",
+      { headers: { Accept: "application/json" } },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.url).toBe("https://api.example.test/repos/demo/project");
   });
 
   it("@libs/fetch fetchFile uses the native media fallback after browser fetch failures", async () => {

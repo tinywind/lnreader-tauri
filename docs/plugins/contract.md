@@ -253,7 +253,7 @@ Plugins may only import modules exposed by `createShimResolver`:
 | `cheerio` | `{ load }` |
 | `dayjs` | `dayjs` |
 | `urlencode` | `{ encode, decode }` |
-| `@libs/fetch` | `{ fetchApi, fetchText, fetchProto }` |
+| `@libs/fetch` | `{ appFetch, fetchApi, fetchFile, fetchText, fetchProto }` |
 | `@libs/novelStatus` | `{ NovelStatus }` |
 | `@libs/filterInputs` | `{ FilterTypes }` |
 | `@libs/defaultCover` | `{ defaultCover }` |
@@ -347,6 +347,12 @@ empty strings.
 
 `@libs/fetch.fetchApi` and `fetchText` route through the plugin fetch path.
 Plugin-owned site traffic should use this path instead of bare browser `fetch`.
+
+`@libs/fetch.appFetch` routes through the app-native HTTP path. Use it for
+official APIs and repository-owned endpoints that do not need the scraper
+WebView cookie jar, such as a GitHub REST API connector. Do not use `appFetch`
+for ordinary source browsing, search, novel parsing, update checks, or chapter
+downloads from plugin-owned sites.
 
 The current flow:
 
