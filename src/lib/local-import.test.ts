@@ -57,6 +57,16 @@ describe("analyzeLocalImportFile", () => {
       format: "txt",
     });
   });
+
+  it("recognizes markdown files as hash-backed local imports", async () => {
+    const analysis = await analyzeLocalImportFile(
+      file(["# Heading"], "Chapter.md", "text/markdown"),
+    );
+
+    expect(analysis.format).toBe("markdown");
+    expect(analysis.pathKey).toBe(`local:markdown:${analysis.contentHash}`);
+    expect(analysis.duplicate.format).toBe("markdown");
+  });
 });
 
 describe("convertLocalImportFile", () => {
@@ -69,8 +79,8 @@ describe("convertLocalImportFile", () => {
     expect(result.chapters).toHaveLength(1);
     expect(result.chapters[0]).toMatchObject({
       name: "Plain",
-      contentType: "text",
-      content: `<section class="reader-text-content"><p>Line &lt;one&gt; &amp; &quot;two&quot; &#39;three&#39;</p></section>`,
+      contentType: "html",
+      content: `<article class="reader-text-content" data-source-format="text"><section class="reader-text-section" data-section-index="0"><p class="reader-text-paragraph" data-paragraph-index="0"><span class="reader-text-line" data-line-index="0">Line &lt;one&gt; &amp; &quot;two&quot; &#39;three&#39;</span></p></section></article>`,
     });
   });
 
@@ -92,6 +102,40 @@ describe("convertLocalImportFile", () => {
     });
   });
 
+  it("converts markdown files to sanitized reader HTML content", async () => {
+    const result = await convertLocalImportFile(
+      file(
+        [
+          [
+            "# Chapter",
+            "",
+            "[kept](https://example.test)",
+            "![Page](https://cdn.test/page.png)",
+            "<script>alert(1)</script>",
+          ].join("\n"),
+        ],
+        "Chapter.markdown",
+        "text/x-markdown",
+      ),
+    );
+
+    expect(result.analysis.format).toBe("markdown");
+    expect(result.chapters[0]).toMatchObject({
+      contentType: "html",
+      content: expect.stringContaining(
+        '<section class="reader-markdown-content">',
+      ),
+    });
+    expect(result.chapters[0]?.content).toContain("<h1>Chapter</h1>");
+    expect(result.chapters[0]?.content).toContain(
+      '<a href="https://example.test">kept</a>',
+    );
+    expect(result.chapters[0]?.content).toContain(
+      '<img src="https://cdn.test/page.png" alt="Page">',
+    );
+    expect(result.chapters[0]?.content).not.toContain("<script>");
+  });
+
   it("converts pdf files to data url content", async () => {
     const result = await convertLocalImportFile(
       file(["%PDF"], "Manual.pdf", "application/pdf"),
@@ -105,7 +149,7 @@ describe("convertLocalImportFile", () => {
     });
   });
 
-  it("converts epub spine items to html chapters", async () => {
+  it("merges epub spine items into one reader html chapter with embedded resources", async () => {
     mockedInvoke.mockImplementation(async (command, args) => {
       if (command === "plugin_zip_list") {
         return [
@@ -127,6 +171,24 @@ describe("convertLocalImportFile", () => {
             uncompressed_size: 128,
             is_file: true,
           },
+          {
+            name: "OEBPS/chapter-2.xhtml",
+            compressed_size: 128,
+            uncompressed_size: 128,
+            is_file: true,
+          },
+          {
+            name: "OEBPS/book.css",
+            compressed_size: 64,
+            uncompressed_size: 64,
+            is_file: true,
+          },
+          {
+            name: "OEBPS/images/page.png",
+            compressed_size: 4,
+            uncompressed_size: 4,
+            is_file: true,
+          },
         ];
       }
 
@@ -138,13 +200,24 @@ describe("convertLocalImportFile", () => {
       }
       if (path === "OEBPS/content.opf") {
         return bytes(
-          `<package><metadata><title>EPUB Book</title><creator>Writer</creator></metadata><manifest><item id="c1" href="chapter-1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`,
+          `<package><metadata><title>EPUB Book</title><creator>Writer</creator><language>en</language></metadata><manifest><item id="c1" href="chapter-1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="chapter-2.xhtml" media-type="application/xhtml+xml"/><item id="css" href="book.css" media-type="text/css"/><item id="page" href="images/page.png" media-type="image/png"/></manifest><spine page-progression-direction="ltr"><itemref idref="c1"/><itemref idref="c2"/></spine></package>`,
         );
       }
       if (path === "OEBPS/chapter-1.xhtml") {
         return bytes(
-          `<html><head><title>Chapter One</title></head><body><h1>Chapter One</h1><p onclick="run()">Body</p></body></html>`,
+          `<html><head><title>Chapter One</title><link rel="stylesheet" href="book.css"></head><body><h1>Chapter One</h1><p onclick="run()" style="margin:1em !important; background:url('images/page.png')">Body</p><img src="images/page.png" alt="Page"><svg><image href="images/page.png"></image><use xlink:href="images/page.png"></use></svg><a href="https://example.test">link</a><script>alert(1)</script></body></html>`,
         );
+      }
+      if (path === "OEBPS/chapter-2.xhtml") {
+        return bytes(
+          `<html><head><title>Chapter Two</title></head><body><h1>Chapter Two</h1><p>More body</p></body></html>`,
+        );
+      }
+      if (path === "OEBPS/book.css") {
+        return bytes(`body { color: red !important; background: url("images/page.png"); }`);
+      }
+      if (path === "OEBPS/images/page.png") {
+        return [1, 2, 3, 4];
       }
       throw new Error(`unexpected zip path: ${path ?? ""}`);
     });
@@ -159,9 +232,46 @@ describe("convertLocalImportFile", () => {
     });
     expect(result.chapters).toHaveLength(1);
     expect(result.chapters[0]).toMatchObject({
-      name: "Chapter One",
-      contentType: "html",
-      content: "<h1>Chapter One</h1><p>Body</p>",
+      name: "EPUB Book",
+      contentType: "epub",
+      content: expect.stringContaining(
+        '<article class="reader-epub-content" data-epub-rendered="true" lang="en" dir="ltr">',
+      ),
     });
+    expect(result.chapters[0]?.content).toContain(
+      '<section class="reader-epub-section"',
+    );
+    expect(result.chapters[0]?.content).toContain("<h1>Chapter One</h1>");
+    expect(result.chapters[0]?.content).toContain("<h1>Chapter Two</h1>");
+    expect(result.chapters[0]?.content).toContain(
+      '<p class="norea-epub-inline-style-1">Body</p>',
+    );
+    expect(result.chapters[0]?.content).toContain(
+      '<a href="https://example.test">link</a>',
+    );
+    expect(result.chapters[0]?.content).toContain(
+      "norea-epub-resource://OEBPS%2Fimages%2Fpage.png",
+    );
+    expect(result.chapters[0]?.content).toContain(
+      '<image href="norea-epub-resource://OEBPS%2Fimages%2Fpage.png">',
+    );
+    expect(result.chapters[0]?.content).toContain(
+      '<use xlink:href="norea-epub-resource://OEBPS%2Fimages%2Fpage.png">',
+    );
+    expect(result.chapters[0]?.content).toContain(
+      "@layer norea-epub-author",
+    );
+    expect(result.chapters[0]?.content).not.toContain("!important");
+    expect(result.chapters[0]?.content).not.toContain('style="');
+    expect(result.chapters[0]?.content).not.toContain("<script>");
+    expect(result.chapters[0]?.mediaResources).toEqual([
+      expect.objectContaining({
+        bytes: [1, 2, 3, 4],
+        fileName: "0001-page.png",
+        mediaType: "image/png",
+        placeholder: "norea-epub-resource://OEBPS%2Fimages%2Fpage.png",
+        sourcePath: "OEBPS/images/page.png",
+      }),
+    ]);
   });
 });

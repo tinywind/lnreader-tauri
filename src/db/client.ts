@@ -24,7 +24,7 @@ async function ensureMediaRepairNeededColumn(db: Database): Promise<void> {
   await db.execute(
     `UPDATE chapter
      SET media_repair_needed = CASE
-       WHEN content_type = 'html'
+       WHEN content_type IN ('html', 'markdown')
         AND content IS NOT NULL
         AND (
           content LIKE '%<img%http://%'

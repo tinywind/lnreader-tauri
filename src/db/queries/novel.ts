@@ -2,8 +2,10 @@ import { getDb } from "../client";
 import { UNCATEGORIZED_CATEGORY_ID } from "./category";
 import {
   normalizeChapterContentType,
+  storedChapterContentType,
   type ChapterContentType,
 } from "../../lib/chapter-content";
+import type { EpubHtmlResource } from "../../lib/epub-html";
 import { isLocalCoverSource } from "../../lib/local-cover";
 import type { LibrarySortOrder } from "../../store/library";
 
@@ -366,6 +368,7 @@ export interface LocalNovelImportChapterInput {
   contentType?: ChapterContentType;
   contentBytes: number;
   chapterNumber?: string | null;
+  mediaResources?: EpubHtmlResource[];
   page?: string;
   releaseTime?: string | null;
 }
@@ -387,6 +390,156 @@ export interface LocalNovelImportResult {
   changedChapters: number;
   novelId: number;
   chapterCount: number;
+}
+
+export interface LocalChapterOrderMutationResult {
+  rowsAffected: number;
+}
+
+function localImportPathKeyFromChapterPath(path: string): string | null {
+  const marker = "/chapter-";
+  const markerIndex = path.lastIndexOf(marker);
+  if (markerIndex < 0) return null;
+  const pathKey = path.slice(0, markerIndex);
+  if (!pathKey.startsWith("local:")) return null;
+  const chapterSuffix = path.slice(markerIndex + marker.length);
+  return /^\d{4}$/.test(chapterSuffix) ? pathKey : null;
+}
+
+async function deleteStaleLocalImportChapters(
+  db: Awaited<ReturnType<typeof getDb>>,
+  novelId: number,
+  chapters: LocalNovelImportChapterInput[],
+): Promise<number> {
+  const pathKeys = [
+    ...new Set(
+      chapters
+        .map((chapter) => localImportPathKeyFromChapterPath(chapter.path))
+        .filter((pathKey): pathKey is string => pathKey !== null),
+    ),
+  ];
+  if (pathKeys.length === 0) return 0;
+
+  const keepPaths = [...new Set(chapters.map((chapter) => chapter.path))];
+  const keepSql = keepPaths
+    .map((_, index) => `$${index + 3}`)
+    .join(", ");
+  let deletedChapters = 0;
+
+  for (const pathKey of pathKeys) {
+    const result = await db.execute(
+      `DELETE FROM chapter
+       WHERE novel_id = $1
+         AND path LIKE $2
+         AND path NOT IN (${keepSql})`,
+      [novelId, `${pathKey}/chapter-%`, ...keepPaths],
+    );
+    deletedChapters += result.rowsAffected;
+  }
+
+  return deletedChapters;
+}
+
+async function ensureLocalNovelExists(
+  db: Awaited<ReturnType<typeof getDb>>,
+  novelId: number,
+): Promise<void> {
+  const novelRows = await db.select<{ id: number }[]>(
+    `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
+    [novelId, LOCAL_PLUGIN_ID],
+  );
+  if (!novelRows[0]) {
+    throw new Error("local novel: target novel is not local");
+  }
+}
+
+async function renumberLocalNovelChaptersWithDb(
+  db: Awaited<ReturnType<typeof getDb>>,
+  novelId: number,
+): Promise<LocalChapterOrderMutationResult> {
+  const rows = await db.select<
+    { chapterNumber: string | null; id: number; position: number }[]
+  >(
+    `SELECT id, position, chapter_number AS chapterNumber
+     FROM chapter
+     WHERE novel_id = $1
+     ORDER BY position, id`,
+    [novelId],
+  );
+  const changedEntries = rows
+    .map((row, index) => ({
+      chapterId: row.id,
+      chapterNumber: String(index + 1),
+      position: index + 1,
+      previousChapterNumber: row.chapterNumber,
+      previousPosition: row.position,
+    }))
+    .filter(
+      (entry) =>
+        entry.previousPosition !== entry.position ||
+        entry.previousChapterNumber !== entry.chapterNumber,
+    );
+  if (changedEntries.length === 0) return { rowsAffected: 0 };
+
+  const requestedValuesSql = changedEntries
+    .map((_, index) => {
+      const idParam = index * 3 + 1;
+      const positionParam = idParam + 1;
+      const chapterNumberParam = idParam + 2;
+      return `($${idParam}, $${positionParam}, $${chapterNumberParam})`;
+    })
+    .join(", ");
+  const novelIdParam = changedEntries.length * 3 + 1;
+  const params = changedEntries.flatMap(
+    ({ chapterId, position, chapterNumber }) => [
+      chapterId,
+      position,
+      chapterNumber,
+    ],
+  );
+  const result = await db.execute(
+    `WITH requested(id, position, chapter_number) AS (VALUES ${requestedValuesSql})
+     UPDATE chapter
+     SET
+       position = (
+         SELECT requested.position
+         FROM requested
+         WHERE requested.id = chapter.id
+       ),
+       chapter_number = (
+         SELECT requested.chapter_number
+         FROM requested
+         WHERE requested.id = chapter.id
+       ),
+       updated_at = unixepoch()
+     WHERE novel_id = $${novelIdParam}
+       AND id IN (SELECT id FROM requested)
+       AND (
+         position IS NOT (
+           SELECT requested.position
+           FROM requested
+           WHERE requested.id = chapter.id
+         )
+         OR chapter_number IS NOT (
+           SELECT requested.chapter_number
+           FROM requested
+           WHERE requested.id = chapter.id
+         )
+       )`,
+    [...params, novelId],
+  );
+  if (result.rowsAffected !== changedEntries.length) {
+    throw new Error("local novel: failed to renumber chapter order");
+  }
+  return { rowsAffected: result.rowsAffected };
+}
+
+export async function renumberLocalNovelChapters(
+  novelId: number,
+): Promise<LocalChapterOrderMutationResult> {
+  const db = await getDb();
+  await ensureLocalNovelExists(db, novelId);
+  return renumberLocalNovelChaptersWithDb(db, novelId);
 }
 
 export interface LocalNovelMetadataInput {
@@ -524,13 +677,7 @@ export async function upsertLocalNovelChapters(
   chapters: LocalNovelImportChapterInput[],
 ): Promise<LocalNovelImportResult> {
   const db = await getDb();
-  const novelRows = await db.select<{ id: number }[]>(
-    `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
-    [novelId, LOCAL_PLUGIN_ID],
-  );
-  if (!novelRows[0]) {
-    throw new Error("local novel: target novel is not local");
-  }
+  await ensureLocalNovelExists(db, novelId);
 
   let changedChapters = 0;
   for (const chapter of chapters) {
@@ -569,12 +716,24 @@ export async function upsertLocalNovelChapters(
         chapter.chapterNumber ?? null,
         chapter.page ?? "1",
         chapter.releaseTime ?? null,
-        normalizeChapterContentType(chapter.contentType),
+        storedChapterContentType(
+          normalizeChapterContentType(chapter.contentType),
+        ),
         chapter.content,
         chapter.contentBytes,
       ],
     );
     if (chapterResult.rowsAffected > 0) changedChapters += 1;
+  }
+  const deletedChapters = await deleteStaleLocalImportChapters(
+    db,
+    novelId,
+    chapters,
+  );
+  changedChapters += deletedChapters;
+  if (deletedChapters > 0) {
+    const renumbered = await renumberLocalNovelChaptersWithDb(db, novelId);
+    changedChapters += renumbered.rowsAffected;
   }
 
   await db.execute(
@@ -596,16 +755,12 @@ export async function reorderLocalNovelChapters(
   chapterIds: number[],
 ): Promise<void> {
   const db = await getDb();
-  const novelRows = await db.select<{ id: number }[]>(
-    `SELECT id FROM novel WHERE id = $1 AND plugin_id = $2 AND is_local = 1`,
-    [novelId, LOCAL_PLUGIN_ID],
-  );
-  if (!novelRows[0]) {
-    throw new Error("local novel: target novel is not local");
-  }
+  await ensureLocalNovelExists(db, novelId);
 
-  const chapterRows = await db.select<{ id: number }[]>(
-    `SELECT id FROM chapter
+  const chapterRows = await db.select<
+    { chapterNumber: string | null; id: number; position: number }[]
+  >(
+    `SELECT id, position, chapter_number AS chapterNumber FROM chapter
      WHERE novel_id = $1
      ORDER BY position`,
     [novelId],
@@ -620,31 +775,48 @@ export async function reorderLocalNovelChapters(
     throw new Error("local novel: reorder ids must match existing chapters");
   }
 
-  const existingPositionById = new Map(
-    existingChapterIds.map((chapterId, index) => [chapterId, index + 1]),
+  const existingById = new Map(
+    chapterRows.map((chapter) => [
+      chapter.id,
+      {
+        chapterNumber: chapter.chapterNumber,
+        position: chapter.position,
+      },
+    ]),
   );
   const changedEntries = chapterIds
-    .map((chapterId, index) => ({ chapterId, position: index + 1 }))
-    .filter(
-      ({ chapterId, position }) =>
-        existingPositionById.get(chapterId) !== position,
-    );
+    .map((chapterId, index) => ({
+      chapterId,
+      chapterNumber: String(index + 1),
+      position: index + 1,
+    }))
+    .filter(({ chapterId, chapterNumber, position }) => {
+      const existing = existingById.get(chapterId);
+      return (
+        existing?.position !== position ||
+        existing.chapterNumber !== chapterNumber
+      );
+    });
   if (changedEntries.length === 0) return;
 
   const requestedValuesSql = changedEntries
     .map((_, index) => {
-      const idParam = index * 2 + 1;
+      const idParam = index * 3 + 1;
       const positionParam = idParam + 1;
-      return `($${idParam}, $${positionParam})`;
+      const chapterNumberParam = idParam + 2;
+      return `($${idParam}, $${positionParam}, $${chapterNumberParam})`;
     })
     .join(", ");
-  const novelIdParam = changedEntries.length * 2 + 1;
-  const params = changedEntries.flatMap(({ chapterId, position }) => [
-    chapterId,
-    position,
-  ]);
+  const novelIdParam = changedEntries.length * 3 + 1;
+  const params = changedEntries.flatMap(
+    ({ chapterId, position, chapterNumber }) => [
+      chapterId,
+      position,
+      chapterNumber,
+    ],
+  );
   const result = await db.execute(
-    `WITH requested(id, position) AS (VALUES ${requestedValuesSql})
+    `WITH requested(id, position, chapter_number) AS (VALUES ${requestedValuesSql})
      UPDATE chapter
      SET
        position = (
@@ -652,13 +824,25 @@ export async function reorderLocalNovelChapters(
          FROM requested
          WHERE requested.id = chapter.id
        ),
+       chapter_number = (
+         SELECT requested.chapter_number
+         FROM requested
+         WHERE requested.id = chapter.id
+       ),
        updated_at = unixepoch()
      WHERE novel_id = $${novelIdParam}
        AND id IN (SELECT id FROM requested)
-       AND position IS NOT (
-         SELECT requested.position
-         FROM requested
-         WHERE requested.id = chapter.id
+       AND (
+         position IS NOT (
+           SELECT requested.position
+           FROM requested
+           WHERE requested.id = chapter.id
+         )
+         OR chapter_number IS NOT (
+           SELECT requested.chapter_number
+           FROM requested
+           WHERE requested.id = chapter.id
+         )
        )`,
     [...params, novelId],
   );
@@ -757,12 +941,24 @@ export async function upsertLocalNovel(
         chapter.chapterNumber ?? null,
         chapter.page ?? "1",
         chapter.releaseTime ?? null,
-        normalizeChapterContentType(chapter.contentType),
+        storedChapterContentType(
+          normalizeChapterContentType(chapter.contentType),
+        ),
         chapter.content,
         chapter.contentBytes,
       ],
     );
     if (chapterResult.rowsAffected > 0) changedChapters += 1;
+  }
+  const deletedChapters = await deleteStaleLocalImportChapters(
+    db,
+    novelId,
+    input.chapters,
+  );
+  changedChapters += deletedChapters;
+  if (deletedChapters > 0) {
+    const renumbered = await renumberLocalNovelChaptersWithDb(db, novelId);
+    changedChapters += renumbered.rowsAffected;
   }
 
   return {

@@ -82,13 +82,9 @@ export function chapterContentRelativePath(
 export function chapterMediaRelativePath(
   novel: ChapterStorageNovelPathInput,
   chapter: ChapterStorageChapterPathInput,
-  cacheKey: string,
   fileName?: string,
 ): string {
-  const base = `${chapterMediaDirectoryRelativePath(novel, chapter)}/${safeSegment(
-    cacheKey,
-    "cache",
-  )}`;
+  const base = chapterMediaDirectoryRelativePath(novel, chapter);
   return fileName ? `${base}/${safeSegment(fileName, "media")}` : base;
 }
 
@@ -97,4 +93,18 @@ export function chapterMediaDirectoryRelativePath(
   chapter: ChapterStorageChapterPathInput,
 ): string {
   return `${chapterStorageRelativeDir(novel, chapter)}/media`;
+}
+
+export function chapterMediaArchiveRelativePath(
+  novel: ChapterStorageNovelPathInput,
+  chapter: ChapterStorageChapterPathInput,
+): string {
+  return `${chapterStorageRelativeDir(novel, chapter)}/media.zip`;
+}
+
+export function chapterMediaManifestRelativePath(
+  novel: ChapterStorageNovelPathInput,
+  chapter: ChapterStorageChapterPathInput,
+): string {
+  return `${chapterStorageRelativeDir(novel, chapter)}/manifest.json`;
 }

@@ -1,6 +1,7 @@
 ﻿import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
   normalizeChapterContentType,
+  storedChapterContentType,
   type ChapterContentType,
 } from "../../lib/chapter-content";
 import { chapterMediaRepairFlag } from "../../lib/chapter-media-state";
@@ -347,7 +348,9 @@ export async function saveChapterContent(
   options: SaveChapterContentOptions = {},
 ): Promise<ChapterMutationResult> {
   const db = await getDb();
-  const normalizedContentType = normalizeChapterContentType(contentType);
+  const normalizedContentType = storedChapterContentType(
+    normalizeChapterContentType(contentType),
+  );
   const result = await db.execute(
     `UPDATE chapter
      SET
@@ -377,7 +380,9 @@ export async function saveChapterPartialContent(
   contentType: ChapterContentType = DEFAULT_CHAPTER_CONTENT_TYPE,
 ): Promise<ChapterMutationResult> {
   const db = await getDb();
-  const normalizedContentType = normalizeChapterContentType(contentType);
+  const normalizedContentType = storedChapterContentType(
+    normalizeChapterContentType(contentType),
+  );
   const result = await db.execute(
     `UPDATE chapter
      SET

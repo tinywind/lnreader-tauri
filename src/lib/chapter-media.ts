@@ -6,18 +6,20 @@ import {
   archiveAndroidStorageDirectory,
   androidStoragePathSize,
   clearAndroidStorageRoot,
-  deleteAndroidStorageChildrenExcept,
   deleteAndroidStoragePath,
+  extractAndroidStorageZip,
   readAndroidStorageDataUrl,
   readAndroidStorageText,
   readAndroidStorageZipEntryDataUrl,
+  renameAndroidStoragePath,
   writeAndroidStorageBytes,
   writeAndroidStorageText,
 } from "./android-storage";
 import {
+  chapterMediaArchiveRelativePath,
   chapterMediaDirectoryRelativePath,
+  chapterMediaManifestRelativePath,
   chapterMediaRelativePath,
-  chapterStorageRelativeDir,
   type ChapterStorageChapterPathInput,
   type ChapterStorageNovelPathInput,
 } from "./chapter-storage-path";
@@ -27,9 +29,9 @@ import { isAndroidRuntime, isTauriRuntime } from "./tauri-runtime";
 
 const LOCAL_MEDIA_SRC_PREFIX = "norea-media://chapter/";
 const LOCAL_CHAPTER_MEDIA_SRC_PATTERN =
-  /norea-media:\/\/chapter\/\d+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/g;
+  /norea-media:\/\/chapter\/[1-9]\d*\/[A-Za-z0-9._-]+(?=$|[^A-Za-z0-9._/-])/g;
 const LOCAL_CHAPTER_MEDIA_SRC_DETAIL_PATTERN =
-  /^norea-media:\/\/chapter\/(\d+)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/;
+  /^norea-media:\/\/chapter\/([1-9]\d*)\/([A-Za-z0-9._-]+)$/;
 const MEDIA_SOURCE_URL_ATTRIBUTE = "data-norea-media-source-url";
 const MEDIA_SRCSET_SOURCE_ATTRIBUTE = "data-norea-media-srcset-source";
 const MEDIA_LAZY_SRC_ATTRIBUTES = [
@@ -43,6 +45,7 @@ const MEDIA_SRC_ATTRIBUTES = [
   "poster",
   "data",
   "href",
+  "xlink:href",
   ...MEDIA_LAZY_SRC_ATTRIBUTES,
 ] as const;
 type MediaSrcAttribute = (typeof MEDIA_SRC_ATTRIBUTES)[number];
@@ -74,6 +77,10 @@ const MEDIA_SOURCE_TARGETS: Array<{
   { attribute: "href", selector: 'link[href][rel~="preload"][as="image"]' },
   { attribute: "href", selector: 'link[href][rel~="preload"][as="video"]' },
   { attribute: "href", selector: 'link[href][rel~="preload"][as="audio"]' },
+  { attribute: "href", selector: "image[href]" },
+  { attribute: "xlink:href", selector: "image[xlink\\:href]" },
+  { attribute: "href", selector: "use[href]" },
+  { attribute: "xlink:href", selector: "use[xlink\\:href]" },
 ];
 const MEDIA_SOURCE_SELECTOR = [
   ...MEDIA_SOURCE_TARGETS.map((target) => target.selector),
@@ -90,6 +97,7 @@ const MEDIA_PATCH_ATTRIBUTES = [
   "poster",
   "data",
   "href",
+  "xlink:href",
   "data-src",
   "data-original",
   "data-lazy-src",
@@ -101,11 +109,11 @@ const STYLE_URL_PATTERN =
 const DEFAULT_MEDIA_EXTENSION = "bin";
 const DEFAULT_MEDIA_ACCEPT =
   "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,audio/*,*/*;q=0.8";
-const CHAPTER_MEDIA_MANIFEST_FILE = "media-manifest.json";
+const CHAPTER_MEDIA_MANIFEST_FILE = "manifest.json";
 type ChapterMediaRequestInit = Pick<HttpInit, "body" | "headers" | "method">;
 
 interface CacheChapterMediaOptions {
-  baseUrl: string;
+  baseUrl?: string | null;
   chapterId: number;
   chapterName?: string | null;
   chapterNumber?: string | null;
@@ -120,6 +128,7 @@ interface CacheChapterMediaOptions {
   onProgress?: (progress: { current: number; total: number }) => void;
   previousHtml?: string | null;
   requestInit?: ChapterMediaRequestInit;
+  repair?: boolean;
   scraperExecutor?: ScraperExecutorId;
   signal?: AbortSignal;
   sourceId?: string;
@@ -128,6 +137,7 @@ interface CacheChapterMediaOptions {
 export interface ChapterMediaElementPatch {
   attributes: Record<string, string>;
   index: number;
+  sourceAttributes?: Record<string, string>;
 }
 
 export interface ChapterMediaFailure {
@@ -136,17 +146,24 @@ export interface ChapterMediaFailure {
   url: string;
 }
 
-interface CacheChapterMediaResult {
-  cacheKey: string | null;
+export interface CacheChapterMediaResult {
+  archiveFailure?: string;
   html: string;
   mediaFailures: ChapterMediaFailure[];
   mediaBytes: number;
   storedMediaCount: number;
 }
 
+export interface EmbeddedChapterMediaResource {
+  bytes: number[];
+  contentType?: string | null;
+  fileName: string;
+  placeholder: string;
+  sourcePath?: string;
+}
+
 interface ChapterMediaStoreInput {
   body: number[];
-  cacheKey: string;
   chapterId: number;
   chapterName?: string | null;
   chapterNumber?: string | null;
@@ -157,11 +174,9 @@ interface ChapterMediaStoreInput {
   novelName?: string | null;
   novelPath?: string | null;
   sourceId?: string;
-  sourceUrl?: string;
 }
 
 interface ChapterMediaArchiveInput {
-  cacheKey: string;
   chapterId: number;
   chapterName?: string | null;
   chapterNumber?: string | null;
@@ -184,17 +199,19 @@ export interface ChapterMediaStorageContext {
 }
 
 interface ChapterMediaManifestFile {
-  archivePath: string;
-  cacheKey: string;
+  bytes: number;
   contentType?: string;
   fileName: string;
   path: string;
   sourceUrl: string;
+  status: "remote" | "stored";
   updatedAt: number;
 }
 
 interface ChapterMediaManifest {
-  files: ChapterMediaManifestFile[];
+  media: {
+    files: ChapterMediaManifestFile[];
+  };
   updatedAt: number;
   version: 1;
 }
@@ -241,12 +258,15 @@ function isSkippableMediaSource(src: string): boolean {
   );
 }
 
-function absoluteMediaUrl(src: string, baseUrl: string): string | null {
+function absoluteMediaUrl(
+  src: string,
+  baseUrl?: string | null,
+): string | null {
   const trimmed = src.trim();
   if (isSkippableMediaSource(trimmed)) return null;
 
   try {
-    const url = new URL(trimmed, baseUrl);
+    const url = baseUrl ? new URL(trimmed, baseUrl) : new URL(trimmed);
     return url.protocol === "http:" || url.protocol === "https:"
       ? url.href
       : null;
@@ -270,7 +290,10 @@ function shouldCollectMediaAttribute(
   );
 }
 
-function collectStyleMediaUrls(style: string, baseUrl: string): MediaStyleUrl[] {
+function collectStyleMediaUrls(
+  style: string,
+  baseUrl?: string | null,
+): MediaStyleUrl[] {
   const urls: MediaStyleUrl[] = [];
 
   for (const match of style.matchAll(STYLE_URL_PATTERN)) {
@@ -295,7 +318,7 @@ function styleMediaSlots(style: string): Array<string | null> {
 
 function rewriteStyleMediaUrls(
   style: string,
-  baseUrl: string,
+  baseUrl: string | null | undefined,
   replacementForUrl: (url: string) => string | null,
 ): string {
   return style.replace(
@@ -378,16 +401,28 @@ function safeFileStem(value: string, fallback: string): string {
   return stem === "" || stem === "." || stem === ".." ? fallback : stem;
 }
 
-function shortUrlHash(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
+function uniqueFileName(fileName: string, usedFileNames: Set<string>): string {
+  if (!usedFileNames.has(fileName)) {
+    usedFileNames.add(fileName);
+    return fileName;
   }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  const extension = fileName.match(/\.([A-Za-z0-9]{1,8})$/)?.[0] ?? "";
+  const stem = extension ? fileName.slice(0, -extension.length) : fileName;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${stem}-${index}${extension}`;
+    if (!usedFileNames.has(candidate)) {
+      usedFileNames.add(candidate);
+      return candidate;
+    }
+  }
 }
 
-function mediaFileName(index: number, url: string, contentType: string | null) {
+function mediaFileName(
+  index: number,
+  url: string,
+  contentType: string | null,
+  usedFileNames: Set<string>,
+) {
   let leaf = "";
   try {
     const segments = new URL(url).pathname.split("/");
@@ -402,13 +437,7 @@ function mediaFileName(index: number, url: string, contentType: string | null) {
     DEFAULT_MEDIA_EXTENSION;
   const order = String(index + 1).padStart(4, "0");
   const stem = safeFileStem(leaf, `image-${index + 1}`);
-  return `${order}-${stem}-${shortUrlHash(url)}.${extension}`;
-}
-
-function makeCacheKey(): string {
-  return `${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}`;
+  return uniqueFileName(`${order}-${stem}.${extension}`, usedFileNames);
 }
 
 function bytesFromArrayBuffer(buffer: ArrayBuffer): number[] {
@@ -417,23 +446,20 @@ function bytesFromArrayBuffer(buffer: ArrayBuffer): number[] {
 
 function localChapterMediaSrc(
   chapterId: number,
-  cacheKey: string,
   fileName: string,
 ): string {
-  return `${LOCAL_MEDIA_SRC_PREFIX}${chapterId}/${cacheKey}/${fileName}`;
+  return `${LOCAL_MEDIA_SRC_PREFIX}${chapterId}/${fileName}`;
 }
 
 function androidChapterMediaRelativePath(
   chapterId: number,
-  cacheKey: string,
   fileName?: string,
 ): string {
-  const base = `chapter-media/${chapterId}/${cacheKey}`;
+  const base = `chapter-media/${chapterId}/media`;
   return fileName ? `${base}/${fileName}` : base;
 }
 
 function parseLocalChapterMediaSrc(src: string): {
-  cacheKey: string;
   chapterId: number;
   fileName: string;
 } | null {
@@ -441,8 +467,7 @@ function parseLocalChapterMediaSrc(src: string): {
   if (!match) return null;
   return {
     chapterId: Number(match[1]),
-    cacheKey: match[2]!,
-    fileName: match[3]!,
+    fileName: match[2]!,
   };
 }
 
@@ -498,35 +523,31 @@ async function storageContextForChapter(
 
 function androidChapterMediaRelativePathForContext(
   context: ChapterMediaStorageContext | null | undefined,
-  cacheKey: string,
   fileName?: string,
 ): string {
   if (!hasStorageContext(context)) {
     return androidChapterMediaRelativePath(
       context?.chapterId ?? 0,
-      cacheKey,
       fileName,
     );
   }
   return chapterMediaRelativePath(
     storageNovelPathInput(context),
     storageChapterPathInput(context),
-    cacheKey,
     fileName,
   );
 }
 
 function androidChapterMediaArchiveRelativePathForContext(
   context: ChapterMediaStorageContext | null | undefined,
-  cacheKey: string,
 ): string {
   if (!hasStorageContext(context)) {
-    return `chapter-media/${context?.chapterId ?? 0}/${cacheKey}.zip`;
+    return `chapter-media/${context?.chapterId ?? 0}/media.zip`;
   }
-  return `${chapterStorageRelativeDir(
+  return chapterMediaArchiveRelativePath(
     storageNovelPathInput(context),
     storageChapterPathInput(context),
-  )}/${cacheKey}.zip`;
+  );
 }
 
 function androidChapterMediaManifestRelativePath(
@@ -535,15 +556,17 @@ function androidChapterMediaManifestRelativePath(
   if (!hasStorageContext(context)) {
     return `chapter-media/${context?.chapterId ?? 0}/${CHAPTER_MEDIA_MANIFEST_FILE}`;
   }
-  return `${chapterStorageRelativeDir(
+  return chapterMediaManifestRelativePath(
     storageNovelPathInput(context),
     storageChapterPathInput(context),
-  )}/${CHAPTER_MEDIA_MANIFEST_FILE}`;
+  );
 }
 
 function emptyChapterMediaManifest(): ChapterMediaManifest {
   return {
-    files: [],
+    media: {
+      files: [],
+    },
     updatedAt: 0,
     version: 1,
   };
@@ -553,20 +576,23 @@ function parseChapterMediaManifest(raw: string | null): ChapterMediaManifest {
   if (!raw) return emptyChapterMediaManifest();
   try {
     const parsed = JSON.parse(raw) as Partial<ChapterMediaManifest>;
+    const files = Array.isArray(parsed.media?.files)
+      ? parsed.media.files
+      : [];
     return {
-      files: Array.isArray(parsed.files)
-        ? parsed.files.filter(
-            (file): file is ChapterMediaManifestFile =>
-              typeof file === "object" &&
-              file !== null &&
-              typeof file.archivePath === "string" &&
-              typeof file.cacheKey === "string" &&
-              typeof file.fileName === "string" &&
-              typeof file.path === "string" &&
-              typeof file.sourceUrl === "string" &&
-              typeof file.updatedAt === "number",
-          )
-        : [],
+      media: {
+        files: files.filter(
+          (file): file is ChapterMediaManifestFile =>
+            typeof file === "object" &&
+            file !== null &&
+            typeof file.bytes === "number" &&
+            typeof file.fileName === "string" &&
+            typeof file.path === "string" &&
+            typeof file.sourceUrl === "string" &&
+            (file.status === "remote" || file.status === "stored") &&
+            typeof file.updatedAt === "number",
+        ),
+      },
       updatedAt:
         typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
       version: 1,
@@ -576,82 +602,73 @@ function parseChapterMediaManifest(raw: string | null): ChapterMediaManifest {
   }
 }
 
-async function writeAndroidChapterMediaManifest({
-  cacheKey,
-  context,
-  contentType,
-  fileName,
-  sourceUrl,
-}: {
-  cacheKey: string;
-  context: ChapterMediaStorageContext;
-  contentType?: string | null;
-  fileName: string;
-  sourceUrl?: string;
-}): Promise<void> {
-  if (!sourceUrl) return;
-  const manifestPath = androidChapterMediaManifestRelativePath(context);
+function serializeChapterMediaManifest(
+  files: ChapterMediaManifestFile[],
+): string {
   const now = Date.now();
-  const manifest = parseChapterMediaManifest(
-    await readAndroidStorageText(manifestPath),
-  );
-  const nextFile: ChapterMediaManifestFile = {
-    archivePath: `${cacheKey}.zip`,
-    cacheKey,
-    ...(contentType ? { contentType } : {}),
-    fileName,
-    path: `media/${cacheKey}/${fileName}`,
-    sourceUrl,
-    updatedAt: now,
-  };
-  manifest.files = [
-    ...manifest.files.filter((file) => file.sourceUrl !== sourceUrl),
-    nextFile,
-  ].sort((left, right) => left.fileName.localeCompare(right.fileName));
-  manifest.updatedAt = now;
-  manifest.version = 1;
-  await writeAndroidStorageText(
-    manifestPath,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
+  return `${JSON.stringify(
+    {
+      media: {
+        files: [...files].sort((left, right) =>
+          left.fileName.localeCompare(right.fileName),
+        ),
+      },
+      updatedAt: now,
+      version: 1,
+    } satisfies ChapterMediaManifest,
+    null,
+    2,
+  )}\n`;
 }
 
-async function pruneAndroidChapterMediaManifest(
-  context: ChapterMediaStorageContext,
-  keepCacheKey: string,
-): Promise<void> {
+async function writeChapterMediaManifest({
+  context,
+  files,
+}: {
+  context: ChapterMediaStorageContext;
+  files: ChapterMediaManifestFile[];
+}): Promise<void> {
   const manifestPath = androidChapterMediaManifestRelativePath(context);
-  const raw = await readAndroidStorageText(manifestPath);
-  if (!raw) return;
-  const manifest = parseChapterMediaManifest(raw);
-  manifest.files = manifest.files.filter(
-    (file) => file.cacheKey === keepCacheKey,
-  );
-  manifest.updatedAt = Date.now();
-  await writeAndroidStorageText(
-    manifestPath,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
+  if (isAndroidRuntime()) {
+    await writeAndroidStorageText(manifestPath, serializeChapterMediaManifest(files));
+    return;
+  }
+  await invoke("chapter_media_write_manifest", {
+    files,
+    ...(context.chapterId ? { chapterId: context.chapterId } : {}),
+    ...(context.chapterName ? { chapterName: context.chapterName } : {}),
+    ...(context.chapterNumber ? { chapterNumber: context.chapterNumber } : {}),
+    ...(context.chapterPosition
+      ? { chapterPosition: context.chapterPosition }
+      : {}),
+    ...(context.novelId ? { novelId: context.novelId } : {}),
+    ...(context.novelName ? { novelName: context.novelName } : {}),
+    ...(context.novelPath ? { novelPath: context.novelPath } : {}),
+    ...(context.sourceId ? { sourceId: context.sourceId } : {}),
+  });
 }
 
-function androidArchiveRelativePathFromMediaRelativePath(
-  relativePath: string,
-  cacheKey: string,
-): string | null {
-  const normalized = relativePath.replace(/\\/g, "/");
-  const mediaCacheSegment = `/media/${cacheKey}/`;
-  const mediaCacheIndex = normalized.lastIndexOf(mediaCacheSegment);
-  if (mediaCacheIndex >= 0) {
-    return `${normalized.slice(0, mediaCacheIndex)}/${cacheKey}.zip`;
+async function readChapterMediaManifest(
+  context: ChapterMediaStorageContext,
+): Promise<ChapterMediaManifest> {
+  if (isAndroidRuntime()) {
+    return parseChapterMediaManifest(
+      await readAndroidStorageText(androidChapterMediaManifestRelativePath(context)),
+    );
   }
-
-  const legacyCacheSegment = `/${cacheKey}/`;
-  const legacyCacheIndex = normalized.lastIndexOf(legacyCacheSegment);
-  if (normalized.startsWith("chapter-media/") && legacyCacheIndex >= 0) {
-    return `${normalized.slice(0, legacyCacheIndex)}/${cacheKey}.zip`;
-  }
-
-  return null;
+  const raw = await invoke<string | null>("chapter_media_read_manifest", {
+    chapterId: context.chapterId,
+    ...(context.chapterName ? { chapterName: context.chapterName } : {}),
+    ...(context.chapterNumber ? { chapterNumber: context.chapterNumber } : {}),
+    ...(context.chapterPosition
+      ? { chapterPosition: context.chapterPosition }
+      : {}),
+    ...(context.novelId ? { novelId: context.novelId } : {}),
+    ...(context.novelName ? { novelName: context.novelName } : {}),
+    ...(context.novelPath ? { novelPath: context.novelPath } : {}),
+    ...(context.sourceId ? { sourceId: context.sourceId } : {}),
+  });
+  return parseChapterMediaManifest(raw);
 }
 
 async function androidRelativePathFromLocalMediaSrc(
@@ -668,13 +685,11 @@ async function androidRelativePathFromLocalMediaSrc(
     return chapterMediaRelativePath(
       storageNovelPathInput(resolvedContext),
       storageChapterPathInput(resolvedContext),
-      parsed.cacheKey,
       parsed.fileName,
     );
   }
   return androidChapterMediaRelativePath(
     parsed.chapterId,
-    parsed.cacheKey,
     parsed.fileName,
   );
 }
@@ -683,19 +698,10 @@ export function localChapterMediaSources(html: string): string[] {
   return [...new Set(html.match(LOCAL_CHAPTER_MEDIA_SRC_PATTERN) ?? [])];
 }
 
-export function localChapterMediaCacheKeys(
+export function hasRemoteChapterMedia(
   html: string,
-  chapterId: number,
-): string[] {
-  const cacheKeys = new Set<string>();
-  for (const src of localChapterMediaSources(html)) {
-    const cacheKey = cacheKeyFromLocalMediaSrc(src, chapterId);
-    if (cacheKey) cacheKeys.add(cacheKey);
-  }
-  return [...cacheKeys];
-}
-
-export function hasRemoteChapterMedia(html: string, baseUrl: string): boolean {
+  baseUrl?: string | null,
+): boolean {
   if (typeof document === "undefined") return false;
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -737,11 +743,9 @@ export async function getStoredChapterMediaBytes(
 
       const parsed = parseLocalChapterMediaSrc(source);
       if (!parsed) continue;
-      const archivePath = androidArchiveRelativePathFromMediaRelativePath(
-        path,
-        parsed.cacheKey,
+      const archivePath = androidChapterMediaArchiveRelativePathForContext(
+        resolvedContext,
       );
-      if (!archivePath) continue;
       if (
         countedArchives.has(archivePath) ||
         !(await androidStorageZipEntryExists(archivePath, parsed.fileName))
@@ -786,7 +790,6 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 
 async function storeChapterMedia({
   body,
-  cacheKey,
   chapterId,
   chapterName,
   chapterNumber,
@@ -797,10 +800,9 @@ async function storeChapterMedia({
   novelName,
   novelPath,
   sourceId,
-  sourceUrl,
 }: ChapterMediaStoreInput): Promise<string> {
   if (isAndroidRuntime()) {
-    const src = localChapterMediaSrc(chapterId, cacheKey, fileName);
+    const src = localChapterMediaSrc(chapterId, fileName);
     const context = {
       chapterId,
       chapterName,
@@ -811,27 +813,21 @@ async function storeChapterMedia({
       novelPath,
       sourceId,
     };
-    await writeAndroidStorageBytes(
-      androidChapterMediaRelativePathForContext(context, cacheKey, fileName),
-      body,
-      mimeTypeFromFileName(fileName),
+    const relativePath = androidChapterMediaRelativePathForContext(
+      context,
+      fileName,
     );
-    try {
-      await writeAndroidChapterMediaManifest({
-        cacheKey,
-        context,
-        contentType,
-        fileName,
-        sourceUrl,
-      });
-    } catch (error) {
-      console.warn("[chapter-media] manifest update failed", error);
-    }
+    const partPath = `${relativePath}.part`;
+    await writeAndroidStorageBytes(
+      partPath,
+      body,
+      contentType ?? mimeTypeFromFileName(fileName),
+    );
+    await renameAndroidStoragePath(partPath, fileName);
     return src;
   }
   return invoke<string>("chapter_media_store", {
     body,
-    cacheKey,
     chapterId,
     ...(chapterName ? { chapterName } : {}),
     ...(chapterNumber ? { chapterNumber } : {}),
@@ -841,12 +837,10 @@ async function storeChapterMedia({
     ...(novelName ? { novelName } : {}),
     ...(novelPath ? { novelPath } : {}),
     ...(sourceId ? { sourceId } : {}),
-    ...(sourceUrl ? { sourceUrl } : {}),
   });
 }
 
 async function archiveChapterMediaCache({
-  cacheKey,
   chapterId,
   chapterName,
   chapterNumber,
@@ -868,8 +862,8 @@ async function archiveChapterMediaCache({
       sourceId,
     };
     return archiveAndroidStorageDirectory(
-      androidChapterMediaRelativePathForContext(context, cacheKey),
-      androidChapterMediaArchiveRelativePathForContext(context, cacheKey),
+      androidChapterMediaRelativePathForContext(context),
+      androidChapterMediaArchiveRelativePathForContext(context),
     );
   }
   return invoke<number>("chapter_media_archive_cache", {
@@ -877,11 +871,68 @@ async function archiveChapterMediaCache({
     ...(chapterName ? { chapterName } : {}),
     ...(chapterNumber ? { chapterNumber } : {}),
     ...(chapterPosition ? { chapterPosition } : {}),
-    cacheKey,
     ...(novelId ? { novelId } : {}),
     ...(novelName ? { novelName } : {}),
     ...(novelPath ? { novelPath } : {}),
     ...(sourceId ? { sourceId } : {}),
+  });
+}
+
+async function prepareChapterMediaWorkspace(
+  context: ChapterMediaStorageContext,
+  repair: boolean,
+): Promise<void> {
+  if (isAndroidRuntime()) {
+    const mediaPath = androidChapterMediaRelativePathForContext(context);
+    if (repair) {
+      await extractAndroidStorageZip(
+        androidChapterMediaArchiveRelativePathForContext(context),
+        mediaPath,
+      );
+    } else {
+      await deleteAndroidStoragePath(mediaPath);
+      await deleteAndroidStoragePath(
+        androidChapterMediaArchiveRelativePathForContext(context),
+      );
+      await deleteAndroidStoragePath(androidChapterMediaManifestRelativePath(context));
+    }
+    return;
+  }
+  await invoke("chapter_media_prepare_workspace", {
+    repair,
+    chapterId: context.chapterId,
+    ...(context.chapterName ? { chapterName: context.chapterName } : {}),
+    ...(context.chapterNumber ? { chapterNumber: context.chapterNumber } : {}),
+    ...(context.chapterPosition
+      ? { chapterPosition: context.chapterPosition }
+      : {}),
+    ...(context.novelId ? { novelId: context.novelId } : {}),
+    ...(context.novelName ? { novelName: context.novelName } : {}),
+    ...(context.novelPath ? { novelPath: context.novelPath } : {}),
+    ...(context.sourceId ? { sourceId: context.sourceId } : {}),
+  });
+}
+
+async function cleanupChapterMediaWorkspace(
+  context: ChapterMediaStorageContext,
+): Promise<void> {
+  if (isAndroidRuntime()) {
+    await deleteAndroidStoragePath(
+      androidChapterMediaRelativePathForContext(context),
+    );
+    return;
+  }
+  await invoke("chapter_media_cleanup_workspace", {
+    chapterId: context.chapterId,
+    ...(context.chapterName ? { chapterName: context.chapterName } : {}),
+    ...(context.chapterNumber ? { chapterNumber: context.chapterNumber } : {}),
+    ...(context.chapterPosition
+      ? { chapterPosition: context.chapterPosition }
+      : {}),
+    ...(context.novelId ? { novelId: context.novelId } : {}),
+    ...(context.novelName ? { novelName: context.novelName } : {}),
+    ...(context.novelPath ? { novelPath: context.novelPath } : {}),
+    ...(context.sourceId ? { sourceId: context.sourceId } : {}),
   });
 }
 
@@ -921,7 +972,7 @@ function localMediaSrc(value: string | null): string | null {
   return trimmed?.startsWith(LOCAL_MEDIA_SRC_PREFIX) ? trimmed : null;
 }
 
-function cacheKeyFromLocalMediaSrc(
+function fileNameFromLocalMediaSrc(
   src: string,
   chapterId: number,
 ): string | null {
@@ -932,7 +983,7 @@ function cacheKeyFromLocalMediaSrc(
 
 function collectMediaTargets(
   root: DocumentFragment,
-  baseUrl: string,
+  baseUrl?: string | null,
 ): {
   srcTargets: MediaSrcTarget[];
   srcsetTargets: MediaSrcsetTarget[];
@@ -1035,7 +1086,7 @@ function clearMediaSourceMetadata(root: DocumentFragment): void {
 
 function collectMetadataReusableMediaSources(
   root: DocumentFragment,
-  baseUrl: string,
+  baseUrl: string | null | undefined,
   urls: Set<string>,
 ): Map<string, string> {
   const reusable = new Map<string, string>();
@@ -1088,7 +1139,7 @@ function collectSlotReusableMediaSources({
   srcsetTargets,
   styleTargets,
 }: {
-  baseUrl: string;
+  baseUrl: string | null | undefined;
   root: DocumentFragment;
   srcTargets: MediaSrcTarget[];
   srcsetTargets: MediaSrcsetTarget[];
@@ -1143,7 +1194,7 @@ function collectReusableMediaSources({
   styleTargets,
   urls,
 }: {
-  baseUrl: string;
+  baseUrl: string | null | undefined;
   chapterId: number;
   previousHtml: string | null | undefined;
   srcTargets: MediaSrcTarget[];
@@ -1175,7 +1226,7 @@ function collectReusableMediaSources({
   }
 
   for (const [url, src] of reusable) {
-    if (!urlSet.has(url) || !cacheKeyFromLocalMediaSrc(src, chapterId)) {
+    if (!urlSet.has(url) || !fileNameFromLocalMediaSrc(src, chapterId)) {
       reusable.delete(url);
     }
   }
@@ -1195,17 +1246,6 @@ async function filterExistingReusableMediaSources(
   return existing;
 }
 
-function chooseCacheKey(
-  chapterId: number,
-  reusableSources: Iterable<string>,
-): string {
-  for (const src of reusableSources) {
-    const cacheKey = cacheKeyFromLocalMediaSrc(src, chapterId);
-    if (cacheKey) return cacheKey;
-  }
-  return makeCacheKey();
-}
-
 function outputMediaSourceForUrl(
   localSources: Map<string, string>,
   url: string,
@@ -1221,7 +1261,7 @@ function applyResolvedMediaSource({
   styleTargets,
   url,
 }: {
-  baseUrl: string;
+  baseUrl: string | null | undefined;
   localSources: Map<string, string>;
   srcTargets: MediaSrcTarget[];
   srcsetTargets: MediaSrcsetTarget[];
@@ -1431,13 +1471,13 @@ export async function cacheHtmlChapterMedia({
   onProgress,
   previousHtml,
   requestInit,
+  repair = false,
   scraperExecutor,
   signal,
   sourceId,
 }: CacheChapterMediaOptions): Promise<CacheChapterMediaResult> {
   if (!isTauriRuntime() || typeof document === "undefined") {
     return {
-      cacheKey: null,
       html,
       mediaBytes: 0,
       mediaFailures: [],
@@ -1454,7 +1494,6 @@ export async function cacheHtmlChapterMedia({
 
   if (urls.length === 0) {
     return {
-      cacheKey: null,
       html: template.innerHTML,
       mediaBytes: 0,
       mediaFailures: [],
@@ -1472,21 +1511,62 @@ export async function cacheHtmlChapterMedia({
     novelPath,
     sourceId,
   };
-  const reusableSources = await filterExistingReusableMediaSources(
-    collectReusableMediaSources({
-      baseUrl,
-      chapterId,
-      previousHtml,
-      srcTargets,
-      srcsetTargets,
-      styleTargets,
-      urls,
-    }),
-    storageContext,
-  );
-  const cacheKey = chooseCacheKey(chapterId, reusableSources.values());
-  const localSources = new Map<string, string>(reusableSources);
+  const mediaContextUrl = contextUrl ?? baseUrl ?? undefined;
+  const reusableCandidates = repair
+    ? collectReusableMediaSources({
+          baseUrl,
+          chapterId,
+          previousHtml,
+          srcTargets,
+          srcsetTargets,
+          styleTargets,
+          urls,
+        })
+    : new Map<string, string>();
   const mediaFailures: ChapterMediaFailure[] = [];
+  const previousManifest = repair
+    ? await readChapterMediaManifest(storageContext)
+    : emptyChapterMediaManifest();
+  if (repair) {
+    await prepareChapterMediaWorkspace(storageContext, repair);
+  }
+  const reusableSources = repair
+    ? await filterExistingReusableMediaSources(
+        reusableCandidates,
+        storageContext,
+      )
+    : new Map<string, string>();
+  const localSources = new Map<string, string>(reusableSources);
+  const mediaFilesBySourceUrl = new Map(
+    previousManifest.media.files.map((file) => [file.sourceUrl, file]),
+  );
+  const usedFileNames = new Set(
+    previousManifest.media.files.map((file) => file.fileName),
+  );
+  for (const src of reusableSources.values()) {
+    const fileName = fileNameFromLocalMediaSrc(src, chapterId);
+    if (fileName) usedFileNames.add(fileName);
+  }
+  for (let index = 0; index < urls.length; index += 1) {
+    const url = urls[index]!;
+    const existing = mediaFilesBySourceUrl.get(url);
+    if (existing) {
+      mediaFilesBySourceUrl.set(url, {
+        ...existing,
+        status: localSources.has(url) ? "stored" : "remote",
+      });
+      continue;
+    }
+    const fileName = mediaFileName(index, url, null, usedFileNames);
+    mediaFilesBySourceUrl.set(url, {
+      bytes: 0,
+      fileName,
+      path: `media/${fileName}`,
+      sourceUrl: url,
+      status: "remote",
+      updatedAt: Date.now(),
+    });
+  }
   let storedMediaCount = 0;
   tagCollectedMediaTargets(srcTargets, srcsetTargets);
   const reusableChangedElements = new Set<Element>();
@@ -1505,6 +1585,9 @@ export async function cacheHtmlChapterMedia({
   }
   await emitHtmlUpdate(onHtmlUpdate, template);
   await emitMediaPatchUpdate(onMediaPatch, template, reusableChangedElements);
+  if (!repair) {
+    await prepareChapterMediaWorkspace(storageContext, repair);
+  }
 
   for (let index = 0; index < urls.length; index += 1) {
     throwIfAborted(signal);
@@ -1520,14 +1603,14 @@ export async function cacheHtmlChapterMedia({
           Accept: DEFAULT_MEDIA_ACCEPT,
           ...(requestInit?.headers ?? {}),
         },
-        contextUrl: contextUrl ?? baseUrl,
+        ...(mediaContextUrl ? { contextUrl: mediaContextUrl } : {}),
         ...(scraperExecutor ? { scraperExecutor } : {}),
         signal,
         ...(sourceId ? { sourceId } : {}),
       });
       if (!response.ok) {
         recordChapterMediaFailure(mediaFailures, {
-          contextUrl: contextUrl ?? baseUrl,
+          contextUrl: mediaContextUrl ?? url,
           error: `HTTP ${response.status} ${response.statusText}`,
           scraperExecutor,
           sourceId,
@@ -1539,12 +1622,22 @@ export async function cacheHtmlChapterMedia({
         const body = bytesFromArrayBuffer(await response.arrayBuffer());
         throwIfAborted(signal);
         const contentType = response.headers.get("content-type");
+        const manifestFile =
+          mediaFilesBySourceUrl.get(url) ??
+          ({
+            bytes: 0,
+            fileName: mediaFileName(index, url, contentType, usedFileNames),
+            path: "",
+            sourceUrl: url,
+            status: "remote",
+            updatedAt: Date.now(),
+          } satisfies ChapterMediaManifestFile);
+        const fileName = manifestFile.fileName;
         const src = await storeChapterMedia({
           body,
-          cacheKey,
           chapterId,
           contentType,
-          fileName: mediaFileName(index, url, contentType),
+          fileName,
           chapterName,
           chapterNumber,
           chapterPosition,
@@ -1552,9 +1645,18 @@ export async function cacheHtmlChapterMedia({
           novelName,
           novelPath,
           sourceId,
-          sourceUrl: url,
         });
         localSources.set(url, src);
+        mediaFilesBySourceUrl.set(url, {
+          ...manifestFile,
+          bytes: body.length,
+          ...(contentType ? { contentType } : {}),
+          fileName,
+          path: `media/${fileName}`,
+          sourceUrl: url,
+          status: "stored",
+          updatedAt: Date.now(),
+        });
         storedMediaCount += 1;
       }
     } catch (error) {
@@ -1563,7 +1665,7 @@ export async function cacheHtmlChapterMedia({
       }
       if (isMediaAbortError(error)) throw error;
       recordChapterMediaFailure(mediaFailures, {
-        contextUrl: contextUrl ?? baseUrl,
+        contextUrl: mediaContextUrl ?? url,
         error,
         scraperExecutor,
         sourceId,
@@ -1584,10 +1686,15 @@ export async function cacheHtmlChapterMedia({
     onProgress?.({ current: index + 1, total: urls.length });
   }
 
+  await writeChapterMediaManifest({
+    context: storageContext,
+    files: [...mediaFilesBySourceUrl.values()],
+  });
+
   if (localSources.size === 0) {
+    await cleanupChapterMediaWorkspace(storageContext).catch(() => undefined);
     clearMediaSourceMetadata(template.content);
     return {
-      cacheKey: null,
       html: template.innerHTML,
       mediaBytes: 0,
       mediaFailures,
@@ -1595,17 +1702,27 @@ export async function cacheHtmlChapterMedia({
     };
   }
 
-  const mediaBytes = await archiveChapterMediaCache({
-    chapterId,
-    cacheKey,
-    chapterName,
-    chapterNumber,
-    chapterPosition,
-    novelId,
-    novelName,
-    novelPath,
-    sourceId,
-  });
+  let archiveFailure: string | undefined;
+  let mediaBytes = 0;
+  try {
+    mediaBytes = await archiveChapterMediaCache({
+      chapterId,
+      chapterName,
+      chapterNumber,
+      chapterPosition,
+      novelId,
+      novelName,
+      novelPath,
+      sourceId,
+    });
+  } catch (error) {
+    archiveFailure = mediaFailureMessage(error);
+    console.warn("[chapter-media] media archive failed", {
+      error: archiveFailure,
+      sourceId,
+    });
+    mediaBytes = await getStoredChapterMediaBytes(template.innerHTML, storageContext);
+  }
   clearMediaSourceMetadata(template.content);
   await emitMediaPatchUpdate(
     onMediaPatch,
@@ -1614,9 +1731,122 @@ export async function cacheHtmlChapterMedia({
   );
 
   return {
-    cacheKey,
+    ...(archiveFailure ? { archiveFailure } : {}),
     html: template.innerHTML,
     mediaFailures,
+    mediaBytes,
+    storedMediaCount,
+  };
+}
+
+export async function storeEmbeddedChapterMedia({
+  chapterId,
+  chapterName,
+  chapterNumber,
+  chapterPosition,
+  html,
+  novelId,
+  novelName,
+  novelPath,
+  resources,
+  sourceId,
+}: {
+  chapterId: number;
+  chapterName?: string | null;
+  chapterNumber?: string | null;
+  chapterPosition?: number | null;
+  html: string;
+  novelId?: number | null;
+  novelName?: string | null;
+  novelPath?: string | null;
+  resources: EmbeddedChapterMediaResource[];
+  sourceId?: string | null;
+}): Promise<Pick<CacheChapterMediaResult, "archiveFailure" | "html" | "mediaBytes" | "storedMediaCount">> {
+  const uniqueResources = [
+    ...new Map(resources.map((resource) => [resource.placeholder, resource])).values(),
+  ].filter((resource) => resource.placeholder && resource.bytes.length > 0);
+  if (!isTauriRuntime() || uniqueResources.length === 0) {
+    return {
+      html,
+      mediaBytes: 0,
+      storedMediaCount: 0,
+    };
+  }
+
+  const storageContext: ChapterMediaStorageContext = {
+    chapterId,
+    chapterName,
+    chapterNumber,
+    chapterPosition,
+    novelId,
+    novelName,
+    novelPath,
+    sourceId,
+  };
+  await prepareChapterMediaWorkspace(storageContext, false);
+
+  let rewrittenHtml = html;
+  const files: ChapterMediaManifestFile[] = [];
+  const usedFileNames = new Set<string>();
+  let storedMediaCount = 0;
+  for (const resource of uniqueResources) {
+    const fileName = uniqueFileName(resource.fileName, usedFileNames);
+    const src = await storeChapterMedia({
+      body: resource.bytes,
+      chapterId,
+      chapterName,
+      chapterNumber,
+      chapterPosition,
+      contentType: resource.contentType,
+      fileName,
+      novelId: novelId ?? undefined,
+      novelName,
+      novelPath,
+      sourceId: sourceId ?? undefined,
+    });
+    rewrittenHtml = rewrittenHtml.split(resource.placeholder).join(src);
+    files.push({
+      bytes: resource.bytes.length,
+      ...(resource.contentType ? { contentType: resource.contentType } : {}),
+      fileName,
+      path: `media/${fileName}`,
+      sourceUrl: resource.sourcePath ?? resource.placeholder,
+      status: "stored",
+      updatedAt: Date.now(),
+    });
+    storedMediaCount += 1;
+  }
+
+  await writeChapterMediaManifest({ context: storageContext, files });
+
+  let archiveFailure: string | undefined;
+  let mediaBytes = 0;
+  try {
+    mediaBytes = await archiveChapterMediaCache({
+      chapterId,
+      chapterName,
+      chapterNumber,
+      chapterPosition,
+      novelId: novelId ?? undefined,
+      novelName,
+      novelPath,
+      sourceId: sourceId ?? undefined,
+    });
+  } catch (error) {
+    archiveFailure = mediaFailureMessage(error);
+    console.warn("[chapter-media] embedded media archive failed", {
+      error: archiveFailure,
+      sourceId,
+    });
+    mediaBytes = await getStoredChapterMediaBytes(
+      rewrittenHtml,
+      storageContext,
+    );
+  }
+
+  return {
+    ...(archiveFailure ? { archiveFailure } : {}),
+    html: rewrittenHtml,
     mediaBytes,
     storedMediaCount,
   };
@@ -1647,22 +1877,24 @@ export async function resolveLocalChapterMediaSrc(
   if (!src.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return src;
   if (!isTauriRuntime()) return src;
   if (isAndroidRuntime()) {
+    const parsed = parseLocalChapterMediaSrc(src);
+    if (!parsed) return null;
+    const resolvedContext =
+      context?.chapterId === parsed.chapterId
+        ? context
+        : await storageContextForChapter(parsed.chapterId);
     const relativePath = await androidRelativePathFromLocalMediaSrc(
       src,
-      context,
+      resolvedContext ?? undefined,
     );
     if (!relativePath) return null;
     const directDataUrl = await readAndroidStorageDataUrl(relativePath);
     if (directDataUrl) return directDataUrl;
 
-    const parsed = parseLocalChapterMediaSrc(src);
-    const archivePath = parsed
-      ? androidArchiveRelativePathFromMediaRelativePath(
-          relativePath,
-          parsed.cacheKey,
-        )
-      : null;
-    return archivePath && parsed
+    const archivePath = androidChapterMediaArchiveRelativePathForContext(
+      resolvedContext,
+    );
+    return parsed
       ? readAndroidStorageZipEntryDataUrl(archivePath, parsed.fileName)
       : null;
   }
@@ -1758,6 +1990,9 @@ export async function resolveLocalChapterMedia(
   const styleElements = [
     ...template.content.querySelectorAll<Element>(MEDIA_STYLE_SELECTOR),
   ];
+  const styleSheetElements = [
+    ...template.content.querySelectorAll<HTMLStyleElement>("style"),
+  ];
 
   await Promise.all(
     mediaElements.map(async (element) => {
@@ -1827,45 +2062,50 @@ export async function resolveLocalChapterMedia(
     }),
   );
 
+  await Promise.all(
+    styleSheetElements.map(async (element) => {
+      const rawCss = element.textContent ?? "";
+      if (!rawCss.includes(LOCAL_MEDIA_SRC_PREFIX)) return;
+      const localSources = localStyleMediaSources(rawCss);
+      const resolvedSources = new Map<string, string | null>();
+      await Promise.all(
+        localSources.map(async (source) => {
+          if (!resolvedSources.has(source)) {
+            resolvedSources.set(
+              source,
+              await resolveLocalChapterMediaSrc(source, context),
+            );
+          }
+        }),
+      );
+      element.textContent = rawCss.replace(
+        STYLE_URL_PATTERN,
+        (match, doubleQuoted, singleQuoted, unquoted) => {
+          const source = String(
+            doubleQuoted ?? singleQuoted ?? unquoted ?? "",
+          ).trim();
+          if (!source.startsWith(LOCAL_MEDIA_SRC_PREFIX)) return match;
+          return `url("${resolvedSources.get(source) ?? ""}")`;
+        },
+      );
+    }),
+  );
+
   return template.innerHTML;
 }
 
 export async function pruneChapterMedia(
   chapterId: number,
-  keepCacheKey: string,
   context?: ChapterMediaStorageContext,
 ): Promise<void> {
   if (!isTauriRuntime()) return;
   const resolvedContext = context ?? (await storageContextForChapter(chapterId));
   if (isAndroidRuntime()) {
-    if (hasStorageContext(resolvedContext)) {
-      await deleteAndroidStorageChildrenExcept(
-        chapterMediaDirectoryRelativePath(
-          storageNovelPathInput(resolvedContext),
-          storageChapterPathInput(resolvedContext),
-        ),
-        keepCacheKey,
-      );
-      try {
-        await pruneAndroidChapterMediaManifest(resolvedContext, keepCacheKey);
-      } catch (error) {
-        console.warn("[chapter-media] manifest prune failed", error);
-      }
-    }
-    await deleteAndroidStorageChildrenExcept(
-      `chapter-media/${chapterId}`,
-      keepCacheKey,
-    );
-    try {
-      await pruneAndroidChapterMediaManifest({ chapterId }, keepCacheKey);
-    } catch (error) {
-      console.warn("[chapter-media] manifest prune failed", error);
-    }
+    await deleteAndroidStoragePath(`chapter-media/${chapterId}`);
     return;
   }
   await invoke("chapter_media_prune", {
     chapterId,
-    keepCacheKey,
     ...(resolvedContext?.chapterName
       ? { chapterName: resolvedContext.chapterName }
       : {}),
@@ -1896,12 +2136,26 @@ export async function clearChapterMedia(
   const resolvedContext = context ?? (await storageContextForChapter(chapterId));
   if (isAndroidRuntime()) {
     if (hasStorageContext(resolvedContext)) {
-      await deleteAndroidStoragePath(
-        chapterMediaDirectoryRelativePath(
-          storageNovelPathInput(resolvedContext),
-          storageChapterPathInput(resolvedContext),
+      await Promise.all([
+        deleteAndroidStoragePath(
+          chapterMediaDirectoryRelativePath(
+            storageNovelPathInput(resolvedContext),
+            storageChapterPathInput(resolvedContext),
+          ),
         ),
-      );
+        deleteAndroidStoragePath(
+          chapterMediaArchiveRelativePath(
+            storageNovelPathInput(resolvedContext),
+            storageChapterPathInput(resolvedContext),
+          ),
+        ),
+        deleteAndroidStoragePath(
+          chapterMediaManifestRelativePath(
+            storageNovelPathInput(resolvedContext),
+            storageChapterPathInput(resolvedContext),
+          ),
+        ),
+      ]);
     }
     await deleteAndroidStoragePath(`chapter-media/${chapterId}`);
     return;

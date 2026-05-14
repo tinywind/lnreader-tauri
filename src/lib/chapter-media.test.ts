@@ -65,6 +65,12 @@ function installTemplateDocument(): void {
                 | undefined,
             );
           },
+          get textContent() {
+            return $(asCheerioInput(node)).text();
+          },
+          set textContent(value: string) {
+            $(asCheerioInput(node)).text(value);
+          },
           removeAttribute(name: string) {
             $(asCheerioInput(node)).removeAttr(name);
           },
@@ -98,7 +104,8 @@ function installTemplateDocument(): void {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  invokeMock.mockReset();
+  pluginMediaFetchMock.mockReset();
   vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
   installTemplateDocument();
 });
@@ -123,11 +130,10 @@ describe("cacheHtmlChapterMedia", () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "chapter_media_archive_cache") return 6;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     const result = await cacheHtmlChapterMedia({
@@ -141,7 +147,7 @@ describe("cacheHtmlChapterMedia", () => {
         `<img src="/covers/cover.webp">`,
         `<img src="data:image/png;base64,abc">`,
         `<img src="blob:https://source.test/image">`,
-        `<img src="norea-media://chapter/42/old/page.png">`,
+        `<img src="norea-media://chapter/42/old-page.png">`,
         `<img src="file:///tmp/page.png">`,
       ].join(""),
       novelId: 9,
@@ -171,8 +177,7 @@ describe("cacheHtmlChapterMedia", () => {
         sourceId: "demo",
       }),
     );
-    expect(invokeMock).toHaveBeenCalledTimes(3);
-    expect(invokeMock.mock.calls[0]).toEqual([
+    expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_store",
       expect.objectContaining({
         body: [1, 2, 3],
@@ -180,15 +185,14 @@ describe("cacheHtmlChapterMedia", () => {
         chapterName: "Opening",
         chapterNumber: "1",
         chapterPosition: 1,
-        fileName: expect.stringMatching(/^0001-page-[0-9a-f]{8}\.png$/),
+        fileName: "0001-page.png",
         novelId: 9,
         novelName: "Sample Novel",
         novelPath: "/novel/sample",
-        sourceUrl: "https://source.test/novel/images/page.png",
         sourceId: "demo",
       }),
-    ]);
-    expect(invokeMock.mock.calls[1]).toEqual([
+    );
+    expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_store",
       expect.objectContaining({
         body: [1, 2, 3],
@@ -196,14 +200,13 @@ describe("cacheHtmlChapterMedia", () => {
         chapterName: "Opening",
         chapterNumber: "1",
         chapterPosition: 1,
-        fileName: expect.stringMatching(/^0002-cover-[0-9a-f]{8}\.webp$/),
+        fileName: "0002-cover.webp",
         novelId: 9,
         novelName: "Sample Novel",
         novelPath: "/novel/sample",
-        sourceUrl: "https://source.test/covers/cover.webp",
         sourceId: "demo",
       }),
-    ]);
+    );
     expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_archive_cache",
       expect.objectContaining({
@@ -217,13 +220,13 @@ describe("cacheHtmlChapterMedia", () => {
         sourceId: "demo",
       }),
     );
-    expect(result.cacheKey).toEqual(expect.any(String));
     expect(result.mediaBytes).toBe(6);
     expect(result.html).toContain("norea-media://chapter/");
     expect(result.html).toContain("data:image/png;base64,abc");
     expect(result.html).toContain("blob:https://source.test/image");
-    expect(result.html).toContain("norea-media://chapter/42/old/page.png");
+    expect(result.html).toContain("norea-media://chapter/42/old-page.png");
     expect(result.html).toContain("file:///tmp/page.png");
+    expect(result.html).not.toMatch(/000\d-[^"]+-[0-9a-f]{8}\./);
   });
 
   it("rewrites lazy and responsive image sources through the media cache", async () => {
@@ -237,11 +240,10 @@ describe("cacheHtmlChapterMedia", () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "chapter_media_archive_cache") return 15;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     const result = await cacheHtmlChapterMedia({
@@ -281,11 +283,10 @@ describe("cacheHtmlChapterMedia", () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "chapter_media_archive_cache") return 10;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     const result = await cacheHtmlChapterMedia({
@@ -317,6 +318,60 @@ describe("cacheHtmlChapterMedia", () => {
     expect(result.html).not.toContain("https://source.test/topic/background.png");
   });
 
+  it("caches absolute rendered media without rewriting normal links", async () => {
+    pluginMediaFetchMock.mockImplementation(async () => {
+      return new Response(new Uint8Array([5]), {
+        headers: { "content-type": "image/png" },
+        status: 200,
+        statusText: "OK",
+      });
+    });
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_archive_cache") return 1;
+      const input = args as {
+        chapterId: number;
+        fileName: string;
+      };
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
+    });
+
+    const result = await cacheHtmlChapterMedia({
+      chapterId: 15,
+      html: [
+        `<a href="https://source.test/read">link</a>`,
+        `<img src="https://source.test/page.png">`,
+        `<img srcset="https://source.test/small.png 1x, ./large.png 2x">`,
+        `<video poster="https://source.test/poster.png"></video>`,
+        `<div style="background-image:url('https://source.test/bg.png')"></div>`,
+        `<img src="./relative.png">`,
+      ].join(""),
+    });
+
+    expect(pluginMediaFetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://source.test/page.png",
+      "https://source.test/small.png",
+      "https://source.test/poster.png",
+      "https://source.test/bg.png",
+    ]);
+    expect(result.html).toContain(
+      '<a href="https://source.test/read">link</a>',
+    );
+    expect(result.html).toContain(
+      'src="norea-media://chapter/15/0001-page.png"',
+    );
+    expect(result.html).toContain(
+      'norea-media://chapter/15/0002-small.png 1x',
+    );
+    expect(result.html).toContain("./large.png 2x");
+    expect(result.html).toContain(
+      'poster="norea-media://chapter/15/0003-poster.png"',
+    );
+    expect(result.html).toContain(
+      "norea-media://chapter/15/0004-bg.png",
+    );
+    expect(result.html).toContain('src="./relative.png"');
+  });
+
   it("emits safe media markup while progressively restoring local sources", async () => {
     pluginMediaFetchMock.mockImplementation(async () => {
       return new Response(new Uint8Array([7, 8, 9]), {
@@ -325,25 +380,30 @@ describe("cacheHtmlChapterMedia", () => {
         statusText: "OK",
       });
     });
-    invokeMock.mockImplementation(async (command, args) => {
-      if (command === "chapter_media_archive_cache") return 6;
-      const input = args as {
-        cacheKey: string;
-        chapterId: number;
-        fileName: string;
-      };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
-    });
     const htmlUpdates: string[] = [];
+    const events: string[] = [];
     const mediaPatches: Array<
       Array<{ attributes: Record<string, string>; index: number }>
     > = [];
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_prepare_workspace") {
+        events.push("prepare");
+        return null;
+      }
+      if (command === "chapter_media_archive_cache") return 6;
+      const input = args as {
+        chapterId: number;
+        fileName: string;
+      };
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
+    });
 
     const result = await cacheHtmlChapterMedia({
       baseUrl: "https://source.test/topic/1",
       chapterId: 7,
       html: `<img src="./page.png"><video src="./clip.png"></video>`,
       onHtmlUpdate: (html) => {
+        events.push("html");
         htmlUpdates.push(html);
       },
       onMediaPatch: (patches) => {
@@ -352,6 +412,8 @@ describe("cacheHtmlChapterMedia", () => {
     });
 
     expect(htmlUpdates).toHaveLength(3);
+    expect(events[0]).toBe("html");
+    expect(events[1]).toBe("prepare");
     for (const update of htmlUpdates) {
       expect(update).not.toContain('src=""');
       expect(update).not.toContain("data-norea-media");
@@ -377,7 +439,7 @@ describe("cacheHtmlChapterMedia", () => {
       expect.objectContaining({
         attributes: expect.objectContaining({
           src: expect.stringMatching(
-            /^norea-media:\/\/chapter\/7\/[^/]+\/0001-page-[0-9a-f]{8}\.png$/,
+            /^norea-media:\/\/chapter\/7\/0001-page\.png$/,
           ),
         }),
         index: 0,
@@ -387,7 +449,7 @@ describe("cacheHtmlChapterMedia", () => {
       expect.objectContaining({
         attributes: expect.objectContaining({
           src: expect.stringMatching(
-            /^norea-media:\/\/chapter\/7\/[^/]+\/0002-clip-[0-9a-f]{8}\.png$/,
+            /^norea-media:\/\/chapter\/7\/0002-clip\.png$/,
           ),
         }),
         index: 1,
@@ -411,13 +473,15 @@ describe("cacheHtmlChapterMedia", () => {
       });
     });
     invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_prepare_workspace") return null;
       if (command === "chapter_media_archive_cache") return 3;
+      if (command === "chapter_media_write_manifest") return null;
+      if (command === "chapter_media_write_manifest") return null;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     try {
@@ -434,10 +498,9 @@ describe("cacheHtmlChapterMedia", () => {
         }),
       ]);
       expect(result.storedMediaCount).toBe(1);
-      expect(result.cacheKey).toEqual(expect.any(String));
       expect(result.mediaBytes).toBe(3);
       expect(result.html).toMatch(
-        /src="norea-media:\/\/chapter\/42\/[^/]+\/0001-ok-[0-9a-f]{8}\.png"/,
+        /src="norea-media:\/\/chapter\/42\/0001-ok\.png"/,
       );
       expect(result.html).toContain(
         'src="https://source.test/chapter/missing.png"',
@@ -468,13 +531,13 @@ describe("cacheHtmlChapterMedia", () => {
       });
     });
     invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_prepare_workspace") return null;
       if (command === "chapter_media_archive_cache") return 3;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     try {
@@ -489,7 +552,7 @@ describe("cacheHtmlChapterMedia", () => {
 
       expect(result.mediaFailures).toHaveLength(2);
       expect(result.html).toMatch(
-        /srcset="norea-media:\/\/chapter\/42\/[^/]+\/0001-small-[0-9a-f]{8}\.png 1x, https:\/\/source\.test\/chapter\/large\.png 2x"/,
+        /srcset="norea-media:\/\/chapter\/42\/0001-small\.png 1x, https:\/\/source\.test\/chapter\/large\.png 2x"/,
       );
       expect(result.html).toContain(
         'style="background-image:url(&quot;https://source.test/chapter/bg.png&quot;)"',
@@ -511,17 +574,17 @@ describe("cacheHtmlChapterMedia", () => {
       });
     });
     invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_prepare_workspace") return null;
       if (command === "chapter_media_archive_cache") return 3;
+      if (command === "chapter_media_write_manifest") return null;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
-        sourceUrl: string;
       };
-      if (input.sourceUrl.endsWith("/broken.png")) {
+      if (input.fileName.includes("broken")) {
         throw new Error("write failed");
       }
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     try {
@@ -557,7 +620,6 @@ describe("cacheHtmlChapterMedia", () => {
         html: `<img src="./one.png"><img src="./two.png">`,
       });
 
-      expect(result.cacheKey).toBeNull();
       expect(result.mediaBytes).toBe(0);
       expect(result.mediaFailures).toHaveLength(2);
       expect(result.html).toContain('src="https://source.test/chapter/one.png"');
@@ -565,6 +627,23 @@ describe("cacheHtmlChapterMedia", () => {
       expect(invokeMock).not.toHaveBeenCalledWith(
         "chapter_media_archive_cache",
         expect.anything(),
+      );
+      expect(invokeMock).toHaveBeenCalledWith(
+        "chapter_media_write_manifest",
+        expect.objectContaining({
+          files: expect.arrayContaining([
+            expect.objectContaining({
+              fileName: "0001-one.png",
+              sourceUrl: "https://source.test/chapter/one.png",
+              status: "remote",
+            }),
+            expect.objectContaining({
+              fileName: "0002-two.png",
+              sourceUrl: "https://source.test/chapter/two.png",
+              status: "remote",
+            }),
+          ]),
+        }),
       );
     } finally {
       warnSpy.mockRestore();
@@ -593,7 +672,7 @@ describe("cacheHtmlChapterMedia", () => {
     expect(htmlUpdates[0]).not.toContain("data-norea-media");
   });
 
-  it("reuses stored local media when resuming a partial HTML download", async () => {
+  it("reuses stored local media during media repair", async () => {
     pluginMediaFetchMock.mockImplementation(async () => {
       return new Response(new Uint8Array([4, 5]), {
         headers: { "content-type": "image/png" },
@@ -604,12 +683,12 @@ describe("cacheHtmlChapterMedia", () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "chapter_media_total_size") return 7;
       if (command === "chapter_media_archive_cache") return 5;
+      if (command === "chapter_media_read_manifest") return null;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     const result = await cacheHtmlChapterMedia({
@@ -617,9 +696,10 @@ describe("cacheHtmlChapterMedia", () => {
       chapterId: 42,
       html: `<img src="/page-1.png"><img src="/page-2.png">`,
       previousHtml: [
-        `<img src="norea-media://chapter/42/old/page-1.png">`,
+        `<img src="norea-media://chapter/42/page-1.png">`,
         `<img src="">`,
       ].join(""),
+      repair: true,
     });
 
     expect(pluginMediaFetchMock).toHaveBeenCalledTimes(1);
@@ -634,22 +714,57 @@ describe("cacheHtmlChapterMedia", () => {
     expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_store",
       expect.objectContaining({
-        cacheKey: "old",
-        fileName: expect.stringMatching(/^0002-page-2-[0-9a-f]{8}\.png$/),
-        sourceUrl: "https://source.test/page-2.png",
+        fileName: "0002-page-2.png",
       }),
     );
     expect(invokeMock).toHaveBeenCalledWith("chapter_media_archive_cache", {
-      cacheKey: "old",
       chapterId: 42,
     });
-    expect(result.cacheKey).toBe("old");
     expect(result.mediaBytes).toBe(5);
-    expect(result.html).toContain("norea-media://chapter/42/old/page-1.png");
-    expect(result.html).toMatch(
-      /norea-media:\/\/chapter\/42\/old\/0002-page-2-[0-9a-f]{8}\.png/,
-    );
+    expect(result.html).toContain("norea-media://chapter/42/page-1.png");
+    expect(result.html).toContain("norea-media://chapter/42/0002-page-2.png");
     expect(result.html).not.toContain("data-norea-media-source-url");
+  });
+
+  it("refetches reusable repair media after preparing the workspace", async () => {
+    let workspacePrepared = false;
+    pluginMediaFetchMock.mockResolvedValue(
+      new Response(new Uint8Array([4, 5]), {
+        headers: { "content-type": "image/png" },
+        status: 200,
+        statusText: "OK",
+      }),
+    );
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "chapter_media_prepare_workspace") {
+        workspacePrepared = true;
+        return null;
+      }
+      if (command === "chapter_media_total_size") {
+        return workspacePrepared ? 0 : 7;
+      }
+      if (command === "chapter_media_archive_cache") return 5;
+      if (command === "chapter_media_read_manifest") return null;
+      const input = args as {
+        chapterId: number;
+        fileName: string;
+      };
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
+    });
+
+    const result = await cacheHtmlChapterMedia({
+      baseUrl: "https://source.test/chapter/1",
+      chapterId: 42,
+      html: `<img src="/page-1.png">`,
+      previousHtml: `<img src="norea-media://chapter/42/page-1.png">`,
+      repair: true,
+    });
+
+    expect(pluginMediaFetchMock).toHaveBeenCalledWith(
+      "https://source.test/page-1.png",
+      expect.anything(),
+    );
+    expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
   });
 
   it("preserves mixed srcset candidate positions when reusing partial media", async () => {
@@ -663,12 +778,12 @@ describe("cacheHtmlChapterMedia", () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "chapter_media_total_size") return 7;
       if (command === "chapter_media_archive_cache") return 5;
+      if (command === "chapter_media_read_manifest") return null;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     const result = await cacheHtmlChapterMedia({
@@ -677,7 +792,8 @@ describe("cacheHtmlChapterMedia", () => {
       html: `<img srcset="/small.png 1x, /large.png 2x">`,
       previousHtml:
         `<img srcset="https://source.test/small.png 1x, ` +
-        `norea-media://chapter/42/old/large.png 2x">`,
+        `norea-media://chapter/42/large.png 2x">`,
+      repair: true,
     });
 
     expect(pluginMediaFetchMock).toHaveBeenCalledTimes(1);
@@ -688,11 +804,9 @@ describe("cacheHtmlChapterMedia", () => {
       }),
     );
     expect(result.html).toContain(
-      "norea-media://chapter/42/old/large.png 2x",
+      "norea-media://chapter/42/large.png 2x",
     );
-    expect(result.html).toMatch(
-      /norea-media:\/\/chapter\/42\/old\/0001-small-[0-9a-f]{8}\.png 1x/,
-    );
+    expect(result.html).toContain("norea-media://chapter/42/0001-small.png 1x");
   });
 
   it("refetches reusable media when the stored local file is missing", async () => {
@@ -706,19 +820,20 @@ describe("cacheHtmlChapterMedia", () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "chapter_media_total_size") return 0;
       if (command === "chapter_media_archive_cache") return 5;
+      if (command === "chapter_media_read_manifest") return null;
       const input = args as {
-        cacheKey: string;
         chapterId: number;
         fileName: string;
       };
-      return `norea-media://chapter/${input.chapterId}/${input.cacheKey}/${input.fileName}`;
+      return `norea-media://chapter/${input.chapterId}/${input.fileName}`;
     });
 
     const result = await cacheHtmlChapterMedia({
       baseUrl: "https://source.test/chapter/1",
       chapterId: 42,
       html: `<img src="/page-1.png">`,
-      previousHtml: `<img src="norea-media://chapter/42/old/page-1.png">`,
+      previousHtml: `<img src="norea-media://chapter/42/page-1.png">`,
+      repair: true,
     });
 
     expect(pluginMediaFetchMock).toHaveBeenCalledTimes(1);
@@ -733,13 +848,11 @@ describe("cacheHtmlChapterMedia", () => {
     expect(invokeMock).toHaveBeenCalledWith(
       "chapter_media_store",
       expect.objectContaining({
-        fileName: expect.stringMatching(/^0001-page-1-[0-9a-f]{8}\.png$/),
-        sourceUrl: "https://source.test/page-1.png",
+        fileName: "0001-page-1.png",
       }),
     );
-    expect(result.cacheKey).not.toBe("old");
-    expect(result.html).not.toContain("norea-media://chapter/42/old/page-1.png");
-    expect(result.html).toContain("norea-media://chapter/42/");
+    expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
+    expect(result.html).not.toContain("norea-media://chapter/42/page-1.png");
   });
 });
 
@@ -748,18 +861,32 @@ describe("stored chapter media byte stats", () => {
     invokeMock.mockResolvedValueOnce(7);
 
     const html = [
-      `<img src="norea-media://chapter/42/cache/page.png">`,
-      `<img data-src="norea-media://chapter/42/cache/page.png">`,
+      `<img src="norea-media://chapter/42/page.png">`,
+      `<img data-src="norea-media://chapter/42/page.png">`,
+      `<style>.cover{background:url("norea-media://chapter/42/cover.png")}</style>`,
       `<img src="https://source.test/page.png">`,
     ].join("");
 
     expect(localChapterMediaSources(html)).toEqual([
-      "norea-media://chapter/42/cache/page.png",
+      "norea-media://chapter/42/page.png",
+      "norea-media://chapter/42/cover.png",
     ]);
     await expect(getStoredChapterMediaBytes(html)).resolves.toBe(7);
     expect(invokeMock).toHaveBeenCalledWith("chapter_media_total_size", {
-      mediaSrcs: ["norea-media://chapter/42/cache/page.png"],
+      mediaSrcs: [
+        "norea-media://chapter/42/page.png",
+        "norea-media://chapter/42/cover.png",
+      ],
     });
+  });
+
+  it("ignores nested media refs instead of partial matching", () => {
+    const nestedSrc = ["norea-media://chapter/42", "old", "page.png"].join(
+      "/",
+    );
+    const html = `<img src="${nestedSrc}">`;
+
+    expect(localChapterMediaSources(html)).toEqual([]);
   });
 });
 
@@ -772,22 +899,26 @@ describe("resolveLocalChapterMedia", () => {
 
     const html = await resolveLocalChapterMedia(
       [
-        `<img src="norea-media://chapter/42/cache/page.png">`,
-        `<img data-src="norea-media://chapter/42/cache/lazy.png">`,
+        `<img src="norea-media://chapter/42/page.png">`,
+        `<img data-src="norea-media://chapter/42/lazy.png">`,
         [
-          `<img srcset="norea-media://chapter/42/cache/small.png 1x, `,
-          `norea-media://chapter/42/cache/large.png 2x">`,
+          `<img srcset="norea-media://chapter/42/small.png 1x, `,
+          `norea-media://chapter/42/large.png 2x">`,
         ].join(""),
-        `<video poster="norea-media://chapter/42/cache/poster.png"></video>`,
-        `<object data="norea-media://chapter/42/cache/panel.svg"></object>`,
-        `<link rel="preload" as="image" href="norea-media://chapter/42/cache/preload.png">`,
-        `<div style="background-image:url('norea-media://chapter/42/cache/bg.png')"></div>`,
+        `<video poster="norea-media://chapter/42/poster.png"></video>`,
+        `<object data="norea-media://chapter/42/panel.svg"></object>`,
+        `<link rel="preload" as="image" href="norea-media://chapter/42/preload.png">`,
+        `<svg><image href="norea-media://chapter/42/svg-href.png"></image></svg>`,
+        `<svg><image xlink:href="norea-media://chapter/42/svg-xlink.png"></image></svg>`,
+        `<svg><use href="norea-media://chapter/42/svg-use.svg"></use></svg>`,
+        `<div style="background-image:url('norea-media://chapter/42/bg.png')"></div>`,
+        `<style>.cover{background:url("norea-media://chapter/42/cover.png")}</style>`,
         `<img src="https://source.test/page.png">`,
       ].join(""),
     );
 
     expect(invokeMock).toHaveBeenCalledWith("chapter_media_data_url", {
-      mediaSrc: "norea-media://chapter/42/cache/page.png",
+      mediaSrc: "norea-media://chapter/42/page.png",
     });
     expect(html).toContain('src="data:image/png;base64,page.png"');
     expect(html).toContain('src="data:image/png;base64,lazy.png"');
@@ -796,7 +927,11 @@ describe("resolveLocalChapterMedia", () => {
     expect(html).toContain('poster="data:image/png;base64,poster.png"');
     expect(html).toContain('data="data:image/png;base64,panel.svg"');
     expect(html).toContain('href="data:image/png;base64,preload.png"');
+    expect(html).toContain('href="data:image/png;base64,svg-href.png"');
+    expect(html).toContain('xlink:href="data:image/png;base64,svg-xlink.png"');
+    expect(html).toContain('href="data:image/png;base64,svg-use.svg"');
     expect(html).toContain("data:image/png;base64,bg.png");
+    expect(html).toContain("data:image/png;base64,cover.png");
     expect(html).not.toContain("data-src=");
     expect(html).toContain('src="https://source.test/page.png"');
   });

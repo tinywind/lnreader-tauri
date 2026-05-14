@@ -298,6 +298,17 @@ describe("saveChapterContent", () => {
     expect(result).toEqual({ rowsAffected: 1 });
   });
 
+  it("stores converted text chapters as html", async () => {
+    mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
+    await saveChapterContent(
+      7,
+      '<section class="reader-text-content"><p>hello</p></section>',
+      "text",
+    );
+    const [, params] = mockExecute.mock.calls[0]!;
+    expect(params?.[2]).toBe("html");
+  });
+
   it("marks HTML with remote media as repairable", async () => {
     mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
     await saveChapterContent(7, '<img src="https://cdn.example/a.jpg">');
@@ -316,7 +327,7 @@ describe("saveChapterContent", () => {
     mockExecute.mockResolvedValueOnce({ rowsAffected: 1 });
     await saveChapterContent(
       7,
-      '<img src="norea-media://chapter/7/media-cache/page.png">',
+      '<img src="norea-media://chapter/7/page.png">',
     );
     const [, params] = mockExecute.mock.calls[0]!;
     expect(params?.[5]).toBe(0);

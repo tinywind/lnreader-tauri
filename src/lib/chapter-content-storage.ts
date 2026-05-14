@@ -70,54 +70,6 @@ function isLocalNovel(pluginId: string, value: unknown): boolean {
   return pluginId === LOCAL_PLUGIN_ID && sqliteBoolean(value);
 }
 
-interface MirroredNovel {
-  artist: string | null;
-  author: string | null;
-  cover: string | null;
-  createdAt: number;
-  genres: string | null;
-  id: number;
-  inLibrary: boolean;
-  isLocal: boolean;
-  lastReadAt: number | null;
-  libraryAddedAt: number | null;
-  name: string;
-  path: string;
-  pluginId: string;
-  status: string | null;
-  summary: string | null;
-  updatedAt: number;
-}
-
-interface MirroredChapter {
-  bookmark: boolean;
-  chapterNumber: string | null;
-  content?: string;
-  contentBytes: number;
-  contentFile?: string;
-  contentType?: string;
-  createdAt: number | null;
-  foundAt: number;
-  id: number;
-  isDownloaded: boolean;
-  mediaBytes: number;
-  name: string;
-  novelId: number;
-  page: string;
-  path: string;
-  position: number;
-  progress: number;
-  readAt: number | null;
-  releaseTime: string | null;
-  unread: boolean;
-  updatedAt: number;
-}
-
-interface MirroredStorageManifest {
-  chapters?: Record<string, MirroredChapter>;
-  novels?: Record<string, MirroredNovel>;
-}
-
 export interface ChapterStorageRestoreResult {
   chapters: number;
   novels: number;
@@ -203,58 +155,6 @@ const SELECT_DOWNLOADED_CHAPTER_IDS = `
   ORDER BY novel_id, position, id
 `;
 
-const INSERT_MIRRORED_NOVEL = `
-  INSERT INTO novel (
-    id, plugin_id, path, name, cover, summary, author, artist,
-    status, genres, in_library, is_local,
-    created_at, updated_at, library_added_at, last_read_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-  ON CONFLICT(id) DO UPDATE SET
-    plugin_id        = excluded.plugin_id,
-    path             = excluded.path,
-    name             = excluded.name,
-    cover            = excluded.cover,
-    summary          = excluded.summary,
-    author           = excluded.author,
-    artist           = excluded.artist,
-    status           = excluded.status,
-    genres           = excluded.genres,
-    in_library       = excluded.in_library,
-    is_local         = excluded.is_local,
-    updated_at       = excluded.updated_at,
-    library_added_at = excluded.library_added_at,
-    last_read_at     = excluded.last_read_at
-`;
-
-const INSERT_MIRRORED_CHAPTER = `
-  INSERT INTO chapter (
-    id, novel_id, path, name, chapter_number, position, page,
-    bookmark, unread, progress, is_downloaded, content, content_bytes,
-    media_bytes, media_repair_needed, content_type, release_time, read_at,
-    created_at, found_at, updated_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-  ON CONFLICT(id) DO UPDATE SET
-    novel_id       = excluded.novel_id,
-    path           = excluded.path,
-    name           = excluded.name,
-    chapter_number = excluded.chapter_number,
-    position       = excluded.position,
-    page           = excluded.page,
-    bookmark       = excluded.bookmark,
-    unread         = excluded.unread,
-    progress       = excluded.progress,
-    is_downloaded  = 1,
-    content        = excluded.content,
-    content_bytes  = excluded.content_bytes,
-    media_bytes    = excluded.media_bytes,
-    media_repair_needed = excluded.media_repair_needed,
-    content_type   = excluded.content_type,
-    release_time   = excluded.release_time,
-    read_at        = excluded.read_at,
-    found_at       = excluded.found_at,
-    updated_at     = excluded.updated_at
-`;
-
 const UPDATE_MIRRORED_CHAPTER_CONTENT = `
   UPDATE chapter
      SET is_downloaded = 1,
@@ -275,7 +175,8 @@ function utf8ByteLength(value: string): number {
 
 function chapterContentExtension(contentType: string | undefined): string {
   if (contentType === "pdf") return "pdf";
-  if (contentType === "text") return "txt";
+  if (contentType === "markdown") return "html";
+  if (contentType === "epub") return "html";
   return "html";
 }
 
@@ -294,6 +195,14 @@ async function deleteLegacyAndroidStorageManifest(): Promise<void> {
     legacyAndroidStorageManifestCleanup = null;
   });
   await legacyAndroidStorageManifestCleanup;
+}
+
+async function deleteLegacyStorageManifest(): Promise<void> {
+  if (isAndroidRuntime()) {
+    await deleteLegacyAndroidStorageManifest();
+    return;
+  }
+  await invoke("chapter_content_mirror_cleanup_legacy_manifest");
 }
 
 function storageMetadata(row: ChapterStorageRow) {
@@ -365,7 +274,7 @@ async function restoreStoredChapterContentRows(
     : rows;
   let restoredChapters = 0;
 
-  if (isAndroidRuntime()) await deleteLegacyAndroidStorageManifest();
+  await deleteLegacyStorageManifest();
 
   for (const row of candidates) {
     const metadata = storageMetadata(row);
@@ -487,94 +396,5 @@ export async function restoreChapterContentStorageMirror(
   options: ChapterStorageRestoreOptions = {},
 ): Promise<ChapterStorageRestoreResult> {
   if (!isTauriRuntime()) return { chapters: 0, novels: 0 };
-  const restoredRows = await restoreStoredChapterContentRows(options);
-  if (isAndroidRuntime()) {
-    return restoredRows;
-  }
-  if (options.contentOnly) {
-    return restoredRows;
-  }
-
-  const manifest = await invoke<MirroredStorageManifest>(
-    "chapter_content_mirror_read",
-  );
-  const chapterValues = Object.values(manifest.chapters ?? {});
-  const chapters = options.chapterIds
-    ? chapterValues.filter(
-        (chapter) => options.chapterIds?.has(chapter.id) === true,
-      )
-    : chapterValues;
-  const restoredNovelIds = new Set(chapters.map((chapter) => chapter.novelId));
-  const novels = options.contentOnly
-    ? []
-    : Object.values(manifest.novels ?? {}).filter(
-        (novel) => !options.chapterIds || restoredNovelIds.has(novel.id),
-      );
-  const db = await getDb();
-  for (const novel of novels) {
-    await db.execute(INSERT_MIRRORED_NOVEL, [
-      novel.id,
-      novel.pluginId,
-      novel.path,
-      novel.name,
-      novel.cover,
-      novel.summary,
-      novel.author,
-      novel.artist,
-      novel.status,
-      novel.genres,
-      sqliteBoolean(novel.inLibrary) ? 1 : 0,
-      isLocalNovel(novel.pluginId, novel.isLocal) ? 1 : 0,
-      novel.createdAt,
-      novel.updatedAt,
-      novel.libraryAddedAt,
-      novel.lastReadAt,
-    ]);
-  }
-  for (const chapter of chapters) {
-    const content = chapter.content ?? "";
-    const contentBytes = chapter.contentBytes || utf8ByteLength(content);
-    const contentType = normalizeChapterContentType(
-      chapter.contentType ?? DEFAULT_CHAPTER_CONTENT_TYPE,
-    );
-    const mediaRepairNeeded = chapterMediaRepairFlag(content, contentType);
-    if (options.contentOnly) {
-      await db.execute(UPDATE_MIRRORED_CHAPTER_CONTENT, [
-        content,
-        contentBytes,
-        chapter.mediaBytes,
-        mediaRepairNeeded,
-        contentType,
-        chapter.id,
-      ]);
-      continue;
-    }
-    await db.execute(INSERT_MIRRORED_CHAPTER, [
-      chapter.id,
-      chapter.novelId,
-      chapter.path,
-      chapter.name,
-      chapter.chapterNumber,
-      chapter.position,
-      chapter.page,
-      sqliteBoolean(chapter.bookmark) ? 1 : 0,
-      sqliteBoolean(chapter.unread) ? 1 : 0,
-      chapter.progress,
-      content,
-      contentBytes,
-      chapter.mediaBytes,
-      mediaRepairNeeded,
-      contentType,
-      chapter.releaseTime,
-      chapter.readAt,
-      chapter.createdAt,
-      chapter.foundAt,
-      chapter.updatedAt,
-    ]);
-  }
-
-  return {
-    chapters: restoredRows.chapters + chapters.length,
-    novels: restoredRows.novels + novels.length,
-  };
+  return restoreStoredChapterContentRows(options);
 }

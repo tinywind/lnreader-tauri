@@ -10,6 +10,12 @@ const pluginMocks = vi.hoisted(() => ({
   getPluginForExecutor: vi.fn(),
   loadInstalledFromDb: vi.fn(),
   parseChapter: vi.fn(),
+  parseChapterResource: vi.fn(),
+}));
+
+const epubMocks = vi.hoisted(() => ({
+  convertEpubToHtml: vi.fn(),
+  mergeEpubHtmlSections: vi.fn(),
 }));
 
 vi.mock("../../db/queries/chapter", () => ({
@@ -30,8 +36,11 @@ vi.mock("../chapter-media", () => ({
   clearChapterMedia: vi.fn(),
   getStoredChapterMediaBytes: vi.fn(),
   hasRemoteChapterMedia: vi.fn(),
-  localChapterMediaCacheKeys: vi.fn(),
-  pruneChapterMedia: vi.fn(),
+  storeEmbeddedChapterMedia: vi.fn(),
+}));
+vi.mock("../epub-html", () => ({
+  convertEpubToHtml: epubMocks.convertEpubToHtml,
+  mergeEpubHtmlSections: epubMocks.mergeEpubHtmlSections,
 }));
 vi.mock("../plugins/manager", () => ({
   pluginManager: {
@@ -67,9 +76,9 @@ import {
   clearChapterMedia,
   getStoredChapterMediaBytes,
   hasRemoteChapterMedia,
-  localChapterMediaCacheKeys,
-  pruneChapterMedia,
+  storeEmbeddedChapterMedia,
 } from "../chapter-media";
+import { convertEpubToHtml, mergeEpubHtmlSections } from "../epub-html";
 import {
   enqueueChapterDownload,
   enqueueChapterMediaRepair,
@@ -92,12 +101,19 @@ beforeEach(() => {
     name: "Source A",
     getBaseUrl: () => "https://source.test",
     parseChapter: pluginMocks.parseChapter,
+    parseChapterResource: pluginMocks.parseChapterResource,
   };
   pluginMocks.getPlugin.mockReturnValue(plugin);
   pluginMocks.getPluginForExecutor.mockReturnValue(plugin);
   pluginMocks.parseChapter.mockResolvedValue(`plain <chapter>`);
+  pluginMocks.parseChapterResource.mockResolvedValue({
+    type: "binary",
+    contentType: "pdf",
+    mediaType: "application/pdf",
+    bytes: new Uint8Array([37, 80, 68, 70]),
+    byteLength: 4,
+  });
   vi.mocked(cacheHtmlChapterMedia).mockResolvedValue({
-    cacheKey: "media-cache",
     html: "<img>",
     mediaFailures: [],
     mediaBytes: 3,
@@ -110,13 +126,26 @@ beforeEach(() => {
   vi.mocked(getNovelById).mockResolvedValue(null);
   vi.mocked(getStoredChapterMediaBytes).mockResolvedValue(3);
   vi.mocked(hasRemoteChapterMedia).mockReturnValue(true);
-  vi.mocked(localChapterMediaCacheKeys).mockReturnValue(["media-cache"]);
   vi.mocked(saveChapterContent).mockResolvedValue({ rowsAffected: 1 });
   vi.mocked(saveChapterPartialContent).mockResolvedValue({ rowsAffected: 1 });
+  vi.mocked(convertEpubToHtml).mockResolvedValue({
+    sections: [],
+    title: "EPUB",
+  });
+  vi.mocked(mergeEpubHtmlSections).mockReturnValue(
+    `<article class="reader-epub-content" data-epub-rendered="true"></article>`,
+  );
+  vi.mocked(storeEmbeddedChapterMedia).mockResolvedValue({
+    html: `<article class="reader-epub-content" data-epub-rendered="true"></article>`,
+    mediaBytes: 0,
+    storedMediaCount: 0,
+  });
 });
 
 describe("enqueueChapterDownload", () => {
   it("carries contentType through the task subject and saveChapterContent", async () => {
+    vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
+
     enqueueChapterDownload({
       id: 7,
       pluginId: "source-a",
@@ -138,8 +167,8 @@ describe("enqueueChapterDownload", () => {
 
     expect(saveChapterContent).toHaveBeenCalledWith(
       7,
-      `<section class="reader-text-content"><p>plain &lt;chapter&gt;</p></section>`,
-      "text",
+      `<article class="reader-text-content" data-source-format="text"><section class="reader-text-section" data-section-index="0"><p class="reader-text-paragraph" data-paragraph-index="0"><span class="reader-text-line" data-line-index="0">plain &lt;chapter&gt;</span></p></section></article>`,
+      "html",
       { mediaBytes: 0 },
     );
     expect(clearChapterMedia).toHaveBeenCalledWith(
@@ -151,7 +180,7 @@ describe("enqueueChapterDownload", () => {
   it("keeps chapter media downloads on the assigned scraper executor", async () => {
     pluginMocks.parseChapter.mockResolvedValueOnce(`<img src="/page.png">`);
     vi.mocked(getChapterById).mockResolvedValueOnce({
-      content: `<img src="norea-media://chapter/7/old/page.png">`,
+      content: `<img src="norea-media://chapter/7/page.png">`,
       contentType: "html",
       id: 7,
     } as never);
@@ -175,7 +204,7 @@ describe("enqueueChapterDownload", () => {
 
     expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
       expect.objectContaining({
-        previousHtml: `<img src="norea-media://chapter/7/old/page.png">`,
+        previousHtml: `<img src="norea-media://chapter/7/page.png">`,
         requestInit: { headers: { Referer: "https://source.test/" } },
         scraperExecutor: "pool:1",
         sourceId: "source-a",
@@ -184,6 +213,341 @@ describe("enqueueChapterDownload", () => {
     expect(saveChapterContent).toHaveBeenCalledWith(7, "<img>", "html", {
       mediaBytes: 3,
     });
+  });
+
+  it("renders markdown chapters before caching rendered media", async () => {
+    pluginMocks.parseChapter.mockResolvedValueOnce(
+      [
+        "# Chapter 7",
+        "",
+        "[kept](https://source.test/read)",
+        "![Page](/page.png)",
+      ].join("\n"),
+    );
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "markdown",
+      id: 7,
+    } as never);
+    vi.mocked(cacheHtmlChapterMedia).mockResolvedValueOnce({
+      html: `<section class="reader-markdown-content"><h1>Chapter 7</h1><p><a href="https://source.test/read">kept</a><img src="norea-media://chapter/7/page.png" alt="Page"></p></section>`,
+      mediaFailures: [],
+      mediaBytes: 3,
+      storedMediaCount: 1,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7",
+      contentType: "markdown",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      setDetail: vi.fn(),
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(cacheHtmlChapterMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        html: expect.stringMatching(
+          /<section class="reader-markdown-content">[\s\S]*src="\/page\.png"/,
+        ),
+        sourceId: "source-a",
+      }),
+    );
+    expect(saveChapterContent).toHaveBeenCalledWith(
+      7,
+      expect.stringContaining("norea-media://chapter/7/page.png"),
+      "html",
+      { mediaBytes: 3 },
+    );
+    expect(clearChapterMedia).not.toHaveBeenCalled();
+  });
+
+  it("downloads pdf chapters from parseChapterResource without parsing text content", async () => {
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "pdf",
+      id: 7,
+    } as never);
+    pluginMocks.parseChapterResource.mockResolvedValueOnce({
+      type: "binary",
+      contentType: "pdf",
+      mediaType: "application/pdf",
+      bytes: new Uint8Array([37, 80, 68, 70]),
+      byteLength: 4,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7.pdf",
+      contentType: "pdf",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      setDetail: vi.fn(),
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(pluginMocks.parseChapterResource).toHaveBeenCalledWith(
+      "/chapter/7.pdf",
+    );
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(saveChapterContent).toHaveBeenCalledWith(
+      7,
+      "data:application/pdf;base64,JVBERg==",
+      "pdf",
+      { mediaBytes: 0 },
+    );
+    expect(clearChapterMedia).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ chapterId: 7, sourceId: "source-a" }),
+    );
+  });
+
+  it("converts epub resources to reader html and stores embedded media", async () => {
+    const section = {
+      html: `<section><img src="norea-epub-resource://OEBPS%2Fpage.png"></section>`,
+      href: "OEBPS/chapter.xhtml",
+      name: "Chapter 7",
+      resources: [
+        {
+          bytes: [1, 2, 3],
+          fileName: "0001-page.png",
+          mediaType: "image/png",
+          placeholder: "norea-epub-resource://OEBPS%2Fpage.png",
+          sourcePath: "OEBPS/page.png",
+        },
+      ],
+    };
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "epub",
+      id: 7,
+      name: "Chapter 7",
+    } as never);
+    pluginMocks.parseChapterResource.mockResolvedValueOnce({
+      type: "binary",
+      contentType: "epub",
+      mediaType: "application/epub+zip",
+      bytes: new Uint8Array([80, 75, 3, 4]),
+      byteLength: 4,
+    });
+    vi.mocked(convertEpubToHtml).mockResolvedValueOnce({
+      direction: "rtl",
+      language: "en",
+      sections: [section],
+      title: "Book",
+    });
+    vi.mocked(mergeEpubHtmlSections).mockReturnValueOnce(
+      `<article><img src="norea-epub-resource://OEBPS%2Fpage.png"></article>`,
+    );
+    vi.mocked(storeEmbeddedChapterMedia).mockResolvedValueOnce({
+      html: `<article><img src="norea-media://chapter/7/0001-page.png"></article>`,
+      mediaBytes: 3,
+      storedMediaCount: 1,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7.epub",
+      contentType: "epub",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await capturedSpec.run({
+      setDetail: vi.fn(),
+      setProgress: vi.fn(),
+      signal: new AbortController().signal,
+      taskId: "task-1",
+    });
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(convertEpubToHtml).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      { fallbackTitle: "Chapter 7" },
+    );
+    expect(mergeEpubHtmlSections).toHaveBeenCalledWith([section], {
+      direction: "rtl",
+      language: "en",
+    });
+    expect(storeEmbeddedChapterMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chapterId: 7,
+        resources: [
+          expect.objectContaining({
+            contentType: "image/png",
+            fileName: "0001-page.png",
+            placeholder: "norea-epub-resource://OEBPS%2Fpage.png",
+            sourcePath: "OEBPS/page.png",
+          }),
+        ],
+        sourceId: "source-a",
+      }),
+    );
+    expect(saveChapterContent).toHaveBeenCalledWith(
+      7,
+      `<article><img src="norea-media://chapter/7/0001-page.png"></article>`,
+      "epub",
+      { mediaBytes: 3 },
+    );
+    expect(clearChapterMedia).not.toHaveBeenCalled();
+  });
+
+  it("fails epub downloads when parseChapterResource is unavailable", async () => {
+    pluginMocks.getPluginForExecutor.mockReturnValueOnce({
+      id: "source-a",
+      imageRequestInit: { headers: { Referer: "https://source.test/" } },
+      name: "Source A",
+      getBaseUrl: () => "https://source.test",
+      parseChapter: pluginMocks.parseChapter,
+    });
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "epub",
+      id: 7,
+    } as never);
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7.epub",
+      contentType: "epub",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await expect(
+      capturedSpec.run({
+        setDetail: vi.fn(),
+        setProgress: vi.fn(),
+        signal: new AbortController().signal,
+        taskId: "task-1",
+      }),
+    ).rejects.toThrow("parseChapterResource");
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(saveChapterContent).not.toHaveBeenCalled();
+  });
+
+  it("fails binary downloads when resource metadata does not match the chapter type", async () => {
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "epub",
+      id: 7,
+    } as never);
+    pluginMocks.parseChapterResource.mockResolvedValueOnce({
+      type: "binary",
+      contentType: "epub",
+      mediaType: "application/pdf",
+      bytes: new Uint8Array([80, 75, 3, 4]),
+      byteLength: 4,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7.epub",
+      contentType: "epub",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await expect(
+      capturedSpec.run({
+        setDetail: vi.fn(),
+        setProgress: vi.fn(),
+        signal: new AbortController().signal,
+        taskId: "task-1",
+      }),
+    ).rejects.toThrow("mediaType");
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(saveChapterContent).not.toHaveBeenCalled();
+  });
+
+  it("fails binary downloads when resource bytes are empty", async () => {
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "pdf",
+      id: 7,
+    } as never);
+    pluginMocks.parseChapterResource.mockResolvedValueOnce({
+      type: "binary",
+      contentType: "pdf",
+      mediaType: "application/pdf",
+      bytes: new Uint8Array(),
+      byteLength: 0,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7.pdf",
+      contentType: "pdf",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await expect(
+      capturedSpec.run({
+        setDetail: vi.fn(),
+        setProgress: vi.fn(),
+        signal: new AbortController().signal,
+        taskId: "task-1",
+      }),
+    ).rejects.toThrow("bytes are empty");
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(saveChapterContent).not.toHaveBeenCalled();
+  });
+
+  it("fails binary downloads when declared byteLength does not match bytes", async () => {
+    vi.mocked(getChapterById).mockResolvedValueOnce({
+      content: null,
+      contentType: "pdf",
+      id: 7,
+    } as never);
+    pluginMocks.parseChapterResource.mockResolvedValueOnce({
+      type: "binary",
+      contentType: "pdf",
+      mediaType: "application/pdf",
+      bytes: new Uint8Array([37, 80, 68, 70]),
+      byteLength: 99,
+    });
+
+    enqueueChapterDownload({
+      id: 7,
+      pluginId: "source-a",
+      chapterPath: "/chapter/7.pdf",
+      contentType: "pdf",
+      title: "Chapter 7",
+    });
+
+    if (!capturedSpec) throw new Error("Task spec was not captured.");
+    await expect(
+      capturedSpec.run({
+        setDetail: vi.fn(),
+        setProgress: vi.fn(),
+        signal: new AbortController().signal,
+        taskId: "task-1",
+      }),
+    ).rejects.toThrow("byteLength");
+
+    expect(pluginMocks.parseChapter).not.toHaveBeenCalled();
+    expect(saveChapterContent).not.toHaveBeenCalled();
   });
 
   it("records media fallback detail without failing the chapter download", async () => {
@@ -195,7 +559,6 @@ describe("enqueueChapterDownload", () => {
       id: 7,
     } as never);
     vi.mocked(cacheHtmlChapterMedia).mockResolvedValueOnce({
-      cacheKey: null,
       html: `<img src="https://source.test/page.png">`,
       mediaFailures: [
         {
@@ -290,7 +653,7 @@ describe("enqueueChapterMediaRepair", () => {
   it("repairs remote media without parsing chapter content", async () => {
     const setDetail = vi.fn();
     const storedHtml = `<img src="https://cdn.test/page.png">`;
-    const repairedHtml = `<img src="norea-media://chapter/7/media-cache/page.png">`;
+    const repairedHtml = `<img src="norea-media://chapter/7/page.png">`;
     vi.mocked(getChapterById).mockResolvedValueOnce({
       chapterNumber: "7",
       content: storedHtml,
@@ -308,7 +671,6 @@ describe("enqueueChapterMediaRepair", () => {
       path: "/novel",
     } as never);
     vi.mocked(cacheHtmlChapterMedia).mockResolvedValueOnce({
-      cacheKey: "media-cache",
       html: repairedHtml,
       mediaFailures: [],
       mediaBytes: 8,
@@ -344,11 +706,6 @@ describe("enqueueChapterMediaRepair", () => {
     expect(saveChapterContent).toHaveBeenCalledWith(7, repairedHtml, "html", {
       mediaBytes: 8,
     });
-    expect(pruneChapterMedia).toHaveBeenCalledWith(
-      7,
-      "media-cache",
-      expect.objectContaining({ chapterId: 7, sourceId: "source-a" }),
-    );
     expect(setDetail).toHaveBeenCalledWith("1 media assets repaired");
   });
 
@@ -356,7 +713,7 @@ describe("enqueueChapterMediaRepair", () => {
     const setDetail = vi.fn();
     vi.mocked(hasRemoteChapterMedia).mockReturnValueOnce(false);
     vi.mocked(getChapterById).mockResolvedValueOnce({
-      content: `<img src="norea-media://chapter/7/media-cache/page.png">`,
+      content: `<img src="norea-media://chapter/7/page.png">`,
       contentType: "html",
       id: 7,
       isDownloaded: true,

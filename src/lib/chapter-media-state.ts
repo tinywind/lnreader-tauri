@@ -1,5 +1,6 @@
 import {
   DEFAULT_CHAPTER_CONTENT_TYPE,
+  isHtmlLikeChapterContentType,
   normalizeChapterContentType,
   type ChapterContentType,
 } from "./chapter-content";
@@ -22,7 +23,9 @@ export function chapterMediaRepairNeeded(
   content: string | null | undefined,
   contentType: ChapterContentType | string | null | undefined = DEFAULT_CHAPTER_CONTENT_TYPE,
 ): boolean {
-  if (normalizeChapterContentType(contentType) !== "html") return false;
+  if (!isHtmlLikeChapterContentType(normalizeChapterContentType(contentType))) {
+    return false;
+  }
   if (!content) return false;
   return (
     hasRemoteMediaElement(content) ||

@@ -6,8 +6,12 @@ import {
 import { getNovelById } from "../../db/queries/novel";
 import { useBrowseStore } from "../../store/browse";
 import {
+  CHAPTER_BINARY_RESOURCE_MEDIA_TYPES,
   chapterContentToHtml,
+  isBinaryChapterContentType,
+  isHtmlLikeChapterContentType,
   normalizeChapterContentType,
+  storedChapterContentType,
   type ChapterContentType,
 } from "../chapter-content";
 import {
@@ -15,14 +19,14 @@ import {
   clearChapterMedia,
   getStoredChapterMediaBytes,
   hasRemoteChapterMedia,
-  localChapterMediaCacheKeys,
-  pruneChapterMedia,
+  storeEmbeddedChapterMedia,
   type ChapterMediaElementPatch,
 } from "../chapter-media";
 import { mirrorStoredChapterContent } from "../chapter-content-storage";
+import { convertEpubToHtml, mergeEpubHtmlSections } from "../epub-html";
 import { getPluginBaseUrl } from "../plugins/base-url";
 import { pluginManager } from "../plugins/manager";
-import type { Plugin } from "../plugins/types";
+import type { ChapterBinaryResource, Plugin } from "../plugins/types";
 import { isTauriRuntime } from "../tauri-runtime";
 import {
   sourceBaseDomainKey,
@@ -163,6 +167,77 @@ function absolutePluginUrl(plugin: Plugin, path: string): string | null {
     }
   }
   return null;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function resourceBytes(bytes: unknown): Uint8Array {
+  if (bytes instanceof Uint8Array) {
+    return bytes;
+  }
+  if (bytes instanceof ArrayBuffer) {
+    return new Uint8Array(bytes);
+  }
+  throw new Error("Chapter resource bytes must be an ArrayBuffer or Uint8Array.");
+}
+
+function validateChapterResource(
+  resource: unknown,
+  contentType: "pdf" | "epub",
+): Uint8Array {
+  if (!resource || typeof resource !== "object") {
+    throw new Error("Chapter resource must be a binary resource.");
+  }
+  const candidate = resource as Partial<ChapterBinaryResource>;
+  if (candidate.type !== "binary") {
+    throw new Error("Chapter resource must be a binary resource.");
+  }
+  if (candidate.contentType !== contentType) {
+    throw new Error(
+      `Chapter resource contentType "${candidate.contentType}" does not match "${contentType}".`,
+    );
+  }
+  const expectedMediaType = CHAPTER_BINARY_RESOURCE_MEDIA_TYPES[contentType];
+  if (candidate.mediaType !== expectedMediaType) {
+    throw new Error(
+      `Chapter resource mediaType "${candidate.mediaType}" does not match "${expectedMediaType}".`,
+    );
+  }
+  const bytes = resourceBytes(candidate.bytes);
+  if (bytes.byteLength <= 0) {
+    throw new Error("Chapter resource bytes are empty.");
+  }
+  if (
+    candidate.byteLength !== undefined &&
+    candidate.byteLength !== bytes.byteLength
+  ) {
+    throw new Error("Chapter resource byteLength does not match bytes.");
+  }
+  return bytes;
+}
+
+async function loadChapterResource(
+  plugin: Plugin,
+  chapterPath: string,
+  contentType: "pdf" | "epub",
+): Promise<Uint8Array> {
+  if (!plugin.parseChapterResource) {
+    throw new Error(
+      `Plugin must implement parseChapterResource() for ${contentType} chapters.`,
+    );
+  }
+  return validateChapterResource(
+    await plugin.parseChapterResource(chapterPath),
+    contentType,
+  );
 }
 
 function makeChapterDownloadBatchId(): string {
@@ -454,6 +529,83 @@ export function enqueueChapterDownload(
         const contentType = normalizeChapterContentType(
           job.contentType ?? chapter.contentType,
         );
+        const savedContentType = storedChapterContentType(contentType);
+        const storageContext = {
+          chapterId: job.id,
+          chapterName: chapter.name,
+          chapterNumber: chapter.chapterNumber,
+          chapterPosition: chapter.position,
+          novelId: novel?.id ?? chapter.novelId,
+          novelName: novel?.name ?? job.novelName,
+          novelPath: novel?.path ?? job.novelPath,
+          sourceId: job.pluginId,
+        };
+        if (isBinaryChapterContentType(contentType)) {
+          const bytes = await loadChapterResource(
+            plugin,
+            job.chapterPath,
+            contentType,
+          );
+          if (signal.aborted) {
+            throw new DOMException("Task was cancelled.", "AbortError");
+          }
+          if (contentType === "pdf") {
+            const dataUrl = `data:${CHAPTER_BINARY_RESOURCE_MEDIA_TYPES.pdf};base64,${bytesToBase64(bytes)}`;
+            const saveResult = await saveChapterContent(
+              job.id,
+              dataUrl,
+              contentType,
+              { mediaBytes: 0 },
+            );
+            if (saveResult.rowsAffected <= 0) {
+              throw missingLocalChapterError(job);
+            }
+            await mirrorStoredChapterContent(job.id);
+            await clearChapterMedia(job.id, storageContext);
+            settleChapterDownloadBatchJob(job.batchId, job.id, "succeeded");
+            setProgress({ current: progressTotal, total: progressTotal });
+            return;
+          }
+
+          const epub = await convertEpubToHtml(bytes, {
+            fallbackTitle: chapter.name,
+          });
+          const html = mergeEpubHtmlSections(epub.sections, {
+            ...(epub.direction ? { direction: epub.direction } : {}),
+            ...(epub.language ? { language: epub.language } : {}),
+          });
+          const embedded = await storeEmbeddedChapterMedia({
+            ...storageContext,
+            html,
+            resources: epub.sections.flatMap((section) =>
+              section.resources.map((resource) => ({
+                bytes: resource.bytes,
+                contentType: resource.mediaType,
+                fileName: resource.fileName,
+                placeholder: resource.placeholder,
+                sourcePath: resource.sourcePath,
+              })),
+            ),
+          });
+          const saveResult = await saveChapterContent(
+            job.id,
+            embedded.html,
+            contentType,
+            {
+              mediaBytes: embedded.mediaBytes,
+            },
+          );
+          if (saveResult.rowsAffected <= 0) {
+            throw missingLocalChapterError(job);
+          }
+          await mirrorStoredChapterContent(job.id);
+          if (embedded.storedMediaCount === 0) {
+            await clearChapterMedia(job.id, storageContext);
+          }
+          settleChapterDownloadBatchJob(job.batchId, job.id, "succeeded");
+          setProgress({ current: progressTotal, total: progressTotal });
+          return;
+        }
         const rawContent = await plugin.parseChapter(job.chapterPath);
         if (signal.aborted) {
           throw new DOMException("Task was cancelled.", "AbortError");
@@ -462,18 +614,18 @@ export function enqueueChapterDownload(
           throw new Error("Downloaded chapter content is empty.");
         }
         let html = chapterContentToHtml(rawContent, contentType);
-        let mediaCacheKey: string | null = null;
         let mediaBytes = 0;
-        if (contentType === "html") {
+        let shouldClearMedia = true;
+        if (isHtmlLikeChapterContentType(savedContentType)) {
           const baseUrl = absolutePluginUrl(plugin, job.chapterPath);
-          if (baseUrl) {
+          if (hasRemoteChapterMedia(html, baseUrl)) {
+            shouldClearMedia = false;
             const media = await cacheHtmlChapterMedia({
-              baseUrl,
+              ...(baseUrl ? { baseUrl, contextUrl: baseUrl } : {}),
               chapterId: job.id,
               chapterName: chapter.name,
               chapterNumber: chapter.chapterNumber ?? String(chapter.position),
               chapterPosition: chapter.position,
-              contextUrl: baseUrl,
               html,
               novelId: chapter.novelId,
               novelName: novel?.name ?? job.novelName,
@@ -482,7 +634,7 @@ export function enqueueChapterDownload(
                 const partialSaveResult = await saveChapterPartialContent(
                   job.id,
                   partialHtml,
-                  contentType,
+                  savedContentType,
                 );
                 if (partialSaveResult.rowsAffected <= 0) {
                   throw missingLocalChapterError(job);
@@ -504,39 +656,35 @@ export function enqueueChapterDownload(
               },
               previousHtml: chapter.content,
               requestInit: plugin.imageRequestInit,
+              repair: false,
               scraperExecutor: executor ?? "immediate",
               signal,
               sourceId: job.pluginId,
             });
             html = media.html;
-            mediaCacheKey = media.cacheKey;
             mediaBytes = media.mediaBytes;
             if (media.mediaFailures.length > 0) {
               setDetail(
                 `${media.mediaFailures.length} media assets using remote fallback`,
               );
+            } else if (media.archiveFailure) {
+              setDetail("Media archive failed; using extracted media files");
             }
           }
         }
-        const saveResult = await saveChapterContent(job.id, html, contentType, {
-          mediaBytes,
-        });
+        const saveResult = await saveChapterContent(
+          job.id,
+          html,
+          savedContentType,
+          {
+            mediaBytes,
+          },
+        );
         if (saveResult.rowsAffected <= 0) {
           throw missingLocalChapterError(job);
         }
         await mirrorStoredChapterContent(job.id);
-        if (mediaCacheKey) {
-          await pruneChapterMedia(job.id, mediaCacheKey, {
-            chapterId: job.id,
-            chapterName: chapter.name,
-            chapterNumber: chapter.chapterNumber,
-            chapterPosition: chapter.position,
-            novelId: novel?.id ?? chapter.novelId,
-            novelName: novel?.name ?? job.novelName,
-            novelPath: novel?.path ?? job.novelPath,
-            sourceId: job.pluginId,
-          });
-        } else {
+        if (shouldClearMedia) {
           await clearChapterMedia(job.id, {
             chapterId: job.id,
             chapterName: chapter.name,
@@ -603,8 +751,12 @@ export function enqueueChapterMediaRepair(
         throw missingRepairChapterError(job);
       }
       const contentType = normalizeChapterContentType(chapter.contentType);
-      if (!chapter.isDownloaded || contentType !== "html" || !chapter.content) {
-        setDetail("No downloaded HTML media to repair");
+      if (
+        !chapter.isDownloaded ||
+        !isHtmlLikeChapterContentType(contentType) ||
+        !chapter.content
+      ) {
+        setDetail("No downloaded media to repair");
         setProgress({ current: progressTotal, total: progressTotal });
         return;
       }
@@ -645,7 +797,7 @@ export function enqueueChapterMediaRepair(
           const partialSaveResult = await saveChapterPartialContent(
             chapter.id,
             partialHtml,
-            "html",
+            contentType,
           );
           if (partialSaveResult.rowsAffected <= 0) {
             throw missingRepairChapterError(job);
@@ -667,6 +819,7 @@ export function enqueueChapterMediaRepair(
         },
         previousHtml: chapter.content,
         requestInit: plugin.imageRequestInit,
+        repair: true,
         scraperExecutor: executor ?? "immediate",
         signal,
         sourceId: job.pluginId,
@@ -675,25 +828,24 @@ export function enqueueChapterMediaRepair(
         media.html,
         storageContext,
       );
-      const saveResult = await saveChapterContent(chapter.id, media.html, "html", {
-        mediaBytes,
-      });
+      const saveResult = await saveChapterContent(
+        chapter.id,
+        media.html,
+        contentType,
+        {
+          mediaBytes,
+        },
+      );
       if (saveResult.rowsAffected <= 0) {
         throw missingRepairChapterError(job);
       }
       await mirrorStoredChapterContent(chapter.id);
-      const mediaCacheKeys = localChapterMediaCacheKeys(media.html, chapter.id);
-      if (
-        media.cacheKey &&
-        mediaCacheKeys.length === 1 &&
-        mediaCacheKeys[0] === media.cacheKey
-      ) {
-        await pruneChapterMedia(chapter.id, media.cacheKey, storageContext);
-      }
       if (media.mediaFailures.length > 0) {
         setDetail(
           `${media.mediaFailures.length} media assets using remote fallback`,
         );
+      } else if (media.archiveFailure) {
+        setDetail("Media archive failed; using extracted media files");
       } else {
         setDetail(`${media.storedMediaCount} media assets repaired`);
       }

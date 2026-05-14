@@ -3,6 +3,7 @@ use std::{
     fs::{self, File},
     io::{self, BufReader, BufWriter, ErrorKind, Read},
     path::{Component, Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use tauri::{AppHandle, Manager};
@@ -15,9 +16,11 @@ const MEDIA_URI_PREFIX: &str = "norea-media://chapter/";
 const CONTENTS_ROOT_DIR: &str = "contents";
 const NO_MEDIA_FILE: &str = ".nomedia";
 const MEDIA_DOWNLOAD_DIR: &str = "media";
-const STORAGE_MANIFEST_FILE: &str = "storage-manifest.json";
-const CHAPTER_MEDIA_MANIFEST_FILE: &str = "media-manifest.json";
+const MEDIA_ARCHIVE_FILE: &str = "media.zip";
+const LEGACY_STORAGE_MANIFEST_FILE: &str = "storage-manifest.json";
+const CHAPTER_MEDIA_MANIFEST_FILE: &str = "manifest.json";
 const STORAGE_ROOT_CONFIG_FILE: &str = "chapter-media-storage-root.txt";
+const MEDIA_RESTORE_BACKUP_INFIX: &str = ".restore-backup-";
 
 fn legacy_media_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
@@ -333,8 +336,8 @@ fn content_chapter_dirs_for_lookup(root: &Path, chapter_id: i64) -> Result<Vec<P
     Ok(dirs)
 }
 
-fn storage_manifest_path(root: &Path) -> PathBuf {
-    root.join(STORAGE_MANIFEST_FILE)
+fn legacy_storage_manifest_path(root: &Path) -> PathBuf {
+    root.join(LEGACY_STORAGE_MANIFEST_FILE)
 }
 
 fn safe_relative_storage_path(value: &str) -> Result<PathBuf, String> {
@@ -354,7 +357,8 @@ fn safe_relative_storage_path(value: &str) -> Result<PathBuf, String> {
 fn chapter_content_extension(content_type: Option<&str>) -> &'static str {
     match content_type {
         Some("pdf") => "pdf",
-        Some("text") => "txt",
+        Some("markdown") => "html",
+        Some("epub") => "html",
         _ => "html",
     }
 }
@@ -395,7 +399,6 @@ fn chapter_archive_path_at(
     chapter_number: Option<&str>,
     chapter_name: Option<&str>,
     chapter_position: Option<i64>,
-    cache_key: &str,
 ) -> Result<PathBuf, String> {
     Ok(content_chapter_dir_at(
         root,
@@ -408,7 +411,7 @@ fn chapter_archive_path_at(
         chapter_name,
         chapter_position,
     )?
-    .join(format!("{cache_key}.zip")))
+    .join(MEDIA_ARCHIVE_FILE))
 }
 
 fn chapter_archives_in_dir(dir: &Path) -> Result<Vec<PathBuf>, String> {
@@ -443,6 +446,11 @@ fn clear_content_media_artifacts(chapter_dir: &Path) -> Result<(), String> {
         fs::remove_file(&archive_path)
             .map_err(|err| format!("chapter media: remove media archive: {err}"))?;
     }
+    let backup_path = archive_backup_path(&chapter_dir.join(MEDIA_ARCHIVE_FILE));
+    if backup_path.exists() {
+        fs::remove_file(&backup_path)
+            .map_err(|err| format!("chapter media: remove media archive backup: {err}"))?;
+    }
     let manifest_path = chapter_media_manifest_path(chapter_dir);
     if manifest_path.exists() {
         fs::remove_file(&manifest_path)
@@ -451,73 +459,38 @@ fn clear_content_media_artifacts(chapter_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn read_storage_manifest(path: &Path) -> Result<serde_json::Value, String> {
-    match fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw)
-            .map_err(|err| format!("chapter media: parse storage manifest: {err}")),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(serde_json::json!({
-            "version": 1,
-            "contentRoot": CONTENTS_ROOT_DIR,
-            "novels": {},
-            "chapters": {}
-        })),
-        Err(err) => Err(format!("chapter media: read storage manifest: {err}")),
-    }
+fn archive_backup_path(archive_path: &Path) -> PathBuf {
+    archive_path.with_file_name(format!("{MEDIA_ARCHIVE_FILE}.bak"))
 }
 
-fn manifest_object_mut<'a>(
-    manifest: &'a mut serde_json::Value,
-    key: &str,
-) -> Result<&'a mut serde_json::Map<String, serde_json::Value>, String> {
-    if !manifest.is_object() {
-        *manifest = serde_json::json!({
-            "version": 1,
-            "contentRoot": CONTENTS_ROOT_DIR,
-            "novels": {},
-            "chapters": {}
-        });
+fn replace_media_archive(temp_archive_path: &Path, archive_path: &Path) -> Result<(), String> {
+    let backup_path = archive_backup_path(archive_path);
+    if backup_path.exists() {
+        fs::remove_file(&backup_path)
+            .map_err(|err| format!("chapter media: remove stale archive backup: {err}"))?;
     }
-    let object = manifest
-        .as_object_mut()
-        .ok_or_else(|| "chapter media: storage manifest is not an object".to_string())?;
-    object
-        .entry(key.to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    object
-        .get_mut(key)
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or_else(|| format!("chapter media: storage manifest {key} is not an object"))
-}
+    let had_archive = archive_path.exists();
+    if had_archive {
+        fs::rename(archive_path, &backup_path)
+            .map_err(|err| format!("chapter media: backup archive: {err}"))?;
+    }
 
-fn write_storage_manifest(path: &Path, manifest: &serde_json::Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("chapter media: create manifest dir: {err}"))?;
+    if let Err(err) = fs::rename(temp_archive_path, archive_path) {
+        if had_archive {
+            let _ = fs::rename(&backup_path, archive_path);
+        }
+        return Err(format!("chapter media: move archive: {err}"));
     }
-    let temp_path = path.with_extension("json.tmp");
-    let body = serde_json::to_vec_pretty(manifest)
-        .map_err(|err| format!("chapter media: encode storage manifest: {err}"))?;
-    fs::write(&temp_path, body)
-        .map_err(|err| format!("chapter media: write storage manifest temp: {err}"))?;
-    fs::rename(&temp_path, path)
-        .map_err(|err| format!("chapter media: move storage manifest: {err}"))
+
+    if backup_path.exists() {
+        fs::remove_file(&backup_path)
+            .map_err(|err| format!("chapter media: remove archive backup: {err}"))?;
+    }
+    Ok(())
 }
 
 fn chapter_media_manifest_path(chapter_dir: &Path) -> PathBuf {
     chapter_dir.join(CHAPTER_MEDIA_MANIFEST_FILE)
-}
-
-fn read_chapter_media_manifest(path: &Path) -> Result<serde_json::Value, String> {
-    match fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw)
-            .map_err(|err| format!("chapter media: parse media manifest: {err}")),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(serde_json::json!({
-            "version": 1,
-            "updatedAt": 0,
-            "files": []
-        })),
-        Err(err) => Err(format!("chapter media: read media manifest: {err}")),
-    }
 }
 
 fn write_chapter_media_manifest(path: &Path, manifest: &serde_json::Value) -> Result<(), String> {
@@ -535,104 +508,84 @@ fn write_chapter_media_manifest(path: &Path, manifest: &serde_json::Value) -> Re
         .map_err(|err| format!("chapter media: move media manifest: {err}"))
 }
 
-fn update_chapter_media_manifest(
-    chapter_dir: &Path,
-    cache_key: &str,
-    file_name: &str,
-    source_url: Option<&str>,
-    content_type: Option<&str>,
-) -> Result<(), String> {
-    let Some(source_url) = source_url.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0);
-    let manifest_path = chapter_media_manifest_path(chapter_dir);
-    let mut manifest = read_chapter_media_manifest(&manifest_path)?;
-    if !manifest.is_object() {
-        manifest = serde_json::json!({
-            "version": 1,
-            "updatedAt": 0,
-            "files": []
-        });
+fn delete_legacy_storage_manifest(root: &Path) -> Result<(), String> {
+    let manifest_path = legacy_storage_manifest_path(root);
+    if manifest_path.exists() {
+        fs::remove_file(&manifest_path)
+            .map_err(|err| format!("chapter media: remove legacy storage manifest: {err}"))?;
     }
-    let object = manifest
-        .as_object_mut()
-        .ok_or_else(|| "chapter media: media manifest is not an object".to_string())?;
-    let files = object
-        .entry("files".to_string())
-        .or_insert_with(|| serde_json::json!([]));
-    if !files.is_array() {
-        *files = serde_json::json!([]);
-    }
-    let files = files
-        .as_array_mut()
-        .ok_or_else(|| "chapter media: media manifest files is not an array".to_string())?;
-    files.retain(|file| {
-        file.get("sourceUrl")
-            .and_then(serde_json::Value::as_str)
-            .map_or(true, |value| value != source_url)
-    });
-
-    let mut entry = serde_json::json!({
-        "archivePath": format!("{cache_key}.zip"),
-        "cacheKey": cache_key,
-        "fileName": file_name,
-        "path": format!("{MEDIA_DOWNLOAD_DIR}/{cache_key}/{file_name}"),
-        "sourceUrl": source_url,
-        "updatedAt": now
-    });
-    if let Some(content_type) = content_type
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if let Some(entry_object) = entry.as_object_mut() {
-            entry_object.insert("contentType".to_string(), serde_json::json!(content_type));
-        }
-    }
-    files.push(entry);
-    files.sort_by(|left, right| {
-        left.get("fileName")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .cmp(
-                right
-                    .get("fileName")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default(),
-            )
-    });
-    object.insert("version".to_string(), serde_json::json!(1));
-    object.insert("updatedAt".to_string(), serde_json::json!(now));
-    write_chapter_media_manifest(&manifest_path, &manifest)
+    Ok(())
 }
 
-fn parse_media_src(media_src: &str) -> Result<(i64, String, String), String> {
+fn remove_chapter_content_files_in_dir(
+    chapter_dir: &Path,
+    keep_path: Option<&Path>,
+) -> Result<(), String> {
+    if !chapter_dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(chapter_dir).map_err(|err| format!("chapter media: read dir: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("chapter media: read entry: {err}"))?;
+        let path = entry.path();
+        if keep_path.is_some_and(|keep_path| path == keep_path) {
+            continue;
+        }
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| {
+                    ["html", "txt", "pdf", "epub"]
+                        .iter()
+                        .any(|extension| value.eq_ignore_ascii_case(extension))
+                })
+            && path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value == "content" || value.starts_with("chapter"))
+        {
+            fs::remove_file(path)
+                .map_err(|err| format!("chapter media: remove content mirror: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_stored_chapter_content_files(
+    root: &Path,
+    chapter_id: i64,
+    keep_path: Option<&Path>,
+) -> Result<(), String> {
+    for chapter_dir in content_chapter_dirs_for_lookup(root, chapter_id)? {
+        remove_chapter_content_files_in_dir(&chapter_dir, keep_path)?;
+    }
+    Ok(())
+}
+
+fn parse_media_src(media_src: &str) -> Result<(i64, String), String> {
     let payload = media_src
         .strip_prefix(MEDIA_URI_PREFIX)
         .ok_or_else(|| "chapter media: unsupported media uri".to_string())?;
-    let mut parts = payload.splitn(3, '/');
+    let mut parts = payload.split('/');
     let chapter_id = parts
         .next()
         .ok_or_else(|| "chapter media: missing chapter id".to_string())?
         .parse::<i64>()
         .map_err(|err| format!("chapter media: invalid chapter id: {err}"))?;
-    let cache_key = safe_segment(
-        parts
-            .next()
-            .ok_or_else(|| "chapter media: missing cache key".to_string())?,
-        "cache",
-    );
+    if chapter_id <= 0 {
+        return Err("chapter media: chapter id must be positive".to_string());
+    }
     let file_name = safe_segment(
         parts
             .next()
             .ok_or_else(|| "chapter media: missing file name".to_string())?,
         "media",
     );
-    Ok((chapter_id, cache_key, file_name))
+    if parts.next().is_some() {
+        return Err("chapter media: unexpected media uri segment".to_string());
+    }
+    Ok((chapter_id, file_name))
 }
 
 fn content_chapter_dir_from_context(
@@ -670,31 +623,20 @@ fn content_chapter_dir_from_context(
 
 fn media_path_in_chapter_dir(
     chapter_dir: &Path,
-    cache_key: &str,
     file_name: &str,
 ) -> Option<PathBuf> {
-    let current_path = chapter_dir
-        .join(MEDIA_DOWNLOAD_DIR)
-        .join(cache_key)
-        .join(file_name);
+    let current_path = chapter_dir.join(MEDIA_DOWNLOAD_DIR).join(file_name);
     if current_path.is_file() {
         return Some(current_path);
     }
-
-    let legacy_path = chapter_dir.join(MEDIA_DOWNLOAD_DIR).join(file_name);
-    if legacy_path.is_file() {
-        return Some(legacy_path);
-    }
-
     None
 }
 
 fn media_path_from_chapter_dir(
     chapter_dir: &Path,
-    cache_key: &str,
     file_name: &str,
 ) -> Result<Option<PathBuf>, String> {
-    Ok(media_path_in_chapter_dir(chapter_dir, cache_key, file_name))
+    Ok(media_path_in_chapter_dir(chapter_dir, file_name))
 }
 
 fn media_body_from_archive(
@@ -723,23 +665,23 @@ fn media_body_from_archive(
 
 fn media_body_from_chapter_dir(
     chapter_dir: &Path,
-    cache_key: &str,
     file_name: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    if let Some(path) = media_path_in_chapter_dir(chapter_dir, cache_key, file_name) {
+    if let Some(path) = media_path_in_chapter_dir(chapter_dir, file_name) {
         let body = fs::read(&path).map_err(|err| format!("chapter media: read media: {err}"))?;
         log::debug!(
-            "[chapter-media:data-url] direct hit cache_key={cache_key} file={file_name} bytes={} path={}",
+            "[chapter-media:data-url] direct hit file={file_name} bytes={} path={}",
             body.len(),
             path.display()
         );
         return Ok(Some(body));
     }
 
-    for archive_path in chapter_archives_in_dir(chapter_dir)? {
+    let archive_path = chapter_dir.join(MEDIA_ARCHIVE_FILE);
+    if archive_path.is_file() {
         if let Some(body) = media_body_from_archive(&archive_path, file_name)? {
             log::debug!(
-                "[chapter-media:data-url] archive hit cache_key={cache_key} file={file_name} bytes={} archive={}",
+                "[chapter-media:data-url] archive hit file={file_name} bytes={} archive={}",
                 body.len(),
                 archive_path.display()
             );
@@ -748,7 +690,7 @@ fn media_body_from_chapter_dir(
     }
 
     log::debug!(
-        "[chapter-media:data-url] miss cache_key={cache_key} file={file_name} chapter_dir={}",
+        "[chapter-media:data-url] miss file={file_name} chapter_dir={}",
         chapter_dir.display()
     );
     Ok(None)
@@ -765,7 +707,7 @@ fn chapter_media_path_from_src_with_context(
     chapter_name: Option<&str>,
     chapter_position: Option<i64>,
 ) -> Result<PathBuf, String> {
-    let (chapter_id, cache_key, file_name) = parse_media_src(media_src)?;
+    let (chapter_id, file_name) = parse_media_src(media_src)?;
     let roots = media_roots_for_lookup(app)?;
     for root in &roots {
         if let Some(chapter_dir) = content_chapter_dir_from_context(
@@ -779,20 +721,20 @@ fn chapter_media_path_from_src_with_context(
             chapter_name,
             chapter_position,
         )? {
-            if let Some(path) = media_path_from_chapter_dir(&chapter_dir, &cache_key, &file_name)? {
+            if let Some(path) = media_path_from_chapter_dir(&chapter_dir, &file_name)? {
                 return Ok(path);
             }
         }
 
         for chapter_dir in content_chapter_dirs_for_lookup(root, chapter_id)? {
-            if let Some(path) = media_path_from_chapter_dir(&chapter_dir, &cache_key, &file_name)? {
+            if let Some(path) = media_path_from_chapter_dir(&chapter_dir, &file_name)? {
                 return Ok(path);
             }
         }
     }
 
     Ok(chapter_dir_at(&roots[0], chapter_id)?
-        .join(&cache_key)
+        .join(MEDIA_DOWNLOAD_DIR)
         .join(&file_name))
 }
 
@@ -807,7 +749,7 @@ fn chapter_media_body_from_src_with_context(
     chapter_name: Option<&str>,
     chapter_position: Option<i64>,
 ) -> Result<(Vec<u8>, String), String> {
-    let (chapter_id, cache_key, file_name) = parse_media_src(media_src)?;
+    let (chapter_id, file_name) = parse_media_src(media_src)?;
     let roots = media_roots_for_lookup(app)?;
     for root in &roots {
         if let Some(chapter_dir) = content_chapter_dir_from_context(
@@ -821,13 +763,13 @@ fn chapter_media_body_from_src_with_context(
             chapter_name,
             chapter_position,
         )? {
-            if let Some(body) = media_body_from_chapter_dir(&chapter_dir, &cache_key, &file_name)? {
+            if let Some(body) = media_body_from_chapter_dir(&chapter_dir, &file_name)? {
                 return Ok((body, file_name));
             }
         }
 
         for chapter_dir in content_chapter_dirs_for_lookup(root, chapter_id)? {
-            if let Some(body) = media_body_from_chapter_dir(&chapter_dir, &cache_key, &file_name)? {
+            if let Some(body) = media_body_from_chapter_dir(&chapter_dir, &file_name)? {
                 return Ok((body, file_name));
             }
         }
@@ -843,14 +785,12 @@ pub(crate) fn chapter_media_src_from_backup_entry(entry_name: &str) -> Option<St
     if chapter_id <= 0 {
         return None;
     }
-    let cache_key = parts.next()?;
     let file_name = parts.next()?;
-    if parts.next().is_some() || cache_key.is_empty() || file_name.is_empty() {
+    if parts.next().is_some() || file_name.is_empty() {
         return None;
     }
     Some(format!(
-        "{MEDIA_URI_PREFIX}{chapter_id}/{}/{}",
-        safe_segment(cache_key, "cache"),
+        "{MEDIA_URI_PREFIX}{chapter_id}/{}",
         safe_segment(file_name, "media")
     ))
 }
@@ -859,10 +799,8 @@ pub(crate) fn chapter_media_src_from_backup_entry(entry_name: &str) -> Option<St
 pub fn chapter_media_store(
     app: AppHandle,
     chapter_id: i64,
-    cache_key: String,
     file_name: String,
     body: Vec<u8>,
-    content_type: Option<String>,
     novel_id: Option<i64>,
     source_id: Option<String>,
     novel_name: Option<String>,
@@ -870,9 +808,7 @@ pub fn chapter_media_store(
     chapter_number: Option<String>,
     chapter_name: Option<String>,
     chapter_position: Option<i64>,
-    source_url: Option<String>,
 ) -> Result<String, String> {
-    let cache_key = safe_segment(&cache_key, "cache");
     let file_name = safe_segment(&file_name, "media");
     let novel_id = novel_id.ok_or_else(|| "chapter media: missing novel id".to_string())?;
     let source_id = source_id
@@ -891,25 +827,18 @@ pub fn chapter_media_store(
         chapter_name.as_deref(),
         chapter_position,
     )?
-    .join(MEDIA_DOWNLOAD_DIR)
-    .join(&cache_key);
+    .join(MEDIA_DOWNLOAD_DIR);
     fs::create_dir_all(&dir).map_err(|err| format!("chapter media: create dir: {err}"))?;
-    fs::write(dir.join(&file_name), body)
-        .map_err(|err| format!("chapter media: write media file: {err}"))?;
-    if let Some(chapter_dir) = dir.parent().and_then(Path::parent) {
-        if let Err(err) = update_chapter_media_manifest(
-            chapter_dir,
-            &cache_key,
-            &file_name,
-            source_url.as_deref(),
-            content_type.as_deref(),
-        ) {
-            log::warn!("chapter media: update media manifest failed: {err}");
-        }
+    let part_path = dir.join(format!("{file_name}.part"));
+    let final_path = dir.join(&file_name);
+    fs::write(&part_path, body).map_err(|err| format!("chapter media: write media file: {err}"))?;
+    if final_path.exists() {
+        fs::remove_file(&final_path)
+            .map_err(|err| format!("chapter media: replace media file: {err}"))?;
     }
-    Ok(format!(
-        "{MEDIA_URI_PREFIX}{chapter_id}/{cache_key}/{file_name}"
-    ))
+    fs::rename(&part_path, &final_path)
+        .map_err(|err| format!("chapter media: move media file: {err}"))?;
+    Ok(format!("{MEDIA_URI_PREFIX}{chapter_id}/{file_name}"))
 }
 
 fn archive_cache_entry_paths(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
@@ -921,59 +850,19 @@ fn archive_cache_entry_paths(dir: &Path) -> Result<Vec<(String, PathBuf)>, Strin
             continue;
         }
         let file_name = safe_segment(&entry.file_name().to_string_lossy(), "media");
+        if file_name.ends_with(".part") {
+            continue;
+        }
         entries.push((file_name, path));
     }
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(entries)
 }
 
-fn archive_candidates_for_cache(
-    app: &AppHandle,
-    chapter_id: i64,
-    cache_key: &str,
-    novel_id: i64,
-    source_id: &str,
-    novel_path: Option<&str>,
-    novel_name: Option<&str>,
-    chapter_number: Option<&str>,
-    chapter_name: Option<&str>,
-    chapter_position: Option<i64>,
-) -> Result<Vec<PathBuf>, String> {
-    let mut candidates = Vec::new();
-    let mut seen = HashSet::new();
-    for root in media_roots_for_lookup(app)? {
-        let current_path = chapter_archive_path_at(
-            &root,
-            source_id,
-            novel_id,
-            novel_path,
-            novel_name,
-            chapter_id,
-            chapter_number,
-            chapter_name,
-            chapter_position,
-            cache_key,
-        )?;
-        if seen.insert(current_path.clone()) {
-            candidates.push(current_path);
-        }
-
-        for chapter_dir in content_chapter_dirs_for_lookup(&root, chapter_id)? {
-            for path in chapter_archives_in_dir(&chapter_dir)? {
-                if seen.insert(path.clone()) {
-                    candidates.push(path);
-                }
-            }
-        }
-    }
-    Ok(candidates)
-}
-
 #[tauri::command]
 pub fn chapter_media_archive_cache(
     app: AppHandle,
     chapter_id: i64,
-    cache_key: String,
     novel_id: Option<i64>,
     source_id: Option<String>,
     novel_name: Option<String>,
@@ -982,7 +871,6 @@ pub fn chapter_media_archive_cache(
     chapter_name: Option<String>,
     chapter_position: Option<i64>,
 ) -> Result<u64, String> {
-    let cache_key = safe_segment(&cache_key, "cache");
     let novel_id = novel_id.ok_or_else(|| "chapter media: missing novel id".to_string())?;
     let source_id = source_id
         .as_deref()
@@ -1010,31 +898,15 @@ pub fn chapter_media_archive_cache(
         chapter_number.as_deref(),
         chapter_name.as_deref(),
         chapter_position,
-        &cache_key,
     )?;
-    let cache_dir = chapter_dir.join(MEDIA_DOWNLOAD_DIR).join(&cache_key);
+    let cache_dir = chapter_dir.join(MEDIA_DOWNLOAD_DIR);
 
     if !cache_dir.is_dir() {
-        for candidate in archive_candidates_for_cache(
-            &app,
-            chapter_id,
-            &cache_key,
-            novel_id,
-            source_id,
-            novel_path.as_deref(),
-            novel_name.as_deref(),
-            chapter_number.as_deref(),
-            chapter_name.as_deref(),
-            chapter_position,
-        )? {
-            match fs::metadata(&candidate) {
-                Ok(metadata) if metadata.is_file() => return Ok(metadata.len()),
-                Ok(_) => {}
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(format!("chapter media: read archive metadata: {err}"));
-                }
-            }
+        match fs::metadata(&archive_path) {
+            Ok(metadata) if metadata.is_file() => return Ok(metadata.len()),
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("chapter media: read archive metadata: {err}")),
         }
         return Ok(0);
     }
@@ -1043,33 +915,18 @@ pub fn chapter_media_archive_cache(
     if entries.is_empty() {
         fs::remove_dir_all(&cache_dir)
             .map_err(|err| format!("chapter media: remove empty cache dir: {err}"))?;
-        for candidate in archive_candidates_for_cache(
-            &app,
-            chapter_id,
-            &cache_key,
-            novel_id,
-            source_id,
-            novel_path.as_deref(),
-            novel_name.as_deref(),
-            chapter_number.as_deref(),
-            chapter_name.as_deref(),
-            chapter_position,
-        )? {
-            match fs::metadata(&candidate) {
-                Ok(metadata) if metadata.is_file() => return Ok(metadata.len()),
-                Ok(_) => {}
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(format!("chapter media: read archive metadata: {err}"));
-                }
-            }
+        match fs::metadata(&archive_path) {
+            Ok(metadata) if metadata.is_file() => return Ok(metadata.len()),
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("chapter media: read archive metadata: {err}")),
         }
         return Ok(0);
     }
 
     fs::create_dir_all(&chapter_dir)
         .map_err(|err| format!("chapter media: create chapter dir: {err}"))?;
-    let temp_archive_path = chapter_dir.join(format!("{cache_key}.zip.tmp"));
+    let temp_archive_path = chapter_dir.join(format!("{MEDIA_ARCHIVE_FILE}.tmp"));
     let temp_file = File::create(&temp_archive_path)
         .map_err(|err| format!("chapter media: create archive: {err}"))?;
     let mut archive = ZipWriter::new(BufWriter::new(temp_file));
@@ -1077,51 +934,7 @@ pub fn chapter_media_archive_cache(
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
-    let new_entry_names = entries
-        .iter()
-        .map(|(entry_name, _)| entry_name.clone())
-        .collect::<HashSet<_>>();
     let mut written_entry_names = HashSet::new();
-
-    if let Some(previous_archive_path) = archive_candidates_for_cache(
-        &app,
-        chapter_id,
-        &cache_key,
-        novel_id,
-        source_id,
-        novel_path.as_deref(),
-        novel_name.as_deref(),
-        chapter_number.as_deref(),
-        chapter_name.as_deref(),
-        chapter_position,
-    )?
-    .into_iter()
-    .find(|path| path.is_file())
-    {
-        let previous_archive_file = File::open(&previous_archive_path)
-            .map_err(|err| format!("chapter media: open previous archive: {err}"))?;
-        let mut previous_archive = ZipArchive::new(BufReader::new(previous_archive_file))
-            .map_err(|err| format!("chapter media: read previous archive: {err}"))?;
-        for index in 0..previous_archive.len() {
-            let mut entry = previous_archive
-                .by_index(index)
-                .map_err(|err| format!("chapter media: open previous archive entry: {err}"))?;
-            if !entry.is_file() {
-                continue;
-            }
-            let entry_name = safe_segment(entry.name(), "media");
-            if new_entry_names.contains(&entry_name)
-                || !written_entry_names.insert(entry_name.clone())
-            {
-                continue;
-            }
-            archive
-                .start_file(&entry_name, options)
-                .map_err(|err| format!("chapter media: start previous archive entry: {err}"))?;
-            io::copy(&mut entry, &mut archive)
-                .map_err(|err| format!("chapter media: copy previous archive entry: {err}"))?;
-        }
-    }
 
     for (entry_name, path) in entries {
         if !written_entry_names.insert(entry_name.clone()) {
@@ -1139,14 +952,9 @@ pub fn chapter_media_archive_cache(
     archive
         .finish()
         .map_err(|err| format!("chapter media: finalize archive: {err}"))?;
-    if archive_path.exists() {
-        fs::remove_file(&archive_path)
-            .map_err(|err| format!("chapter media: replace archive: {err}"))?;
-    }
-    fs::rename(&temp_archive_path, &archive_path)
-        .map_err(|err| format!("chapter media: move archive: {err}"))?;
+    replace_media_archive(&temp_archive_path, &archive_path)?;
     fs::remove_dir_all(&cache_dir)
-        .map_err(|err| format!("chapter media: remove cache dir: {err}"))?;
+        .map_err(|err| format!("chapter media: remove media dir: {err}"))?;
 
     for root in media_roots_for_lookup(&app)? {
         for old_chapter_dir in content_chapter_dirs_for_lookup(&root, chapter_id)? {
@@ -1159,6 +967,216 @@ pub fn chapter_media_archive_cache(
     fs::metadata(&archive_path)
         .map(|metadata| metadata.len())
         .map_err(|err| format!("chapter media: read archive size: {err}"))
+}
+
+fn required_content_chapter_dir(
+    app: &AppHandle,
+    chapter_id: i64,
+    novel_id: Option<i64>,
+    source_id: Option<&str>,
+    novel_path: Option<&str>,
+    novel_name: Option<&str>,
+    chapter_number: Option<&str>,
+    chapter_name: Option<&str>,
+    chapter_position: Option<i64>,
+) -> Result<PathBuf, String> {
+    let novel_id = novel_id.ok_or_else(|| "chapter media: missing novel id".to_string())?;
+    let source_id = source_id.ok_or_else(|| "chapter media: missing source id".to_string())?;
+    let novel_path = novel_path.ok_or_else(|| "chapter media: missing novel path".to_string())?;
+    let root = media_root(app)?;
+    ensure_contents_nomedia(&root)?;
+    content_chapter_dir_at(
+        &root,
+        source_id,
+        novel_id,
+        Some(novel_path),
+        novel_name,
+        chapter_id,
+        chapter_number,
+        chapter_name,
+        chapter_position,
+    )
+}
+
+fn extract_media_archive_to_dir(archive_path: &Path, media_dir: &Path) -> Result<u64, String> {
+    if !archive_path.is_file() {
+        return Ok(0);
+    }
+    fs::create_dir_all(media_dir)
+        .map_err(|err| format!("chapter media: create media dir: {err}"))?;
+    let archive_file =
+        File::open(archive_path).map_err(|err| format!("chapter media: open archive: {err}"))?;
+    let mut archive = ZipArchive::new(BufReader::new(archive_file))
+        .map_err(|err| format!("chapter media: read archive: {err}"))?;
+    let mut bytes = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|err| format!("chapter media: open archive entry: {err}"))?;
+        if !entry.is_file() {
+            continue;
+        }
+        let entry_name = safe_segment(entry.name(), "media");
+        let output_path = media_dir.join(entry_name);
+        if output_path.is_file() {
+            continue;
+        }
+        let mut output = File::create(&output_path)
+            .map_err(|err| format!("chapter media: create extracted media: {err}"))?;
+        bytes += io::copy(&mut entry, &mut output)
+            .map_err(|err| format!("chapter media: extract archive entry: {err}"))?;
+    }
+    Ok(bytes)
+}
+
+#[tauri::command]
+pub fn chapter_media_prepare_workspace(
+    app: AppHandle,
+    chapter_id: i64,
+    repair: bool,
+    novel_id: Option<i64>,
+    source_id: Option<String>,
+    novel_name: Option<String>,
+    novel_path: Option<String>,
+    chapter_number: Option<String>,
+    chapter_name: Option<String>,
+    chapter_position: Option<i64>,
+) -> Result<(), String> {
+    let chapter_dir = required_content_chapter_dir(
+        &app,
+        chapter_id,
+        novel_id,
+        source_id.as_deref(),
+        novel_path.as_deref(),
+        novel_name.as_deref(),
+        chapter_number.as_deref(),
+        chapter_name.as_deref(),
+        chapter_position,
+    )?;
+    let media_dir = chapter_dir.join(MEDIA_DOWNLOAD_DIR);
+    if repair {
+        extract_media_archive_to_dir(&chapter_dir.join(MEDIA_ARCHIVE_FILE), &media_dir)?;
+    } else {
+        if media_dir.exists() {
+            fs::remove_dir_all(&media_dir)
+                .map_err(|err| format!("chapter media: remove media dir: {err}"))?;
+        }
+        let archive_path = chapter_dir.join(MEDIA_ARCHIVE_FILE);
+        if archive_path.exists() {
+            fs::remove_file(&archive_path)
+                .map_err(|err| format!("chapter media: remove media archive: {err}"))?;
+        }
+        let manifest_path = chapter_media_manifest_path(&chapter_dir);
+        if manifest_path.exists() {
+            fs::remove_file(&manifest_path)
+                .map_err(|err| format!("chapter media: remove media manifest: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn chapter_media_cleanup_workspace(
+    app: AppHandle,
+    chapter_id: i64,
+    novel_id: Option<i64>,
+    source_id: Option<String>,
+    novel_name: Option<String>,
+    novel_path: Option<String>,
+    chapter_number: Option<String>,
+    chapter_name: Option<String>,
+    chapter_position: Option<i64>,
+) -> Result<(), String> {
+    let chapter_dir = required_content_chapter_dir(
+        &app,
+        chapter_id,
+        novel_id,
+        source_id.as_deref(),
+        novel_path.as_deref(),
+        novel_name.as_deref(),
+        chapter_number.as_deref(),
+        chapter_name.as_deref(),
+        chapter_position,
+    )?;
+    let media_dir = chapter_dir.join(MEDIA_DOWNLOAD_DIR);
+    if media_dir.exists() {
+        fs::remove_dir_all(&media_dir)
+            .map_err(|err| format!("chapter media: remove media dir: {err}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn chapter_media_write_manifest(
+    app: AppHandle,
+    chapter_id: i64,
+    files: serde_json::Value,
+    novel_id: Option<i64>,
+    source_id: Option<String>,
+    novel_name: Option<String>,
+    novel_path: Option<String>,
+    chapter_number: Option<String>,
+    chapter_name: Option<String>,
+    chapter_position: Option<i64>,
+) -> Result<(), String> {
+    let chapter_dir = required_content_chapter_dir(
+        &app,
+        chapter_id,
+        novel_id,
+        source_id.as_deref(),
+        novel_path.as_deref(),
+        novel_name.as_deref(),
+        chapter_number.as_deref(),
+        chapter_name.as_deref(),
+        chapter_position,
+    )?;
+    let files = match files {
+        serde_json::Value::Array(files) => files,
+        _ => Vec::new(),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let manifest = serde_json::json!({
+        "version": 1,
+        "updatedAt": now,
+        "media": {
+            "files": files
+        }
+    });
+    write_chapter_media_manifest(&chapter_media_manifest_path(&chapter_dir), &manifest)
+}
+
+#[tauri::command]
+pub fn chapter_media_read_manifest(
+    app: AppHandle,
+    chapter_id: i64,
+    novel_id: Option<i64>,
+    source_id: Option<String>,
+    novel_name: Option<String>,
+    novel_path: Option<String>,
+    chapter_number: Option<String>,
+    chapter_name: Option<String>,
+    chapter_position: Option<i64>,
+) -> Result<Option<String>, String> {
+    let chapter_dir = required_content_chapter_dir(
+        &app,
+        chapter_id,
+        novel_id,
+        source_id.as_deref(),
+        novel_path.as_deref(),
+        novel_name.as_deref(),
+        chapter_number.as_deref(),
+        chapter_name.as_deref(),
+        chapter_position,
+    )?;
+    let manifest_path = chapter_media_manifest_path(&chapter_dir);
+    match fs::read_to_string(&manifest_path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("chapter media: read media manifest: {err}")),
+    }
 }
 
 #[tauri::command]
@@ -1174,7 +1192,7 @@ pub fn chapter_content_mirror_store(
         .get("novel")
         .cloned()
         .ok_or_else(|| "chapter media: missing novel metadata".to_string())?;
-    let mut chapter = metadata
+    let chapter = metadata
         .get("chapter")
         .cloned()
         .ok_or_else(|| "chapter media: missing chapter metadata".to_string())?;
@@ -1210,16 +1228,6 @@ pub fn chapter_content_mirror_store(
     )?;
     let content_path = media_root.join(&content_file);
 
-    let manifest_path = storage_manifest_path(&media_root);
-    let mut manifest = read_storage_manifest(&manifest_path)?;
-    let chapter_key = chapter_id.to_string();
-    let previous_content_file = manifest
-        .get("chapters")
-        .and_then(|chapters| chapters.get(chapter_key.as_str()))
-        .and_then(|chapter| chapter.get("contentFile"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-
     if let Some(parent) = content_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("chapter media: create content mirror dir: {err}"))?;
@@ -1229,115 +1237,21 @@ pub fn chapter_content_mirror_store(
         .map_err(|err| format!("chapter media: write content mirror temp: {err}"))?;
     fs::rename(&temp_content_path, &content_path)
         .map_err(|err| format!("chapter media: move content mirror: {err}"))?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    if let Some(object) = manifest.as_object_mut() {
-        object.insert("version".to_string(), serde_json::json!(1));
-        object.insert("updatedAt".to_string(), serde_json::json!(now));
-        object.insert(
-            "contentRoot".to_string(),
-            serde_json::json!(CONTENTS_ROOT_DIR),
-        );
-    }
-
-    if let Some(chapter_object) = chapter.as_object_mut() {
-        chapter_object.insert(
-            "contentFile".to_string(),
-            serde_json::json!(content_file.clone()),
-        );
-    }
-
-    manifest_object_mut(&mut manifest, "novels")?.insert(novel_id.to_string(), novel);
-    manifest_object_mut(&mut manifest, "chapters")?.insert(chapter_key, chapter);
-    if let Some(previous_content_file) = previous_content_file {
-        if previous_content_file != content_file {
-            let previous_content_path = media_root.join(previous_content_file);
-            if previous_content_path.exists() {
-                fs::remove_file(&previous_content_path).map_err(|err| {
-                    format!("chapter media: remove previous content mirror: {err}")
-                })?;
-            }
-        }
-    }
-    write_storage_manifest(&manifest_path, &manifest)
+    remove_stored_chapter_content_files(&media_root, chapter_id, Some(&content_path))?;
+    delete_legacy_storage_manifest(&media_root)
 }
 
 #[tauri::command]
 pub fn chapter_content_mirror_clear(app: AppHandle, chapter_id: i64) -> Result<(), String> {
     let media_root = media_root(&app)?;
-    let manifest_path = storage_manifest_path(&media_root);
-    if manifest_path.exists() {
-        let mut manifest = read_storage_manifest(&manifest_path)?;
-        if let Ok(chapters) = manifest_object_mut(&mut manifest, "chapters") {
-            if let Some(chapter) = chapters.remove(&chapter_id.to_string()) {
-                if let Some(content_file) = chapter
-                    .get("contentFile")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    let content_path = media_root.join(content_file);
-                    if content_path.exists() {
-                        fs::remove_file(&content_path).map_err(|err| {
-                            format!("chapter media: remove content mirror: {err}")
-                        })?;
-                    }
-                }
-            }
-        }
-        write_storage_manifest(&manifest_path, &manifest)?;
-    }
-
-    for chapter_dir in content_chapter_dirs_for_lookup(&media_root, chapter_id)? {
-        for extension in ["html", "txt", "pdf"] {
-            for entry in fs::read_dir(&chapter_dir)
-                .map_err(|err| format!("chapter media: read dir: {err}"))?
-            {
-                let entry = entry.map_err(|err| format!("chapter media: read entry: {err}"))?;
-                let path = entry.path();
-                if path.is_file()
-                    && path
-                        .extension()
-                        .and_then(|value| value.to_str())
-                        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
-                    && path
-                        .file_stem()
-                        .and_then(|value| value.to_str())
-                        .is_some_and(|value| value == "content" || value.starts_with("chapter"))
-                {
-                    fs::remove_file(path)
-                        .map_err(|err| format!("chapter media: remove content mirror: {err}"))?;
-                }
-            }
-        }
-    }
-    Ok(())
+    remove_stored_chapter_content_files(&media_root, chapter_id, None)?;
+    delete_legacy_storage_manifest(&media_root)
 }
 
 #[tauri::command]
-pub fn chapter_content_mirror_read(app: AppHandle) -> Result<serde_json::Value, String> {
+pub fn chapter_content_mirror_cleanup_legacy_manifest(app: AppHandle) -> Result<(), String> {
     let media_root = media_root(&app)?;
-    let manifest_path = storage_manifest_path(&media_root);
-    let mut manifest = read_storage_manifest(&manifest_path)?;
-    let chapters = manifest_object_mut(&mut manifest, "chapters")?;
-    for chapter in chapters.values_mut() {
-        let content_file = chapter
-            .get("contentFile")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "chapter media: mirrored chapter missing content file".to_string())?;
-        let content_path = media_root.join(content_file);
-        let content = fs::read_to_string(&content_path).map_err(|err| {
-            format!(
-                "chapter media: read mirrored chapter '{}': {err}",
-                content_path.to_string_lossy()
-            )
-        })?;
-        if let Some(chapter_object) = chapter.as_object_mut() {
-            chapter_object.insert("content".to_string(), serde_json::json!(content));
-        }
-    }
-    Ok(manifest)
+    delete_legacy_storage_manifest(&media_root)
 }
 
 #[tauri::command]
@@ -1468,9 +1382,9 @@ pub async fn chapter_media_data_url(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         match parse_media_src(&media_src) {
-            Ok((chapter_id, cache_key, file_name)) => {
+            Ok((chapter_id, file_name)) => {
                 log::debug!(
-                    "[chapter-media:data-url] request chapter_id={chapter_id} cache_key={cache_key} file={file_name}"
+                    "[chapter-media:data-url] request chapter_id={chapter_id} file={file_name}"
                 );
             }
             Err(err) => {
@@ -1513,7 +1427,7 @@ pub fn chapter_media_total_size(
     let mut total = 0;
     let mut counted_archives = HashSet::new();
     for media_src in media_srcs {
-        let (chapter_id, cache_key, file_name) = parse_media_src(&media_src)?;
+        let (chapter_id, file_name) = parse_media_src(&media_src)?;
         for root in media_roots_for_lookup(&app)? {
             let mut found = false;
             if let Some(chapter_dir) = content_chapter_dir_from_context(
@@ -1527,9 +1441,7 @@ pub fn chapter_media_total_size(
                 chapter_name.as_deref(),
                 chapter_position,
             )? {
-                if let Some(path) =
-                    media_path_in_chapter_dir(&chapter_dir, &cache_key, &file_name)
-                {
+                if let Some(path) = media_path_in_chapter_dir(&chapter_dir, &file_name) {
                     match fs::metadata(&path) {
                         Ok(metadata) if metadata.is_file() => {
                             total += metadata.len();
@@ -1544,7 +1456,8 @@ pub fn chapter_media_total_size(
                 }
 
                 if !found {
-                    for archive_path in chapter_archives_in_dir(&chapter_dir)? {
+                    let archive_path = chapter_dir.join(MEDIA_ARCHIVE_FILE);
+                    if archive_path.is_file() {
                         let archive_key = archive_path.to_string_lossy().into_owned();
                         if counted_archives.contains(&archive_key)
                             || !archive_contains_file(&archive_path, &file_name)?
@@ -1555,15 +1468,12 @@ pub fn chapter_media_total_size(
                             Ok(metadata) if metadata.is_file() => {
                                 total += metadata.len();
                                 counted_archives.insert(archive_key);
-                                found = true;
                                 break;
                             }
                             Ok(_) => {}
                             Err(err) if err.kind() == ErrorKind::NotFound => {}
                             Err(err) => {
-                                return Err(format!(
-                                    "chapter media: read archive metadata: {err}"
-                                ));
+                                return Err(format!("chapter media: read archive metadata: {err}"));
                             }
                         }
                     }
@@ -1574,8 +1484,7 @@ pub fn chapter_media_total_size(
                 if found {
                     break;
                 }
-                if let Some(path) = media_path_in_chapter_dir(&chapter_dir, &cache_key, &file_name)
-                {
+                if let Some(path) = media_path_in_chapter_dir(&chapter_dir, &file_name) {
                     match fs::metadata(&path) {
                         Ok(metadata) if metadata.is_file() => {
                             total += metadata.len();
@@ -1590,7 +1499,8 @@ pub fn chapter_media_total_size(
                     }
                 }
 
-                for archive_path in chapter_archives_in_dir(&chapter_dir)? {
+                let archive_path = chapter_dir.join(MEDIA_ARCHIVE_FILE);
+                if archive_path.is_file() {
                     let archive_key = archive_path.to_string_lossy().into_owned();
                     if counted_archives.contains(&archive_key)
                         || !archive_contains_file(&archive_path, &file_name)?
@@ -1623,63 +1533,41 @@ pub fn chapter_media_total_size(
     Ok(total)
 }
 
-fn prune_chapter_dir(dir: &Path, keep_cache_key: &str) -> Result<(), String> {
+fn prune_chapter_dir(dir: &Path) -> Result<(), String> {
     if !dir.is_dir() {
         return Ok(());
     }
 
-    let keep_archive_name = format!("{keep_cache_key}.zip");
     let media_dir = dir.join(MEDIA_DOWNLOAD_DIR);
     if media_dir.is_dir() {
         for entry in
             fs::read_dir(&media_dir).map_err(|err| format!("chapter media: read media dir: {err}"))?
         {
             let entry = entry.map_err(|err| format!("chapter media: read media entry: {err}"))?;
-            if entry.file_name().to_string_lossy().as_ref() == keep_cache_key {
-                continue;
-            }
             let path = entry.path();
             if path.is_dir() {
                 fs::remove_dir_all(&path)
-                    .map_err(|err| format!("chapter media: remove media cache dir: {err}"))?;
-            } else {
-                fs::remove_file(&path)
-                    .map_err(|err| format!("chapter media: remove media cache file: {err}"))?;
+                    .map_err(|err| format!("chapter media: remove stale media dir: {err}"))?;
             }
         }
+    }
+    let backup_path = archive_backup_path(&dir.join(MEDIA_ARCHIVE_FILE));
+    if backup_path.exists() {
+        fs::remove_file(&backup_path)
+            .map_err(|err| format!("chapter media: remove archive backup: {err}"))?;
     }
 
     for entry in fs::read_dir(dir).map_err(|err| format!("chapter media: read dir: {err}"))? {
         let entry = entry.map_err(|err| format!("chapter media: read entry: {err}"))?;
         let entry_name = entry.file_name().to_string_lossy().to_string();
         if entry_name == MEDIA_DOWNLOAD_DIR
-            || entry_name == keep_archive_name
+            || entry_name == MEDIA_ARCHIVE_FILE
             || !entry_name.ends_with(".zip")
         {
             continue;
         }
         let path = entry.path();
         fs::remove_file(&path).map_err(|err| format!("chapter media: remove archive: {err}"))?;
-    }
-
-    let manifest_path = chapter_media_manifest_path(dir);
-    if manifest_path.exists() {
-        let result = read_chapter_media_manifest(&manifest_path).and_then(|mut manifest| {
-            if let Some(files) = manifest
-                .get_mut("files")
-                .and_then(serde_json::Value::as_array_mut)
-            {
-                files.retain(|file| {
-                    file.get("cacheKey")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|value| value == keep_cache_key)
-                });
-            }
-            write_chapter_media_manifest(&manifest_path, &manifest)
-        });
-        if let Err(err) = result {
-            log::warn!("chapter media: prune media manifest failed: {err}");
-        }
     }
     Ok(())
 }
@@ -1692,11 +1580,7 @@ fn clear_storage_root(root: &Path) -> Result<(), String> {
     }
     ensure_contents_nomedia(root)?;
 
-    let manifest_path = storage_manifest_path(root);
-    if manifest_path.exists() {
-        fs::remove_file(&manifest_path)
-            .map_err(|err| format!("chapter media: remove storage manifest: {err}"))?;
-    }
+    delete_legacy_storage_manifest(root)?;
 
     if !root.is_dir() {
         return Ok(());
@@ -1715,11 +1599,190 @@ fn clear_storage_root(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_existing_path(path: &Path, context: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|err| format!("{context}: {err}"))
+    } else {
+        fs::remove_file(path).map_err(|err| format!("{context}: {err}"))
+    }
+}
+
+#[tauri::command]
+pub fn chapter_storage_remove_dir(app: AppHandle, relative_dir: String) -> Result<(), String> {
+    let media_root = media_root(&app)?;
+    let relative_dir = safe_relative_storage_path(&relative_dir)?;
+    let path = media_root.join(relative_dir);
+    remove_existing_path(&path, "chapter media: remove chapter storage dir")?;
+    delete_legacy_storage_manifest(&media_root)
+}
+
+#[tauri::command]
+pub fn chapter_storage_relocate_dir(
+    app: AppHandle,
+    old_relative_dir: String,
+    new_relative_dir: String,
+) -> Result<(), String> {
+    let media_root = media_root(&app)?;
+    let old_relative_dir = safe_relative_storage_path(&old_relative_dir)?;
+    let new_relative_dir = safe_relative_storage_path(&new_relative_dir)?;
+    if old_relative_dir == new_relative_dir {
+        return Ok(());
+    }
+
+    let old_path = media_root.join(old_relative_dir);
+    let new_path = media_root.join(new_relative_dir);
+    if !old_path.exists() {
+        return Ok(());
+    }
+    if !old_path.is_dir() {
+        return Err("chapter media: old chapter storage path is not a directory".to_string());
+    }
+    if let Some(parent) = new_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("chapter media: create relocated storage parent: {err}"))?;
+    }
+    remove_existing_path(&new_path, "chapter media: remove relocated storage target")?;
+    fs::rename(&old_path, &new_path)
+        .map_err(|err| format!("chapter media: relocate chapter storage dir: {err}"))?;
+    delete_legacy_storage_manifest(&media_root)
+}
+
+#[tauri::command]
+pub fn chapter_storage_prune_dir_children(
+    app: AppHandle,
+    relative_dir: String,
+    keep_names: Vec<String>,
+) -> Result<(), String> {
+    let media_root = media_root(&app)?;
+    let relative_dir = safe_relative_storage_path(&relative_dir)?;
+    let path = media_root.join(relative_dir);
+    if !path.is_dir() {
+        return Ok(());
+    }
+    let keep_names = keep_names
+        .into_iter()
+        .filter(|name| !name.is_empty() && !name.contains('/') && !name.contains('\\'))
+        .collect::<std::collections::HashSet<_>>();
+    for entry in fs::read_dir(&path).map_err(|err| format!("chapter media: read dir: {err}"))? {
+        let entry = entry.map_err(|err| format!("chapter media: read entry: {err}"))?;
+        let entry_name = entry.file_name().to_string_lossy().to_string();
+        if keep_names.contains(&entry_name) {
+            continue;
+        }
+        let child_path = entry.path();
+        if child_path.is_dir() {
+            fs::remove_dir_all(&child_path)
+                .map_err(|err| format!("chapter media: remove stale storage dir: {err}"))?;
+        }
+    }
+    delete_legacy_storage_manifest(&media_root)
+}
+
+fn restore_token() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn validate_restore_token(token: &str) -> Result<(), String> {
+    if token.is_empty()
+        || !token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err("chapter media: invalid restore token".to_string());
+    }
+    Ok(())
+}
+
+fn restore_backup_path(root: &Path, token: &str, index: usize) -> Result<PathBuf, String> {
+    validate_restore_token(token)?;
+    let parent = root
+        .parent()
+        .ok_or_else(|| "chapter media: storage root has no parent".to_string())?;
+    let name = root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("chapter-media");
+    Ok(parent.join(format!("{name}{MEDIA_RESTORE_BACKUP_INFIX}{token}-{index}")))
+}
+
+fn restore_backup_roots(app: &AppHandle, token: &str) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    media_roots_for_lookup(app)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, root)| {
+            let backup = restore_backup_path(&root, token, index)?;
+            Ok((root, backup))
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn chapter_media_begin_restore(app: AppHandle) -> Result<String, String> {
+    let token = restore_token();
+    let mut moved_roots: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let result = (|| -> Result<(), String> {
+        for (root, backup) in restore_backup_roots(&app, &token)? {
+            remove_existing_path(&backup, "chapter media: remove stale restore backup")?;
+            if root.exists() {
+                if let Some(parent) = backup.parent() {
+                    fs::create_dir_all(parent).map_err(|err| {
+                        format!("chapter media: create restore backup dir: {err}")
+                    })?;
+                }
+                fs::rename(&root, &backup)
+                    .map_err(|err| format!("chapter media: backup storage root: {err}"))?;
+                moved_roots.push((root.clone(), backup));
+            }
+            ensure_contents_nomedia(&root)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        for (root, backup) in moved_roots.into_iter().rev() {
+            let _ = remove_existing_path(&root, "chapter media: remove failed restore root");
+            let _ = fs::rename(&backup, &root);
+        }
+        return Err(error);
+    }
+    Ok(token)
+}
+
+#[tauri::command]
+pub fn chapter_media_commit_restore(app: AppHandle, token: String) -> Result<(), String> {
+    for (_, backup) in restore_backup_roots(&app, &token)? {
+        remove_existing_path(&backup, "chapter media: remove restore backup")?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn chapter_media_rollback_restore(app: AppHandle, token: String) -> Result<(), String> {
+    for (root, backup) in restore_backup_roots(&app, &token)? {
+        remove_existing_path(&root, "chapter media: remove failed restore root")?;
+        if backup.exists() {
+            if let Some(parent) = root.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|err| format!("chapter media: create restore root parent: {err}"))?;
+            }
+            fs::rename(&backup, &root)
+                .map_err(|err| format!("chapter media: rollback restore backup: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn chapter_media_prune(
     app: AppHandle,
     chapter_id: i64,
-    keep_cache_key: String,
     novel_id: Option<i64>,
     source_id: Option<String>,
     novel_name: Option<String>,
@@ -1728,7 +1791,6 @@ pub fn chapter_media_prune(
     chapter_name: Option<String>,
     chapter_position: Option<i64>,
 ) -> Result<(), String> {
-    let keep_cache_key = safe_segment(&keep_cache_key, "cache");
     for root in media_roots_for_lookup(&app)? {
         if let Some(chapter_dir) = content_chapter_dir_from_context(
             &root,
@@ -1741,12 +1803,12 @@ pub fn chapter_media_prune(
             chapter_name.as_deref(),
             chapter_position,
         )? {
-            prune_chapter_dir(&chapter_dir, &keep_cache_key)?;
+            prune_chapter_dir(&chapter_dir)?;
         }
         for chapter_dir in content_chapter_dirs_for_lookup(&root, chapter_id)? {
-            prune_chapter_dir(&chapter_dir, &keep_cache_key)?;
+            prune_chapter_dir(&chapter_dir)?;
         }
-        prune_chapter_dir(&chapter_dir_at(&root, chapter_id)?, &keep_cache_key)?;
+        prune_chapter_dir(&chapter_dir_at(&root, chapter_id)?)?;
     }
     Ok(())
 }

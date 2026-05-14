@@ -1,24 +1,24 @@
-import { invoke } from "@tauri-apps/api/core";
 import { load } from "cheerio";
 import {
   chapterContentToHtml,
   type ChapterContentType,
 } from "./chapter-content";
+import {
+  convertEpubToHtml,
+  mergeEpubHtmlSections,
+  type EpubHtmlResource,
+} from "./epub-html";
 import type { ChapterItem, SourceNovel } from "./plugins/types";
 
 export const LOCAL_IMPORT_LIMITS = {
   fileBytes: 25 * 1024 * 1024,
   textBytes: 8 * 1024 * 1024,
   htmlBytes: 8 * 1024 * 1024,
+  markdownBytes: 8 * 1024 * 1024,
   pdfBytes: 25 * 1024 * 1024,
-  epubContainerBytes: 256 * 1024,
-  epubOpfBytes: 2 * 1024 * 1024,
-  epubChapterBytes: 4 * 1024 * 1024,
-  epubImageBytes: 2 * 1024 * 1024,
-  epubTotalImageBytes: 8 * 1024 * 1024,
 } as const;
 
-export type LocalImportFormat = "txt" | "html" | "epub" | "pdf";
+export type LocalImportFormat = "txt" | "html" | "markdown" | "epub" | "pdf";
 
 interface SanitizableElement {
   attribs?: Record<string, string>;
@@ -49,6 +49,7 @@ export interface LocalImportAnalysis {
 export interface LocalImportConvertedChapter extends ChapterItem {
   content: string;
   contentBytes: number;
+  mediaResources?: EpubHtmlResource[];
 }
 
 export interface LocalImportConversion {
@@ -56,25 +57,6 @@ export interface LocalImportConversion {
   novel: SourceNovel;
   chapters: LocalImportConvertedChapter[];
   duplicate: LocalImportDuplicateMetadata;
-}
-
-interface ZipEntryInfo {
-  name: string;
-  compressed_size: number;
-  uncompressed_size: number;
-  is_file: boolean;
-}
-
-interface EpubManifestItem {
-  id: string;
-  href: string;
-  mediaType: string;
-}
-
-interface EpubChapterSource {
-  name: string;
-  path: string;
-  html: string;
 }
 
 const DATA_IMAGE_SOURCE_PATTERN =
@@ -174,21 +156,6 @@ const TAG_ALLOWED_ATTRIBUTES: Record<string, Set<string>> = {
   th: new Set(["colspan", "rowspan", "scope"]),
 };
 
-const SUPPORTED_IMAGE_MEDIA_TYPES: Record<string, string> = {
-  ".avif": "image/avif",
-  ".gif": "image/gif",
-  ".jpeg": "image/jpeg",
-  ".jpg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-};
-
-const XHTML_MEDIA_TYPES = new Set([
-  "application/xhtml+xml",
-  "text/html",
-  "application/html+xml",
-]);
-
 export class LocalImportError extends Error {
   constructor(message: string) {
     super(message);
@@ -214,11 +181,15 @@ function formatFromFile(file: File): LocalImportFormat {
 
   if (extension === "txt") return "txt";
   if (extension === "html" || extension === "htm") return "html";
+  if (extension === "md" || extension === "markdown") return "markdown";
   if (extension === "epub") return "epub";
   if (extension === "pdf") return "pdf";
 
   if (mimeType === "text/plain") return "txt";
   if (mimeType === "text/html") return "html";
+  if (mimeType === "text/markdown" || mimeType === "text/x-markdown") {
+    return "markdown";
+  }
   if (mimeType === "application/epub+zip") return "epub";
   if (mimeType === "application/pdf") return "pdf";
 
@@ -228,6 +199,7 @@ function formatFromFile(file: File): LocalImportFormat {
 function formatLimit(format: LocalImportFormat): number {
   if (format === "txt") return LOCAL_IMPORT_LIMITS.textBytes;
   if (format === "html") return LOCAL_IMPORT_LIMITS.htmlBytes;
+  if (format === "markdown") return LOCAL_IMPORT_LIMITS.markdownBytes;
   if (format === "pdf") return LOCAL_IMPORT_LIMITS.pdfBytes;
   return LOCAL_IMPORT_LIMITS.fileBytes;
 }
@@ -239,10 +211,6 @@ function assertFileWithinLimit(file: File, format: LocalImportFormat): void {
       `${file.name} is larger than the ${format} import limit.`,
     );
   }
-}
-
-function bytesToArray(bytes: Uint8Array): number[] {
-  return Array.from(bytes);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -449,198 +417,6 @@ function singleChapterConversion(
   };
 }
 
-async function invokeZipList(bytes: Uint8Array): Promise<ZipEntryInfo[]> {
-  return invoke<ZipEntryInfo[]>("plugin_zip_list", {
-    bytes: bytesToArray(bytes),
-  });
-}
-
-async function invokeZipReadFile(
-  bytes: Uint8Array,
-  path: string,
-  maxBytes: number,
-): Promise<Uint8Array> {
-  const output = await invoke<number[]>("plugin_zip_read_file", {
-    bytes: bytesToArray(bytes),
-    options: {
-      path,
-      max_bytes: maxBytes,
-    },
-  });
-  return new Uint8Array(output);
-}
-
-function normalizeZipPath(path: string): string {
-  const parts: string[] = [];
-  for (const rawPart of path.replace(/\\/g, "/").split("/")) {
-    const part = safeDecodePathPart(rawPart).trim();
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  return parts.join("/");
-}
-
-function joinZipPath(basePath: string, href: string): string {
-  if (/^[a-z][a-z\d+\-.]*:/i.test(href)) return "";
-  const baseParts =
-    basePath && !href.startsWith("/") ? basePath.split("/") : [];
-  const hrefParts = href.split("#")[0]?.split("?")[0] ?? "";
-  return normalizeZipPath([...baseParts, hrefParts].join("/"));
-}
-
-function safeDecodePathPart(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function directoryName(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index < 0 ? "" : path.slice(0, index);
-}
-
-function parseContainerRootfile(containerXml: string): string {
-  const $ = load(containerXml, { xmlMode: true });
-  const rootfilePath = $("rootfile").first().attr("full-path")?.trim();
-  if (!rootfilePath) {
-    throw new LocalImportError(
-      "EPUB container.xml does not reference an OPF file.",
-    );
-  }
-  return normalizeZipPath(rootfilePath);
-}
-
-function manifestItemsFromOpf(opfXml: string): Map<string, EpubManifestItem> {
-  const $ = load(opfXml, { xmlMode: true });
-  const manifest = new Map<string, EpubManifestItem>();
-
-  $("manifest item").each((_, element) => {
-    const id = $(element).attr("id")?.trim();
-    const href = $(element).attr("href")?.trim();
-    const mediaType =
-      $(element).attr("media-type")?.trim().toLowerCase() ?? "";
-    if (!id || !href) return;
-    manifest.set(id, { id, href, mediaType });
-  });
-
-  return manifest;
-}
-
-function spineIdrefsFromOpf(opfXml: string): string[] {
-  const $ = load(opfXml, { xmlMode: true });
-  const idrefs: string[] = [];
-
-  $("spine itemref").each((_, element) => {
-    const idref = $(element).attr("idref")?.trim();
-    const linear = $(element).attr("linear")?.trim().toLowerCase();
-    if (idref && linear !== "no") idrefs.push(idref);
-  });
-
-  return idrefs;
-}
-
-function epubTitleFromOpf(opfXml: string, fallback: string): string {
-  const $ = load(opfXml, { xmlMode: true });
-  return $("metadata title, dc\\:title")
-    .first()
-    .text()
-    .replace(/\s+/g, " ")
-    .trim() || fallback;
-}
-
-function epubAuthorFromOpf(opfXml: string): string | undefined {
-  const $ = load(opfXml, { xmlMode: true });
-  const author = $("metadata creator, dc\\:creator")
-    .first()
-    .text()
-    .replace(/\s+/g, " ")
-    .trim();
-  return author || undefined;
-}
-
-function isXhtmlManifestItem(item: EpubManifestItem): boolean {
-  if (XHTML_MEDIA_TYPES.has(item.mediaType)) return true;
-  const extension = `.${getExtension(item.href)}`;
-  return (
-    extension === ".xhtml" ||
-    extension === ".html" ||
-    extension === ".htm"
-  );
-}
-
-function imageMediaType(path: string): string | null {
-  const extension = `.${getExtension(path)}`;
-  return SUPPORTED_IMAGE_MEDIA_TYPES[extension] ?? null;
-}
-
-function entryMapByName(entries: ZipEntryInfo[]): Map<string, ZipEntryInfo> {
-  const map = new Map<string, ZipEntryInfo>();
-  for (const entry of entries) {
-    if (entry.is_file) map.set(normalizeZipPath(entry.name), entry);
-  }
-  return map;
-}
-
-async function inlineEpubImages(
-  zipBytes: Uint8Array,
-  entries: Map<string, ZipEntryInfo>,
-  chapterPathValue: string,
-  xhtml: string,
-  imageBudget: { usedBytes: number },
-): Promise<string> {
-  const $ = load(xhtml, { xmlMode: true });
-  const chapterDir = directoryName(chapterPathValue);
-
-  for (const element of $("img, image").toArray()) {
-    const srcAttribute = $(element).attr("src") != null ? "src" : "href";
-    const source = $(element).attr(srcAttribute)?.trim();
-    if (!source || /^[a-z][a-z\d+\-.]*:/i.test(source)) continue;
-
-    const imagePath = joinZipPath(chapterDir, source);
-    const mediaType = imageMediaType(imagePath);
-    const entry = entries.get(imagePath);
-    if (!mediaType || !entry) continue;
-    if (
-      entry.uncompressed_size > LOCAL_IMPORT_LIMITS.epubImageBytes ||
-      imageBudget.usedBytes + entry.uncompressed_size >
-        LOCAL_IMPORT_LIMITS.epubTotalImageBytes
-    ) {
-      continue;
-    }
-
-    const imageBytes = await invokeZipReadFile(
-      zipBytes,
-      imagePath,
-      LOCAL_IMPORT_LIMITS.epubImageBytes,
-    );
-    imageBudget.usedBytes += imageBytes.byteLength;
-    $(element).attr(
-      "src",
-      `data:${mediaType};base64,${bytesToBase64(imageBytes)}`,
-    );
-    if (srcAttribute !== "src") $(element).removeAttr(srcAttribute);
-  }
-
-  return $.root().html() ?? "";
-}
-
-function chapterNameFromHtml(html: string, fallback: string): string {
-  const $ = load(html);
-  const title =
-    $("title, h1, h2, h3")
-      .first()
-      .text()
-      .replace(/\s+/g, " ")
-      .trim() || fallback;
-  return title;
-}
-
 function bodyOrRootHtml(html: string): string {
   const $ = load(html);
   const bodyHtml = $("body").first().html();
@@ -651,95 +427,50 @@ async function convertEpub(
   analysis: LocalImportAnalysis,
   bytes: Uint8Array,
 ): Promise<LocalImportConversion> {
-  const entries = entryMapByName(await invokeZipList(bytes));
-  if (!entries.has("META-INF/container.xml")) {
-    throw new LocalImportError(
-      "EPUB archive is missing META-INF/container.xml.",
-    );
-  }
-
-  const containerXml = utf8Decode(
-    await invokeZipReadFile(
-      bytes,
-      "META-INF/container.xml",
-      LOCAL_IMPORT_LIMITS.epubContainerBytes,
-    ),
-  );
-  const opfPath = parseContainerRootfile(containerXml);
-  const opfXml = utf8Decode(
-    await invokeZipReadFile(bytes, opfPath, LOCAL_IMPORT_LIMITS.epubOpfBytes),
-  );
-  const opfDir = directoryName(opfPath);
-  const manifest = manifestItemsFromOpf(opfXml);
-  const spineItems = spineIdrefsFromOpf(opfXml)
-    .map((idref) => manifest.get(idref))
-    .filter(
-      (item): item is EpubManifestItem => !!item && isXhtmlManifestItem(item),
-    );
-
-  if (!spineItems.length) {
-    throw new LocalImportError(
-      "EPUB OPF does not contain readable spine items.",
-    );
-  }
-
-  const imageBudget = { usedBytes: 0 };
-  const chapterSources: EpubChapterSource[] = [];
-
-  for (const [index, item] of spineItems.entries()) {
-    const itemPath = joinZipPath(opfDir, item.href);
-    const xhtml = utf8Decode(
-      await invokeZipReadFile(
-        bytes,
-        itemPath,
-        LOCAL_IMPORT_LIMITS.epubChapterBytes,
-      ),
-    );
-    const withImages = await inlineEpubImages(
-      bytes,
-      entries,
-      itemPath,
-      xhtml,
-      imageBudget,
-    );
-    const html = sanitizeLocalImportHtml(bodyOrRootHtml(withImages));
-    chapterSources.push({
-      name: chapterNameFromHtml(xhtml, `Chapter ${index + 1}`),
-      path: chapterPath(analysis.pathKey, index),
-      html,
+  try {
+    const epub = await convertEpubToHtml(bytes, {
+      fallbackTitle: analysis.title,
     });
+    const content = mergeEpubHtmlSections(epub.sections, {
+      ...(epub.direction ? { direction: epub.direction } : {}),
+      ...(epub.language ? { language: epub.language } : {}),
+    });
+    const chapter: LocalImportConvertedChapter = {
+      name: epub.title,
+      path: chapterPath(analysis.pathKey, 0),
+      chapterNumber: 1,
+      contentType: "epub",
+      content,
+      contentBytes: utf8ByteLength(content),
+      mediaResources: epub.sections.flatMap((section) => section.resources),
+    };
+
+    return {
+      analysis: {
+        ...analysis,
+        title: epub.title,
+      },
+      novel: {
+        name: epub.title,
+        path: analysis.pathKey,
+        author: epub.author,
+        chapters: [
+          {
+            name: chapter.name,
+            path: chapter.path,
+            chapterNumber: chapter.chapterNumber,
+            contentType: chapter.contentType,
+          },
+        ],
+      },
+      chapters: [chapter],
+      duplicate: analysis.duplicate,
+    };
+  } catch (error) {
+    throw new LocalImportError(
+      error instanceof Error ? error.message : String(error),
+    );
   }
-
-  const chapters: LocalImportConvertedChapter[] = chapterSources.map(
-    (chapter, index) => ({
-      name: chapter.name,
-      path: chapter.path,
-      chapterNumber: index + 1,
-      contentType: "html",
-      content: chapter.html,
-      contentBytes: utf8ByteLength(chapter.html),
-    }),
-  );
-
-  return {
-    analysis: {
-      ...analysis,
-      title: epubTitleFromOpf(opfXml, analysis.title),
-    },
-    novel: {
-      name: epubTitleFromOpf(opfXml, analysis.title),
-      path: analysis.pathKey,
-      author: epubAuthorFromOpf(opfXml),
-      chapters: chapters.map((chapter) => ({
-        name: chapter.name,
-        path: chapter.path,
-        chapterNumber: chapter.chapterNumber,
-        contentType: chapter.contentType,
-      })),
-    },
-    chapters,
-    duplicate: analysis.duplicate,
-  };
 }
 
 export async function convertLocalImportFile(
@@ -754,7 +485,7 @@ export async function convertLocalImportFile(
     return singleChapterConversion(
       analysis,
       chapterContentToHtml(utf8Decode(bytes), "text"),
-      "text",
+      "html",
     );
   }
 
@@ -762,6 +493,14 @@ export async function convertLocalImportFile(
     return singleChapterConversion(
       analysis,
       sanitizeLocalImportHtml(bodyOrRootHtml(utf8Decode(bytes))),
+      "html",
+    );
+  }
+
+  if (analysis.format === "markdown") {
+    return singleChapterConversion(
+      analysis,
+      chapterContentToHtml(utf8Decode(bytes), "markdown"),
       "html",
     );
   }

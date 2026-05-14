@@ -13,6 +13,7 @@ import {
   insertNovelIfAbsent,
   listLibraryNovelRefreshTargets,
   listLibraryNovels,
+  renumberLocalNovelChapters,
   reorderLocalNovelChapters,
   setNovelInLibrary,
   updateLocalNovelMetadata,
@@ -593,6 +594,7 @@ describe("upsertLocalNovelChapters", () => {
     const db = stubDb();
     db.execute
       .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce({ rowsAffected: 0 })
       .mockResolvedValueOnce({ rowsAffected: 1 });
     db.select.mockResolvedValueOnce([{ id: 42 }]);
 
@@ -625,15 +627,63 @@ describe("upsertLocalNovelChapters", () => {
       null,
       "1",
       null,
-      "text",
+      "html",
       "Chapter body",
       12,
+    ]);
+
+    const [deleteSql, deleteParams] = db.execute.mock.calls[1]!;
+    expect(deleteSql).toContain("DELETE FROM chapter");
+    expect(deleteSql).toContain("path LIKE $2");
+    expect(deleteSql).toContain("path NOT IN ($3)");
+    expect(deleteParams).toEqual([
+      42,
+      "local:txt:hash/chapter-%",
+      "local:txt:hash/chapter-0001",
     ]);
 
     expect(result).toEqual({
       changed: true,
       changedChapters: 1,
       novelId: 42,
+      chapterCount: 1,
+    });
+  });
+
+  it("removes stale chapters from the same local import file prefix", async () => {
+    const db = stubDb();
+    db.execute
+      .mockResolvedValueOnce({ rowsAffected: 0 })
+      .mockResolvedValueOnce({ rowsAffected: 2 })
+      .mockResolvedValueOnce({ rowsAffected: 1 })
+      .mockResolvedValueOnce({ rowsAffected: 1 });
+    db.select
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([
+        { id: 12, position: 12, chapterNumber: "12" },
+      ]);
+
+    const result = await upsertLocalNovelChapters(42, [
+      {
+        path: "local:epub:hash/chapter-0001",
+        name: "EPUB Book",
+        position: 1,
+        contentType: "epub",
+        content: "<article></article>",
+        contentBytes: 19,
+      },
+    ]);
+
+    const [deleteSql, deleteParams] = db.execute.mock.calls[1]!;
+    expect(deleteSql).toContain("DELETE FROM chapter");
+    expect(deleteParams).toEqual([
+      42,
+      "local:epub:hash/chapter-%",
+      "local:epub:hash/chapter-0001",
+    ]);
+    expect(result).toMatchObject({
+      changed: true,
+      changedChapters: 3,
       chapterCount: 1,
     });
   });
@@ -655,20 +705,34 @@ describe("reorderLocalNovelChapters", () => {
     db.execute.mockResolvedValueOnce({ rowsAffected: 2 });
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
-      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+      .mockResolvedValueOnce([
+        { id: 8, position: 1, chapterNumber: "1" },
+        { id: 9, position: 2, chapterNumber: "2" },
+      ]);
 
     await reorderLocalNovelChapters(42, [9, 8]);
 
     expect(db.execute).toHaveBeenCalledOnce();
     expect(db.execute.mock.calls[0]?.[0]).toContain("WITH requested");
-    expect(db.execute.mock.calls[0]?.[1]).toEqual([9, 1, 8, 2, 42]);
+    expect(db.execute.mock.calls[0]?.[1]).toEqual([
+      9,
+      1,
+      "1",
+      8,
+      2,
+      "2",
+      42,
+    ]);
   });
 
   it("skips writes when the requested order is unchanged", async () => {
     const db = stubDb();
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
-      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+      .mockResolvedValueOnce([
+        { id: 8, position: 1, chapterNumber: "1" },
+        { id: 9, position: 2, chapterNumber: "2" },
+      ]);
 
     await reorderLocalNovelChapters(42, [8, 9]);
 
@@ -679,7 +743,10 @@ describe("reorderLocalNovelChapters", () => {
     const db = stubDb();
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
-      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+      .mockResolvedValueOnce([
+        { id: 8, position: 1, chapterNumber: "1" },
+        { id: 9, position: 2, chapterNumber: "2" },
+      ]);
 
     await expect(reorderLocalNovelChapters(42, [9, 9])).rejects.toThrow(
       "local novel: reorder ids must match existing chapters",
@@ -692,12 +759,44 @@ describe("reorderLocalNovelChapters", () => {
     db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
     db.select
       .mockResolvedValueOnce([{ id: 42 }])
-      .mockResolvedValueOnce([{ id: 8 }, { id: 9 }]);
+      .mockResolvedValueOnce([
+        { id: 8, position: 1, chapterNumber: "1" },
+        { id: 9, position: 2, chapterNumber: "2" },
+      ]);
 
     await expect(reorderLocalNovelChapters(42, [9, 8])).rejects.toThrow(
       "local novel: failed to update chapter order",
     );
     expect(db.execute).toHaveBeenCalledOnce();
+  });
+});
+
+describe("renumberLocalNovelChapters", () => {
+  it("compacts local chapter positions and chapter numbers", async () => {
+    const db = stubDb();
+    db.execute.mockResolvedValueOnce({ rowsAffected: 2 });
+    db.select
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([
+        { id: 12, position: 12, chapterNumber: "12" },
+        { id: 13, position: 13, chapterNumber: "13" },
+      ]);
+
+    const result = await renumberLocalNovelChapters(42);
+
+    expect(result).toEqual({ rowsAffected: 2 });
+    expect(db.execute.mock.calls[0]?.[0]).toContain(
+      "chapter_number = (",
+    );
+    expect(db.execute.mock.calls[0]?.[1]).toEqual([
+      12,
+      1,
+      "1",
+      13,
+      2,
+      "2",
+      42,
+    ]);
   });
 });
 
@@ -770,7 +869,7 @@ describe("upsertLocalNovel", () => {
       "1",
       "1",
       "2026-01-01",
-      "text",
+      "html",
       "Chapter body",
       12,
     ]);
