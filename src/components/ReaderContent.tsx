@@ -189,6 +189,13 @@ const READER_SEGMENT_MEDIA_HEIGHT = 520;
 const READER_DOM_PREPROCESS_MAX_HTML_LENGTH = 350_000;
 const READER_LARGE_SEGMENT_TARGET_LENGTH = 24_000;
 const READER_LARGE_SEGMENT_MAX_LENGTH = 80_000;
+const READER_TEXT_SEGMENT_TARGET_LENGTH = 2_000;
+const READER_TEXT_SEGMENT_MIN_SPLIT_LENGTH = 1_000;
+const READER_TEXT_CONTENT_CLASS_PATTERN = /\breader-text-content\b/;
+const READER_TEXT_BLOCK_PATTERN =
+  /<p\b[^>]*>([\s\S]*?)<\/p>|<div\b(?=[^>]*\breader-text-break\b)[^>]*\bdata-blank-lines=(?:"(\d+)"|'(\d+)'|(\d+))[^>]*>\s*<\/div>/gi;
+const READER_TEXT_LINE_PATTERN =
+  /<span\b(?=[^>]*\breader-text-line\b)[^>]*>([\s\S]*?)<\/span>/gi;
 const READER_PAGE_MEDIA_ELEMENTS = [
   "img",
   "svg",
@@ -799,6 +806,168 @@ function estimateHtmlSegmentHeight(html: string): number {
   );
 }
 
+function escapeReaderHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function decodeReaderHtmlText(value: string): string {
+  return value.replace(
+    /&(?:amp|lt|gt|quot|#39|#x27|#(\d+)|#x([\da-f]+));/gi,
+    (entity, decimal, hex) => {
+      const normalized = entity.toLowerCase();
+      if (normalized === "&amp;") return "&";
+      if (normalized === "&lt;") return "<";
+      if (normalized === "&gt;") return ">";
+      if (normalized === "&quot;") return '"';
+      if (normalized === "&#39;" || normalized === "&#x27;") return "'";
+      const codePoint = decimal
+        ? Number.parseInt(decimal, 10)
+        : Number.parseInt(hex, 16);
+      return Number.isFinite(codePoint)
+        ? String.fromCodePoint(codePoint)
+        : entity;
+    },
+  );
+}
+
+function stripReaderTextTags(value: string): string {
+  return value.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "");
+}
+
+function readerTextParagraphText(html: string): string {
+  const lines: string[] = [];
+  let match: RegExpExecArray | null;
+  READER_TEXT_LINE_PATTERN.lastIndex = 0;
+  while ((match = READER_TEXT_LINE_PATTERN.exec(html)) !== null) {
+    lines.push(decodeReaderHtmlText(match[1] ?? ""));
+  }
+  if (lines.length > 0) return lines.join("\n");
+  return decodeReaderHtmlText(stripReaderTextTags(html));
+}
+
+function estimateTextSegmentHeight(textLength: number): number {
+  return Math.max(
+    READER_SEGMENT_DEFAULT_HEIGHT,
+    Math.min(1600, Math.ceil(textLength / 4)),
+  );
+}
+
+function splitReaderTextBlock(text: string): string[] {
+  if (text.length <= READER_TEXT_SEGMENT_TARGET_LENGTH) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const hardLimit = Math.min(
+      text.length,
+      start + READER_TEXT_SEGMENT_TARGET_LENGTH,
+    );
+    if (hardLimit >= text.length) {
+      chunks.push(text.slice(start));
+      break;
+    }
+    const minSplit = start + READER_TEXT_SEGMENT_MIN_SPLIT_LENGTH;
+    const newlineSplit = text.lastIndexOf("\n", hardLimit);
+    const spaceSplit = text.lastIndexOf(" ", hardLimit);
+    const splitAt =
+      newlineSplit >= minSplit
+        ? newlineSplit + 1
+        : spaceSplit >= minSplit
+          ? spaceSplit + 1
+          : hardLimit;
+    chunks.push(text.slice(start, splitAt));
+    start = splitAt;
+  }
+  return chunks;
+}
+
+function pushReaderTextSegment(
+  segments: ReaderVirtualSegment[],
+  parts: string[],
+  textLength: number,
+): void {
+  if (parts.length === 0) return;
+  const index = segments.length;
+  const html = [
+    `<section class="reader-text-section" data-section-index="${index}" ${READER_SEGMENT_INDEX_ATTRIBUTE}="${index}">`,
+    parts.join(""),
+    "</section>",
+  ].join("");
+  segments.push({
+    estimatedHeight: estimateTextSegmentHeight(textLength),
+    html,
+    index,
+  });
+}
+
+function buildReaderTextVirtualDocument(
+  html: string,
+): ReaderVirtualDocument | null {
+  if (!READER_TEXT_CONTENT_CLASS_PATTERN.test(html)) return null;
+  const segments: ReaderVirtualSegment[] = [];
+  const segmentParts: string[] = [];
+  let segmentTextLength = 0;
+  let matched = false;
+
+  const flush = () => {
+    pushReaderTextSegment(segments, segmentParts, segmentTextLength);
+    segmentParts.length = 0;
+    segmentTextLength = 0;
+  };
+  const appendPart = (part: string, textLength: number) => {
+    if (
+      segmentParts.length > 0 &&
+      segmentTextLength + textLength > READER_TEXT_SEGMENT_TARGET_LENGTH
+    ) {
+      flush();
+    }
+    segmentParts.push(part);
+    segmentTextLength += textLength;
+    if (segmentTextLength >= READER_TEXT_SEGMENT_TARGET_LENGTH) {
+      flush();
+    }
+  };
+
+  READER_TEXT_BLOCK_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = READER_TEXT_BLOCK_PATTERN.exec(html)) !== null) {
+    matched = true;
+    const paragraphHtml = match[1];
+    if (paragraphHtml !== undefined) {
+      for (const chunk of splitReaderTextBlock(
+        readerTextParagraphText(paragraphHtml),
+      )) {
+        appendPart(
+          `<p class="reader-text-paragraph">${escapeReaderHtmlText(chunk)}</p>`,
+          chunk.length,
+        );
+      }
+      continue;
+    }
+    const blankLines = Number.parseInt(
+      match[2] ?? match[3] ?? match[4] ?? "2",
+      10,
+    );
+    const normalizedBlankLines = Number.isFinite(blankLines) ? blankLines : 2;
+    appendPart(
+      `<div class="reader-text-break" data-blank-lines="${normalizedBlankLines}" aria-hidden="true"></div>`,
+      0,
+    );
+  }
+  flush();
+  if (!matched || segments.length === 0) return null;
+
+  return {
+    contentClassName: "reader-content reader-text-content",
+    segments,
+    staticHtml: "",
+  };
+}
+
 function largeHtmlSplitIndex(html: string): number {
   const limit = Math.min(READER_LARGE_SEGMENT_MAX_LENGTH, html.length - 1);
   if (limit <= READER_LARGE_SEGMENT_TARGET_LENGTH) return 0;
@@ -897,6 +1066,9 @@ function buildLargeReaderVirtualDocument(html: string): ReaderVirtualDocument {
 }
 
 function buildReaderVirtualDocument(html: string): ReaderVirtualDocument {
+  const textDocument = buildReaderTextVirtualDocument(html);
+  if (textDocument) return textDocument;
+
   if (html.length > READER_DOM_PREPROCESS_MAX_HTML_LENGTH) {
     return buildLargeReaderVirtualDocument(html);
   }
@@ -1189,6 +1361,7 @@ function ReaderContentInner(
     useRef<ReaderInitialProgressRestore | null>(null);
   const restoredLayoutKeyRef = useRef<string | null>(null);
   const pageScrollTimerRef = useRef<number | null>(null);
+  const pageScrollAnimatingRef = useRef(false);
   const wheelDeltaRef = useRef(0);
   const wheelCooldownTimerRef = useRef<number | null>(null);
   const wheelPagingLockedRef = useRef(false);
@@ -1299,6 +1472,7 @@ function ReaderContentInner(
       window.clearTimeout(pageScrollTimerRef.current);
       pageScrollTimerRef.current = null;
     }
+    pageScrollAnimatingRef.current = true;
     const startLeft = node.scrollLeft;
     const distance = targetLeft - startLeft;
     logReaderInput("page-scroll-start", {
@@ -1309,6 +1483,7 @@ function ReaderContentInner(
     });
     if (Math.abs(distance) <= 1) {
       node.scrollLeft = targetLeft;
+      pageScrollAnimatingRef.current = false;
       dispatchReaderScrollEvent(node);
       logReaderInput("page-scroll-complete", {
         targetLeft: Math.round(targetLeft),
@@ -1331,6 +1506,7 @@ function ReaderContentInner(
         return;
       }
       node.scrollLeft = targetLeft;
+      pageScrollAnimatingRef.current = false;
       dispatchReaderScrollEvent(node);
       logReaderInput("page-scroll-complete", {
         targetLeft: Math.round(targetLeft),
@@ -1493,6 +1669,7 @@ function ReaderContentInner(
           window.clearTimeout(pageScrollTimerRef.current);
           pageScrollTimerRef.current = null;
         }
+        pageScrollAnimatingRef.current = false;
         node.scrollTo({ top: 0, left: 0, behavior: "auto" });
         dispatchReaderScrollEvent(node);
       },
@@ -1557,6 +1734,7 @@ function ReaderContentInner(
     const node = getActiveScrollNode();
     if (!node) return;
     if (completedForNavigationRef.current) return;
+    if (isPagedReader && pageScrollAnimatingRef.current) return;
     if (!isPagedReader) {
       setVirtualRange(
         virtualRangeForScroll(node.scrollTop, node.clientHeight, segmentOffsets),
@@ -1961,6 +2139,7 @@ function ReaderContentInner(
         window.clearTimeout(pageScrollTimerRef.current);
         pageScrollTimerRef.current = null;
       }
+      pageScrollAnimatingRef.current = false;
       flushProgress(latestProgressRef.current);
     },
     [flushProgress],
@@ -2132,6 +2311,7 @@ function ReaderContentInner(
       isPagedReader
         ? ({
             "--lnr-reader-page-column-width": `${pageColumnWidth}px`,
+            columnFill: "auto",
             columnWidth: `${pageColumnWidth}px`,
             columnGap: `${pageColumnGap}px`,
             height: "100%",

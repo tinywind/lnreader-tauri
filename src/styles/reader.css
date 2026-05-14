@@ -309,6 +309,7 @@
   white-space: pre-wrap;
 }
 
+.reader-content.reader-text-content,
 .reader-content :where(.reader-text-content) {
   display: block;
 }
@@ -319,6 +320,7 @@
 
 .reader-content :where(.reader-text-paragraph) {
   margin: 0 0 1em;
+  white-space: pre-wrap;
 }
 
 .reader-content :where(.reader-text-paragraph:last-child) {
