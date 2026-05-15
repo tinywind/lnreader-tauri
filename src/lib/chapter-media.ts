@@ -11,7 +11,6 @@ import {
   readAndroidStorageDataUrl,
   readAndroidStorageText,
   readAndroidStorageZipEntryDataUrl,
-  renameAndroidStoragePath,
   writeAndroidStorageBytes,
   writeAndroidStorageText,
 } from "./android-storage";
@@ -541,6 +540,25 @@ function androidChapterMediaRelativePathForContext(
   );
 }
 
+function uniqueAndroidStoragePaths(paths: string[]): string[] {
+  return [...new Set(paths)];
+}
+
+function androidChapterMediaRelativePathCandidates(
+  context: ChapterMediaStorageContext | null | undefined,
+  fileName?: string,
+): string[] {
+  const preferred = androidChapterMediaRelativePathForContext(
+    context,
+    fileName,
+  );
+  if (!hasStorageContext(context)) return [preferred];
+  return uniqueAndroidStoragePaths([
+    preferred,
+    androidChapterMediaRelativePath(context.chapterId, fileName),
+  ]);
+}
+
 function androidChapterMediaArchiveRelativePathForContext(
   context: ChapterMediaStorageContext | null | undefined,
 ): string {
@@ -553,6 +571,17 @@ function androidChapterMediaArchiveRelativePathForContext(
   );
 }
 
+function androidChapterMediaArchiveRelativePathCandidates(
+  context: ChapterMediaStorageContext | null | undefined,
+): string[] {
+  const preferred = androidChapterMediaArchiveRelativePathForContext(context);
+  if (!hasStorageContext(context)) return [preferred];
+  return uniqueAndroidStoragePaths([
+    preferred,
+    `chapter-media/${context.chapterId}/media.zip`,
+  ]);
+}
+
 function androidChapterMediaManifestRelativePath(
   context: ChapterMediaStorageContext | null | undefined,
 ): string {
@@ -563,6 +592,17 @@ function androidChapterMediaManifestRelativePath(
     storageNovelPathInput(context),
     storageChapterPathInput(context),
   );
+}
+
+function androidChapterMediaManifestRelativePathCandidates(
+  context: ChapterMediaStorageContext | null | undefined,
+): string[] {
+  const preferred = androidChapterMediaManifestRelativePath(context);
+  if (!hasStorageContext(context)) return [preferred];
+  return uniqueAndroidStoragePaths([
+    preferred,
+    `chapter-media/${context.chapterId}/${CHAPTER_MEDIA_MANIFEST_FILE}`,
+  ]);
 }
 
 function emptyChapterMediaManifest(): ChapterMediaManifest {
@@ -633,7 +673,10 @@ async function writeChapterMediaManifest({
 }): Promise<void> {
   const manifestPath = androidChapterMediaManifestRelativePath(context);
   if (isAndroidRuntime()) {
-    await writeAndroidStorageText(manifestPath, serializeChapterMediaManifest(files));
+    await writeAndroidStorageText(
+      manifestPath,
+      serializeChapterMediaManifest(files),
+    );
     return;
   }
   await invoke("chapter_media_write_manifest", {
@@ -655,9 +698,13 @@ async function readChapterMediaManifest(
   context: ChapterMediaStorageContext,
 ): Promise<ChapterMediaManifest> {
   if (isAndroidRuntime()) {
-    return parseChapterMediaManifest(
-      await readAndroidStorageText(androidChapterMediaManifestRelativePath(context)),
-    );
+    for (const manifestPath of androidChapterMediaManifestRelativePathCandidates(
+      context,
+    )) {
+      const raw = await readAndroidStorageText(manifestPath);
+      if (raw !== null) return parseChapterMediaManifest(raw);
+    }
+    return emptyChapterMediaManifest();
   }
   const raw = await invoke<string | null>("chapter_media_read_manifest", {
     chapterId: context.chapterId,
@@ -674,27 +721,23 @@ async function readChapterMediaManifest(
   return parseChapterMediaManifest(raw);
 }
 
-async function androidRelativePathFromLocalMediaSrc(
+async function androidRelativePathsFromLocalMediaSrc(
   src: string,
   context?: ChapterMediaStorageContext,
-): Promise<string | null> {
+): Promise<string[]> {
   const parsed = parseLocalChapterMediaSrc(src);
-  if (!parsed) return null;
+  if (!parsed) return [];
   const resolvedContext =
     context?.chapterId === parsed.chapterId
       ? context
       : await storageContextForChapter(parsed.chapterId);
   if (hasStorageContext(resolvedContext)) {
-    return chapterMediaRelativePath(
-      storageNovelPathInput(resolvedContext),
-      storageChapterPathInput(resolvedContext),
+    return androidChapterMediaRelativePathCandidates(
+      resolvedContext,
       parsed.fileName,
     );
   }
-  return androidChapterMediaRelativePath(
-    parsed.chapterId,
-    parsed.fileName,
-  );
+  return [androidChapterMediaRelativePath(parsed.chapterId, parsed.fileName)];
 }
 
 export function localChapterMediaSources(html: string): string[] {
@@ -728,35 +771,36 @@ export async function getStoredChapterMediaBytes(
       : undefined);
   if (isAndroidRuntime()) {
     let total = 0;
-    const paths = new Map<string, string>();
     const countedArchives = new Set<string>();
     for (const source of mediaSrcs) {
-      const path = await androidRelativePathFromLocalMediaSrc(
+      const relativePaths = await androidRelativePathsFromLocalMediaSrc(
         source,
         resolvedContext ?? undefined,
       );
-      if (path) paths.set(path, source);
-    }
-    for (const [path, source] of paths) {
-      const directSize = await androidStoragePathSize(path);
-      if (directSize > 0) {
-        total += directSize;
-        continue;
+      let hasDirectMedia = false;
+      for (const path of relativePaths) {
+        const directSize = await androidStoragePathSize(path);
+        if (directSize > 0) {
+          total += directSize;
+          hasDirectMedia = true;
+          break;
+        }
       }
+      if (hasDirectMedia) continue;
 
       const parsed = parseLocalChapterMediaSrc(source);
       if (!parsed) continue;
-      const archivePath = androidChapterMediaArchiveRelativePathForContext(
+      for (const archivePath of androidChapterMediaArchiveRelativePathCandidates(
         resolvedContext,
-      );
-      if (
-        countedArchives.has(archivePath) ||
-        !(await androidStorageZipEntryExists(archivePath, parsed.fileName))
-      ) {
-        continue;
+      )) {
+        if (countedArchives.has(archivePath)) continue;
+        if (!(await androidStorageZipEntryExists(archivePath, parsed.fileName))) {
+          continue;
+        }
+        total += await androidStoragePathSize(archivePath);
+        countedArchives.add(archivePath);
+        break;
       }
-      total += await androidStoragePathSize(archivePath);
-      countedArchives.add(archivePath);
     }
     return total;
   }
@@ -820,13 +864,11 @@ async function storeChapterMedia({
       context,
       fileName,
     );
-    const partPath = `${relativePath}.part`;
     await writeAndroidStorageBytes(
-      partPath,
+      relativePath,
       body,
       contentType ?? mimeTypeFromFileName(fileName),
     );
-    await renameAndroidStoragePath(partPath, fileName);
     return src;
   }
   return invoke<string>("chapter_media_store", {
@@ -888,16 +930,25 @@ async function prepareChapterMediaWorkspace(
   if (isAndroidRuntime()) {
     const mediaPath = androidChapterMediaRelativePathForContext(context);
     if (repair) {
-      await extractAndroidStorageZip(
-        androidChapterMediaArchiveRelativePathForContext(context),
-        mediaPath,
-      );
+      for (const archivePath of androidChapterMediaArchiveRelativePathCandidates(
+        context,
+      )) {
+        await extractAndroidStorageZip(archivePath, mediaPath);
+      }
     } else {
-      await deleteAndroidStoragePath(mediaPath);
-      await deleteAndroidStoragePath(
-        androidChapterMediaArchiveRelativePathForContext(context),
-      );
-      await deleteAndroidStoragePath(androidChapterMediaManifestRelativePath(context));
+      for (const path of androidChapterMediaRelativePathCandidates(context)) {
+        await deleteAndroidStoragePath(path);
+      }
+      for (const archivePath of androidChapterMediaArchiveRelativePathCandidates(
+        context,
+      )) {
+        await deleteAndroidStoragePath(archivePath);
+      }
+      for (const manifestPath of androidChapterMediaManifestRelativePathCandidates(
+        context,
+      )) {
+        await deleteAndroidStoragePath(manifestPath);
+      }
     }
     return;
   }
@@ -920,9 +971,9 @@ async function cleanupChapterMediaWorkspace(
   context: ChapterMediaStorageContext,
 ): Promise<void> {
   if (isAndroidRuntime()) {
-    await deleteAndroidStoragePath(
-      androidChapterMediaRelativePathForContext(context),
-    );
+    for (const path of androidChapterMediaRelativePathCandidates(context)) {
+      await deleteAndroidStoragePath(path);
+    }
     return;
   }
   await invoke("chapter_media_cleanup_workspace", {
@@ -2077,20 +2128,25 @@ export async function resolveLocalChapterMediaSrc(
       context?.chapterId === parsed.chapterId
         ? context
         : await storageContextForChapter(parsed.chapterId);
-    const relativePath = await androidRelativePathFromLocalMediaSrc(
+    const relativePaths = await androidRelativePathsFromLocalMediaSrc(
       src,
       resolvedContext ?? undefined,
     );
-    if (!relativePath) return null;
-    const directDataUrl = await readAndroidStorageDataUrl(relativePath);
-    if (directDataUrl) return directDataUrl;
+    for (const relativePath of relativePaths) {
+      const directDataUrl = await readAndroidStorageDataUrl(relativePath);
+      if (directDataUrl) return directDataUrl;
+    }
 
-    const archivePath = androidChapterMediaArchiveRelativePathForContext(
+    for (const archivePath of androidChapterMediaArchiveRelativePathCandidates(
       resolvedContext,
-    );
-    return parsed
-      ? readAndroidStorageZipEntryDataUrl(archivePath, parsed.fileName)
-      : null;
+    )) {
+      const archivedDataUrl = await readAndroidStorageZipEntryDataUrl(
+        archivePath,
+        parsed.fileName,
+      );
+      if (archivedDataUrl) return archivedDataUrl;
+    }
+    return null;
   }
   try {
     return await invoke<string>(

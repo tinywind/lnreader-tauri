@@ -7,6 +7,21 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("./http", () => ({
   pluginMediaFetch: vi.fn(),
 }));
+const androidStorageMocks = vi.hoisted(() => ({
+  androidStoragePathSize: vi.fn(),
+  androidStorageZipEntryExists: vi.fn(),
+  archiveAndroidStorageDirectory: vi.fn(),
+  clearAndroidStorageRoot: vi.fn(),
+  deleteAndroidStoragePath: vi.fn(),
+  extractAndroidStorageZip: vi.fn(),
+  readAndroidStorageDataUrl: vi.fn(),
+  readAndroidStorageText: vi.fn(),
+  readAndroidStorageZipEntryDataUrl: vi.fn(),
+  renameAndroidStoragePath: vi.fn(),
+  writeAndroidStorageBytes: vi.fn(),
+  writeAndroidStorageText: vi.fn(),
+}));
+vi.mock("./android-storage", () => androidStorageMocks);
 vi.mock("../db/queries/chapter", () => ({
   getChapterById: vi.fn(),
 }));
@@ -106,6 +121,7 @@ function installTemplateDocument(): void {
 beforeEach(() => {
   invokeMock.mockReset();
   pluginMediaFetchMock.mockReset();
+  Object.values(androidStorageMocks).forEach((mock) => mock.mockReset());
   vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
   installTemplateDocument();
 });
@@ -915,6 +931,127 @@ describe("cacheHtmlChapterMedia", () => {
     expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
     expect(result.html).toContain("norea-media://chapter/42/0002-page-2.png");
     expect(result.html).toContain("norea-media://chapter/42/0003-page-3.png");
+  });
+
+  it("reuses legacy Android media archives during contextual media repair", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Android" });
+    const manifest = {
+      media: {
+        files: [
+          {
+            bytes: 3,
+            fileName: "0001-page-1.png",
+            path: "media/0001-page-1.png",
+            sourceUrl: "https://source.test/page-1.png",
+            status: "stored",
+            updatedAt: 1,
+          },
+          {
+            bytes: 4,
+            fileName: "0002-page-2.png",
+            path: "media/0002-page-2.png",
+            sourceUrl: "https://source.test/page-2.png",
+            status: "stored",
+            updatedAt: 1,
+          },
+        ],
+      },
+      updatedAt: 1,
+      version: 1,
+    };
+    const preferredDir = "contents/source-a/Novel-novel-path/1-Chapter/media";
+    const preferredArchive =
+      "contents/source-a/Novel-novel-path/1-Chapter/media.zip";
+
+    androidStorageMocks.readAndroidStorageText.mockImplementation(
+      async (path: string) =>
+        path === "chapter-media/42/manifest.json"
+          ? JSON.stringify(manifest)
+          : null,
+    );
+    androidStorageMocks.extractAndroidStorageZip.mockResolvedValue(0);
+    androidStorageMocks.androidStoragePathSize.mockImplementation(
+      async (path: string) =>
+        path.startsWith(`${preferredDir}/`) ? 7 : 0,
+    );
+    androidStorageMocks.archiveAndroidStorageDirectory.mockResolvedValue(14);
+    androidStorageMocks.writeAndroidStorageText.mockResolvedValue(undefined);
+
+    const result = await cacheHtmlChapterMedia({
+      baseUrl: "https://source.test/chapter/1",
+      chapterId: 42,
+      chapterName: "Chapter",
+      chapterNumber: "1",
+      chapterPosition: 1,
+      html: [
+        `<img src="https://source.test/page-1.png">`,
+        `<img src="https://source.test/page-2.png">`,
+      ].join(""),
+      novelId: 7,
+      novelName: "Novel",
+      novelPath: "novel/path",
+      repair: true,
+      sourceId: "source-a",
+    });
+
+    expect(pluginMediaFetchMock).not.toHaveBeenCalled();
+    expect(androidStorageMocks.readAndroidStorageText).toHaveBeenCalledWith(
+      preferredArchive.replace("media.zip", "manifest.json"),
+    );
+    expect(androidStorageMocks.readAndroidStorageText).toHaveBeenCalledWith(
+      "chapter-media/42/manifest.json",
+    );
+    expect(androidStorageMocks.extractAndroidStorageZip).toHaveBeenCalledWith(
+      preferredArchive,
+      preferredDir,
+    );
+    expect(androidStorageMocks.extractAndroidStorageZip).toHaveBeenCalledWith(
+      "chapter-media/42/media.zip",
+      preferredDir,
+    );
+    expect(
+      androidStorageMocks.archiveAndroidStorageDirectory,
+    ).toHaveBeenCalledWith(preferredDir, preferredArchive);
+    expect(result.html).toContain("norea-media://chapter/42/0001-page-1.png");
+    expect(result.html).toContain("norea-media://chapter/42/0002-page-2.png");
+    expect(result.mediaBytes).toBe(14);
+  });
+
+  it("stores Android media directly at the final path", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Android" });
+    pluginMediaFetchMock.mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/jpeg" },
+        status: 200,
+        statusText: "OK",
+      }),
+    );
+    androidStorageMocks.readAndroidStorageText.mockResolvedValue(null);
+    androidStorageMocks.writeAndroidStorageBytes.mockResolvedValue(undefined);
+    androidStorageMocks.writeAndroidStorageText.mockResolvedValue(undefined);
+    androidStorageMocks.archiveAndroidStorageDirectory.mockResolvedValue(3);
+
+    const result = await cacheHtmlChapterMedia({
+      baseUrl: "https://source.test/chapter/1",
+      chapterId: 42,
+      chapterName: "Chapter",
+      chapterNumber: "1",
+      chapterPosition: 1,
+      html: `<img src="https://source.test/page-1.jpg">`,
+      novelId: 7,
+      novelName: "Novel",
+      novelPath: "novel/path",
+      sourceId: "source-a",
+    });
+
+    expect(androidStorageMocks.writeAndroidStorageBytes).toHaveBeenCalledWith(
+      "contents/source-a/Novel-novel-path/1-Chapter/media/0001-page-1.jpg",
+      [1, 2, 3],
+      "image/jpeg",
+    );
+    expect(androidStorageMocks.renameAndroidStoragePath).not.toHaveBeenCalled();
+    expect(result.storedMediaCount).toBe(1);
+    expect(result.html).toContain("norea-media://chapter/42/0001-page-1.jpg");
   });
 
   it("refetches reusable repair media after preparing the workspace", async () => {

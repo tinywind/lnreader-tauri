@@ -354,6 +354,16 @@ WebView cookie jar, such as a GitHub REST API connector. Do not use `appFetch`
 for ordinary source browsing, search, novel parsing, update checks, or chapter
 downloads from plugin-owned sites.
 
+`@libs/fetch.fetchFile` and the host HTML chapter-media cache use
+`pluginMediaFetch` for static chapter-local media bytes. This path preserves
+plugin-provided `imageRequestInit` headers. It normally attempts the scraper
+WebView fetch first and falls back to `scraper_media_fetch` when browser JS
+cannot read media bytes. On Android, cross-host media requests may use
+`scraper_media_fetch` first because WebView `fetch()` can be blocked by CORS
+even when the same image renders through an `<img>` tag. This native media path
+is only for static media bytes; it is not a replacement for plugin-owned page
+fetches that need the scraper WebView cookie jar.
+
 The current flow:
 
 1. The frontend calls `pluginFetch` or `pluginFetchText` in `src/lib/http.ts`.

@@ -199,6 +199,13 @@ function mediaFallbackContextHost(contextUrl: string | undefined): string {
   }
 }
 
+function shouldPreferNativeMediaFetch(url: string, init: HttpInit): boolean {
+  if (!isAndroidRuntime()) return false;
+  const host = mediaFallbackHost(url);
+  const contextHost = mediaFallbackContextHost(init.contextUrl);
+  return host !== "" && contextHost !== "" && host !== contextHost;
+}
+
 function fetchErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -217,6 +224,30 @@ function mediaFallbackLogContext(
     sourceId: init.sourceId,
     status,
   };
+}
+
+async function nativeMediaResponse(
+  url: string,
+  init: HttpInit,
+  scraperExecutor: ScraperExecutorId,
+): Promise<Response> {
+  const wireInit = toWireInit(init);
+  const userAgent = scraperUserAgent(wireInit.headers);
+  const timeoutMs = requestTimeoutMs(init.timeoutMs);
+  console.debug("[plugin-media-fetch] native fetch started", {
+    ...mediaFallbackLogContext(url, init, scraperExecutor),
+  });
+  const result = await nativeMediaFetch(
+    url,
+    wireInit,
+    userAgent,
+    timeoutMs,
+    init.signal,
+  );
+  console.debug("[plugin-media-fetch] native fetch finished", {
+    ...mediaFallbackLogContext(url, init, scraperExecutor, result.status),
+  });
+  return responseFromWire(result);
 }
 
 async function cancelScraperExecutor(
@@ -496,6 +527,41 @@ export async function pluginMediaFetch(
 ): Promise<Response> {
   const scraperExecutor =
     init.scraperExecutor ?? activeScraperExecutor(init.sourceId);
+  if (shouldPreferNativeMediaFetch(url, init)) {
+    let nativeError: unknown;
+    try {
+      return await nativeMediaResponse(url, init, scraperExecutor);
+    } catch (error) {
+      if (isRequestAbortError(error)) {
+        throw error;
+      }
+      nativeError = error;
+      console.warn("[plugin-media-fetch] native fetch failed; trying WebView", {
+        ...mediaFallbackLogContext(url, init, scraperExecutor),
+        nativeError: fetchErrorMessage(error),
+      });
+    }
+
+    try {
+      return await pluginFetch(url, init);
+    } catch (browserError) {
+      if (isRequestAbortError(browserError)) {
+        throw browserError;
+      }
+      console.warn("[plugin-media-fetch] WebView fallback failed", {
+        ...mediaFallbackLogContext(url, init, scraperExecutor),
+        browserError: fetchErrorMessage(browserError),
+        nativeError: fetchErrorMessage(nativeError),
+      });
+      throw new Error(
+        `Media fetch failed for ${sanitizedFetchUrl(url)}; native: ${fetchErrorMessage(
+          nativeError,
+        )}; browser: ${fetchErrorMessage(browserError)}`,
+        { cause: browserError },
+      );
+    }
+  }
+
   let browserError: unknown;
   try {
     return await pluginFetch(url, init);

@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+vi.mock("./tauri-runtime", () => ({
+  isAndroidRuntime: vi.fn(() => false),
+}));
 import { invoke } from "@tauri-apps/api/core";
+import { isAndroidRuntime } from "./tauri-runtime";
 import {
   appFetchText,
   pluginFetch,
@@ -12,9 +16,11 @@ import {
 } from "./http";
 
 const invokeMock = vi.mocked(invoke);
+const isAndroidRuntimeMock = vi.mocked(isAndroidRuntime);
 
 beforeEach(() => {
   invokeMock.mockReset();
+  isAndroidRuntimeMock.mockReturnValue(false);
 });
 
 function wireOk(
@@ -283,6 +289,64 @@ describe("pluginFetch", () => {
 });
 
 describe("pluginMediaFetch", () => {
+  it("uses native media fetch first on Android when media and context hosts differ", async () => {
+    const debugSpy = vi
+      .spyOn(console, "debug")
+      .mockImplementation(() => undefined);
+    isAndroidRuntimeMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(
+      wireOk("image", {
+        finalUrl: "https://novel-phinf.pstatic.net/page.png",
+        headers: { "content-type": "image/png" },
+      }),
+    );
+
+    try {
+      const response = await pluginMediaFetch(
+        "https://novel-phinf.pstatic.net/page.png",
+        {
+          contextUrl: "https://novel.naver.com/webnovel/detail",
+          headers: {
+            Referer: "https://novel.naver.com/",
+          },
+          timeoutMs: 12_345,
+        },
+      );
+
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+      expect(invokeMock).toHaveBeenCalledWith("scraper_media_fetch", {
+        url: "https://novel-phinf.pstatic.net/page.png",
+        init: {
+          headers: {
+            Referer: "https://novel.naver.com/",
+          },
+          method: undefined,
+          body: undefined,
+        },
+        timeoutMs: 12_345,
+        userAgent: globalThis.navigator?.userAgent ?? null,
+      });
+      expect(debugSpy).toHaveBeenCalledWith(
+        "[plugin-media-fetch] native fetch started",
+        expect.objectContaining({
+          contextHost: "novel.naver.com",
+          host: "novel-phinf.pstatic.net",
+          sanitizedUrl: "https://novel-phinf.pstatic.net/page.png",
+        }),
+      );
+      expect(debugSpy).toHaveBeenCalledWith(
+        "[plugin-media-fetch] native fetch finished",
+        expect.objectContaining({
+          host: "novel-phinf.pstatic.net",
+          status: 200,
+        }),
+      );
+      expect(await response.text()).toBe("image");
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
+
   it("falls back to native media fetch when the WebView cannot read media bytes", async () => {
     const debugSpy = vi
       .spyOn(console, "debug")
