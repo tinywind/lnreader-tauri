@@ -84,6 +84,7 @@ class MainActivity : TauriActivity() {
     scraperBackPressedCallback = object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         if (androidScraperBridge?.handleBackPressed() == true) return
+        if (handleMainWebViewBackPressed()) return
         isEnabled = false
         try {
           onBackPressedDispatcher.onBackPressed()
@@ -95,6 +96,24 @@ class MainActivity : TauriActivity() {
       // Register after Tauri creates its WebView so source-browser back wins.
       onBackPressedDispatcher.addCallback(this, callback)
     }
+  }
+
+  private fun handleMainWebViewBackPressed(): Boolean {
+    val webView = mainWebView ?: return false
+    if (!isMainReaderUrl(webView.url)) return false
+    webView.evaluateJavascript(
+      "window.dispatchEvent(new CustomEvent('norea:android-back'));",
+      null,
+    )
+    return true
+  }
+
+  private fun isMainReaderUrl(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    return runCatching {
+      val parsed = Uri.parse(url)
+      parsed.host == "tauri.localhost" && parsed.path == "/reader"
+    }.getOrDefault(false)
   }
 
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

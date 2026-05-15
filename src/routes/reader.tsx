@@ -32,6 +32,10 @@ import {
   type ChapterMediaElementPatch,
 } from "../lib/chapter-media";
 import { isHtmlLikeChapterContentType } from "../lib/chapter-content";
+import {
+  findPreviousAppHistoryEntry,
+  trimAppNavigationHistoryTo,
+} from "../lib/navigation-history";
 import { pluginManager } from "../lib/plugins/manager";
 import { LOCAL_PLUGIN_ID } from "../lib/plugins/types";
 import {
@@ -1045,6 +1049,40 @@ export function ReaderPage() {
     }
     void navigate({ to: "/" });
   }, [chapter?.novelId, navigate]);
+
+  useEffect(() => {
+    window.addEventListener("norea:android-back", handleReaderBack);
+    return () => {
+      window.removeEventListener("norea:android-back", handleReaderBack);
+    };
+  }, [handleReaderBack]);
+
+  useEffect(() => {
+    const novelId = chapter?.novelId;
+    if (!novelId) return;
+
+    const handleReaderPopState = () => {
+      window.setTimeout(() => {
+        if (window.location.pathname !== "/reader") return;
+
+        const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        const target = findPreviousAppHistoryEntry(currentHref, ["/reader"]);
+        if (target) {
+          trimAppNavigationHistoryTo(target);
+          window.history.go(-target.steps);
+          return;
+        }
+
+        void navigate({ to: "/novel", search: { id: novelId }, replace: true });
+      }, 0);
+    };
+
+    window.addEventListener("popstate", handleReaderPopState);
+    return () => {
+      window.removeEventListener("popstate", handleReaderPopState);
+    };
+  }, [chapter?.novelId, navigate]);
+
   const readerBusy =
     autoDownloadingChapterId === chapter?.id && !chapter?.isDownloaded;
 

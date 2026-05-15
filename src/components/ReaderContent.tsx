@@ -1360,6 +1360,7 @@ function ReaderContentInner(
   const pendingInitialProgressRestoreRef =
     useRef<ReaderInitialProgressRestore | null>(null);
   const restoredLayoutKeyRef = useRef<string | null>(null);
+  const scrollActivityVersionRef = useRef(0);
   const pageScrollTimerRef = useRef<number | null>(null);
   const pageScrollAnimatingRef = useRef(false);
   const wheelDeltaRef = useRef(0);
@@ -1735,6 +1736,10 @@ function ReaderContentInner(
     if (!node) return;
     if (completedForNavigationRef.current) return;
     if (isPagedReader && pageScrollAnimatingRef.current) return;
+    scrollActivityVersionRef.current += 1;
+    if (pendingInitialProgressRestoreRef.current?.contentKey === contentKey) {
+      pendingInitialProgressRestoreRef.current = null;
+    }
     if (!isPagedReader) {
       setVirtualRange(
         virtualRangeForScroll(node.scrollTop, node.clientHeight, segmentOffsets),
@@ -1747,6 +1752,7 @@ function ReaderContentInner(
     scheduleProgressSave(nextProgress);
   }, [
     applyPageInfo,
+    contentKey,
     getActiveScrollNode,
     isPagedReader,
     scheduleProgressSave,
@@ -1772,16 +1778,16 @@ function ReaderContentInner(
   const layoutRestoreKey = useMemo(
     () =>
       [
-        renderedHtml.length,
         contentKey ?? "",
         appearance.fontFamily,
         appearance.lineHeight,
         appearance.padding,
         appearance.textSize,
+        general.bionicReading,
         general.pageReader,
         general.htmlImagePagingMode,
         viewportSize.width,
-        viewportSize.height,
+        isPagedReader ? viewportSize.height : "",
         pageColumnsPerSpread,
       ].join("|"),
     [
@@ -1790,18 +1796,15 @@ function ReaderContentInner(
       appearance.padding,
       appearance.textSize,
       contentKey,
+      general.bionicReading,
       general.pageReader,
       general.htmlImagePagingMode,
-      renderedHtml.length,
+      isPagedReader,
       viewportSize.height,
       viewportSize.width,
       pageColumnsPerSpread,
     ],
   );
-
-  useEffect(() => {
-    restoredLayoutKeyRef.current = null;
-  }, [renderedHtml]);
 
   useEffect(() => {
     setSegmentHeights([]);
@@ -1819,10 +1822,15 @@ function ReaderContentInner(
       pendingInitialProgress.contentKey === contentKey
         ? pendingInitialProgress.progress
         : latestProgressRef.current;
+    const restoreActivityVersion = scrollActivityVersionRef.current;
     let disposed = false;
     const restore = () => {
       if (disposed) return;
+      if (scrollActivityVersionRef.current !== restoreActivityVersion) return;
       restoreProgressPositionRef.current(progressToRestore);
+      if (pendingInitialProgressRestoreRef.current?.contentKey === contentKey) {
+        pendingInitialProgressRestoreRef.current = null;
+      }
     };
     const frame = window.requestAnimationFrame(restore);
     const timeout = window.setTimeout(restore, 120);
